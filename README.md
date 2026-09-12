@@ -21,6 +21,15 @@ Victor Nahuel Velasquez · Erika Angelina Romeo
 | [`Propuestas Bapton Solutions.docx`](./Propuestas%20Bapton%20Solutions.docx) | Propuestas de sistemas presentadas por el equipo |
 | `relevamiento-v1-individual.md` · `relevamiento-v2-ampliado.md` | Versiones previas, se conservan como historial |
 
+## Skill de Claude Code
+
+[`.claude/skills/analista-sistemas/`](./.claude/skills/analista-sistemas/SKILL.md) contiene la skill usada para
+producir estos documentos. Aplica la metodología de la cátedra: reconocimiento, relevamiento con QQCCD, SRS IEEE
+830 y análisis estructurado (Lista de Eventos, DFD, Diccionario de Datos y DER).
+
+Si abrís Claude Code dentro de esta carpeta, la skill se carga sola. Para usarla en cualquier proyecto, copiá la
+carpeta a `~/.claude/skills/`.
+
 ## Casos relevados
 
 - **Peluquería** — atención individual, dos trabajadoras, servicios con tiempo de procesado.
