@@ -7,7 +7,8 @@
 
 **Objeto de este documento.** Especifica **qué necesita** el usuario y qué debe hacer el sistema. El
 funcionamiento actual se describe en `relevamiento.md`; el modelado (Lista de Eventos, DFD, DD, DER) en
-`analisis.md`. Todo requerimiento de este documento es trazable a un identificador `{R#}` del relevamiento.
+`analisis.md`. Los requerimientos derivados del relevamiento son trazables a sus identificadores `{R#}`; las
+decisiones posteriores aprobadas del producto se documentan en este SRS como tales.
 
 ---
 
@@ -25,18 +26,20 @@ trabajadores, donde un turno puede recibir uno o varios clientes según el cupo 
 
 ## 1.3 Alcance
 
-**Comprende:** definición del tarifario con precio, duración por tramos y cupo; definición de trabajadores con
-horario y bloqueos; definición de la grilla recurrente y generación de turnos; reserva autogestionada por el
-cliente con elección de trabajador; confirmación y cancelación; registro de atención, cobro y ausencia por
-cliente; registro de atenciones sin turno; vista de la jornada en curso; registro de gastos por tipo; control de
-existencias de insumos con alerta de mínimo; avisos automáticos; consulta de reportes del negocio; y alta del
-negocio con su cuenta única de acceso y sus parámetros de operación.
+**Comprende:** definición del tarifario con precio, duración total estimada, cupo y, opcionalmente, configuración
+avanzada por tramos; definición de trabajadores con horario y bloqueos; definición de la grilla recurrente y generación de turnos; reserva autogestionada por el
+cliente con elección de un trabajador concreto o de `Cualquiera`; confirmación y cancelación; inscripción
+recurrente del cliente a una o más clases fijas de la grilla según una frecuencia semanal elegida, con su cobro
+periódico asociado; registro de atención, cobro y ausencia por cliente; baja automática, opcional y configurable, de una inscripción recurrente
+por ausencias consecutivas sin aviso; registro de atenciones sin turno; vista de la jornada en curso; registro de
+gastos por tipo; control de existencias de insumos con alerta de mínimo; avisos automáticos; consulta de reportes
+del negocio; y alta del negocio con su cuenta única de acceso y sus parámetros de operación.
 
 **No comprende:**
 
 | Exclusión | Justificación |
 |---|---|
-| Comercios de venta de productos | Sin turno, trabajador asignado ni duración: no comparten ninguna regla relevada (D-04) |
+| Comercios de venta de productos | Sin turno, trabajador asignado ni duración total estimada: no comparten ninguna regla relevada (D-04) |
 | Trabajadores como usuarios del sistema | Agregaría una regla de autorización a cada requerimiento sin resolver ningún problema declarado (D-06) |
 | Cuenta de cliente e historial autogestionado | Consecuencia de D-02 |
 | Cálculo automático de consumo de insumos | No existe base relevada: `R9` establece que el consumo no se registra y no es constante (D-03) |
@@ -45,6 +48,7 @@ negocio con su cuenta única de acceso y sus parámetros de operación.
 | Trabajos en múltiples sesiones | Requiere vincular turnos entre sí y administrar pagos parciales |
 | Identificación y asignación de puestos o salas | El sistema controla *cuántos* clientes simultáneos admite el negocio, no *cuál* puesto ocupa cada uno (D-11) |
 | Optimización automática de la agenda | El sistema ofrece los huecos disponibles pero no sugiere ni reordena turnos |
+| Gestión de deudas por baja automática | La baja automática de una inscripción recurrente no genera deuda; la modalidad de cobro combina abono mensual (`R13`) y clase suelta (`R31`) (D-13) |
 
 ## 1.4 Glosario
 
@@ -62,16 +66,21 @@ Vocabulario cerrado. Ningún documento del proyecto puede usar otro término par
 | `Dado de baja` | Turno | Anulado para esa fecha; no admite inscripciones |
 | `Reservado` | Origen del turno | Se creó porque un cliente reservó por anticipado |
 | `Sin reserva` | Origen del turno | Se creó en el momento de atender a quien se presentó sin turno |
-| `Aplicación` / `Espera` / `Terminación` | Tramo del servicio | Los tres tramos posibles. Solo `Aplicación` y `Terminación` ocupan al trabajador |
-| Tramo activo | Tramo del servicio | `Aplicación` o `Terminación` |
+| Duración total estimada | Servicio | Tiempo estimado desde el inicio hasta la finalización del servicio; se usa para calcular disponibilidad, sin imponer la ejecución real del trabajo |
+| Atención continua | Servicio | Comportamiento predeterminado: el servicio ocupa al trabajador durante toda su duración total estimada |
+| Configuración avanzada por tramos | Servicio | Opción que el negocio puede activar para distinguir tiempo de atención inicial, tiempo de espera aprovechable y tiempo de atención final |
+| Tiempo de espera aprovechable | Configuración avanzada por tramos | Período durante el cual el trabajador puede atender otro turno; el cliente original continúa ocupando capacidad física hasta finalizar el servicio |
+| Tiempo de atención inicial / final | Configuración avanzada por tramos | Períodos que ocupan al trabajador cuando la configuración avanzada está activa |
 | Capacidad simultánea | Negocio | Cuántos clientes puede tener el negocio en atención al mismo tiempo |
+| Inscripción recurrente | Alumno y clase | Vínculo del alumno con una o más clases fijas de la grilla, elegidas según una frecuencia semanal, que se mantiene entre instancias semanales mediante un cobro periódico; puede darse de baja sin afectar al alumno ni sus inscripciones a otras clases |
 
 ---
 
-# 2. NECESIDADES MANIFESTADAS
+# 2. NECESIDADES MANIFESTADAS Y DECISIONES POSTERIORES
 
-Origen de los requerimientos. Son las necesidades expresadas por las usuarias durante el relevamiento y
-conservan la numeración `{R#}` de ese documento.
+Origen de los requerimientos. Esta sección reúne las necesidades expresadas por las usuarias durante el relevamiento
+y las decisiones del producto aprobadas posteriormente. Cada entrada conserva su identificador `{R#}` y explicita
+su procedencia.
 
 **`{R15}` Reserva autogestionada.** Contestar mensajes para coordinar turnos les interrumpe el trabajo
 constantemente, y muchas consultas llegan fuera del horario de atención. Quieren que sus clientes puedan ver la
@@ -107,6 +116,13 @@ no discutirme".
 no lo va a poder usar, porque perdería los turnos que hoy mete en el medio. Necesita que los horarios ofrecidos a
 las clientas tengan en cuenta que durante el procesado ella está libre.
 
+**`{R28}` Baja automática configurable de una inscripción recurrente.** Como decisión posterior aprobada del
+producto, originada en una propuesta de Pato y no en el funcionamiento actual relevado, el negocio puede activar
+una baja automática para la inscripción recurrente de un alumno a una clase. Configura el umbral de ausencias
+consecutivas sin aviso y, al alcanzarlo, se da de baja solo esa inscripción. El alumno sigue registrado y sus
+inscripciones a otras clases no se alteran. La modalidad de cobro combina abono mensual (`R13`) y clase suelta
+(`R31`); la baja no genera deuda, ya que solo suspende la inscripción recurrente.
+
 ---
 
 # 3. DECISIONES ADOPTADAS
@@ -116,60 +132,68 @@ los requerimientos.
 
 | ID | Decisión | Fundamento |
 |---|---|---|
-| **D-01** | El cliente elige con qué trabajador se atiende, antes de ver horarios | `R2` ofrece "el horario más cercano de esa misma persona"; `R15` lo confirma |
+| **D-01** | Al iniciar la reserva, el cliente puede elegir un trabajador concreto o `Cualquiera`. Con un trabajador concreto se muestran sus horarios disponibles; con `Cualquiera`, los de todos los trabajadores. Al seleccionar un horario, el turno queda asignado a un trabajador concreto. | `R2` y `R15`; decisión aprobada del producto |
 | **D-02** | La reserva no requiere cuenta: nombre, apellido y teléfono | Los datos coinciden con `R3`; `R19` advierte que la fricción hace abandonar el flujo |
 | **D-03** | El sistema registra existencias declaradas, no calcula consumo | `R9`: el consumo no se registra y no es constante entre atenciones |
-| **D-04** | Alcance multi-rubro acotado a servicios prestados por turno con trabajador asignado | El análisis de variabilidad muestra que cambian los valores, no las reglas |
+| **D-04** | Alcance multi-rubro acotado a servicios prestados por turno con trabajador asignado | Comparación de los casos relevados; decisión de alcance del producto |
 | **D-05** | La grilla del Caso B es recurrente; el sistema genera las instancias semanales | `R12`: la grilla se revisa una o dos veces al año, pero las bajas son por semana |
 | **D-06** | Cuenta única por negocio; el trabajador es un dato del turno | `R5` ya registra "quién atendió" como dato, no como operador |
 | **D-07** | El sistema no emite comprobantes fiscales | `R5`: hoy no se entrega comprobante. Monotributo |
-| **D-08** | El servicio se define en tramos; la disponibilidad bloquea solo los tramos activos | `R1`, `R20`, `R23`: durante el procesado el trabajador está libre |
+| **D-08** | Todo servicio tiene una duración total estimada y se considera continuo por defecto. El negocio puede activar opcionalmente, para un servicio con espera aprovechable, una configuración avanzada por tramos; durante esa espera la disponibilidad libera al trabajador, sin liberar la capacidad física del cliente original. | `R1`, `R20`, `R23`: durante el procesado el trabajador está libre |
 | **D-09** | La atención sin turno **es** un turno, creado al atender, con origen `Sin reserva` | Todo lo posterior es idéntico: consume tiempo, genera cobro, entra en reportes |
 | **D-10** | El sistema valida reservas; no impide registros | `R22`: "si yo lo hice, lo hice" |
 | **D-11** | Capacidad simultánea del negocio: un número, sin identificar puestos | `R24`: cuatro puestos son el límite real al solapar |
 | **D-12** | La atención se fecha cuando ocurrió, no cuando se cargó | `R24`: muchas veces anota al cierre, con la hora real |
+| **D-13** | La baja automática de una inscripción recurrente es opcional por negocio y usa un umbral configurable de ausencias consecutivas sin aviso. Solo da de baja esa inscripción; no elimina al alumno, no afecta otras clases ni genera deuda. La modalidad de cobro combina abono mensual y clase suelta. | `R13`, `R28`, `R31`; decisión aprobada del producto |
 
-**Nota sobre D-08.** Es la decisión que hace viable el producto. Sin ella el sistema bloquearía 58 horas
-mensuales de capacidad que la libreta de papel sí permite usar, y sería un retroceso frente a la herramienta que
-viene a reemplazar.
+**Nota sobre D-08.** La configuración avanzada preserva el aprovechamiento de los períodos de procesado observado
+sin obligar a que todos los servicios se definan por tramos. Sus tiempos son estimaciones para calcular disponibilidad,
+no instrucciones sobre cómo debe ejecutarse cada atención.
 
 ---
 
 # 4. REGLAS DE NEGOCIO
 
-1. **Disponibilidad por trabajador.** El horario libre se calcula sobre el horario de atención del trabajador
-   asignado, descontando sus bloqueos no laborables, los **tramos activos** de sus turnos ya tomados y la
-   duración del servicio elegido. Dos turnos pueden coincidir si corresponden a trabajadores distintos.
-   *(`R1`, `R2`, D-08)*
+1. **Disponibilidad y asignación por trabajador.** Si el cliente elige un trabajador concreto, el horario libre
+   se calcula sobre su horario de atención, descontando sus bloqueos no laborables y la ocupación estimada de sus
+   turnos ya tomados: por defecto, la duración total estimada; con configuración avanzada por tramos, los tiempos
+   de atención inicial y final. Si elige `Cualquiera`, se calculan los horarios disponibles de todos los
+   trabajadores. Al seleccionar un horario, el turno queda asignado a un trabajador concreto. Dos turnos pueden
+   coincidir si corresponden a trabajadores distintos. *(`R1`, `R2`, D-01, D-08)*
 2. **Cupo por servicio.** Cada servicio define cuántos clientes admite un turno. No se puede anotar más clientes
-   que el cupo. *(`R11`, `R13`)*
+   que el cupo. *(`R11`, `R13`, `R31`)*
 3. **El estado y el importe corresponden al cliente, no al turno.** En un turno de cupo mayor a 1, cada cliente
    tiene su propia confirmación, cobro y asistencia. *(`R14`)*
 4. **Momento de creación del turno.** Cupo 1: se crea al reservar. Cupo mayor a 1: se genera desde la grilla y
-   los clientes se anotan sobre uno existente. Sin reserva: se crea al atender. *(`R2`, `R12`, `R13`, `R21`)*
+   los clientes se anotan sobre uno existente. Sin reserva: se crea al atender. *(`R2`, `R12`, `R13`, `R21`,
+   `R31`)*
 5. **Liberación de lugar.** Al cancelar, el lugar vuelve a estar disponible dentro del mismo turno.
-   *(`R4`, `R13`)*
-6. **Un servicio pertenece a un negocio.** Precio, duración, tramos y cupo se definen a nivel del negocio.
-   *(`R1`, `R11`)*
+   *(`R4`, `R30`)*
+6. **Un servicio pertenece a un negocio.** Precio, duración total estimada, cupo y, si el negocio la activa para
+   ese servicio, configuración avanzada por tramos se definen a nivel del negocio. *(`R1`, `R11`, D-08)*
 7. **El cliente se identifica por su teléfono.** Dos reservas con el mismo teléfono son el mismo cliente.
-   *(`R3`, `R15`, D-02)*
+   *(`R3`, `R15`, `R29`, D-02)*
 8. **La existencia de insumos es un valor declarado.** El sistema nunca la modifica por sí mismo.
    *(`R9`, `R17`, D-03)*
 9. **La baja de un turno generado no altera la grilla.** Afecta solo a esa semana. *(`R12`, D-05)*
-10. **El tramo de espera no ocupa al trabajador.** El cliente, en cambio, sigue ocupado hasta el último tramo.
-    *(`R1`, `R20`, `R23`, D-08)*
-11. **La validación de superposición y de cupo solo se aplica al reservar.** Al registrar, el sistema informa el
-    conflicto pero no lo impide. *(`R22`, D-10)*
+10. **La espera aprovechable es opcional.** Solo cuando un servicio tiene activa la configuración avanzada, su
+    tiempo de espera aprovechable no ocupa al trabajador; el cliente, en cambio, sigue ocupando capacidad física
+    hasta finalizar el servicio. *(`R1`, `R20`, `R23`, D-08)*
+11. **La validación de superposición y de cupo solo se aplica al reservar.** Al registrar una atención manual, el
+    sistema informa el conflicto pero no la impide. *(`R22`, D-10)*
 12. **Toda atención genera un turno.** No existe ingreso registrado sin un turno que lo explique.
     *(`R21`, D-09)*
 13. **Capacidad simultánea.** Al reservar no se ofrece un horario si ya hay tantos clientes en atención como la
-    capacidad configurada, incluidos los que están en tramo de espera. *(`R24`, D-11)*
+    capacidad configurada, incluidos los que están en tiempo de espera aprovechable. *(`R24`, D-11)*
 14. **La atención se fecha cuando ocurrió.** *(`R24`, D-12)*
 15. **Ante falta de lugar, el sistema no decide.** Se ofrece volver más tarde (sin registro) o reservar un turno
     (reserva común). *(`R21`)*
 
 16. **La atención sin turno se habilita por negocio.** Un negocio cuya oferta se publica por grilla puede no
     admitirla. *(`R13`, `R21`, tabla de variabilidad)*
+17. **Baja automática de inscripción recurrente.** Solo se aplica si el negocio la habilitó. Al alcanzar el
+    umbral configurado de ausencias consecutivas sin aviso, da de baja únicamente la inscripción recurrente del
+    alumno a esa clase; el alumno y sus inscripciones a otras clases se conservan. No genera deuda. *(`R28`, D-13)*
 
 ---
 # 5. REQUERIMIENTOS FUNCIONALES
@@ -189,8 +213,9 @@ numeración no indica orden de ejecución.
 >
 > **Inputs:** Nombre del negocio · Usuario · Contraseña · Teléfono de contacto del negocio · Capacidad
 > simultánea (sin valor por defecto: depende del local) · Admite atención sin turno, sí o no (sí por defecto) ·
-> Anticipación del recordatorio de turno (24 horas por defecto) · Hora de emisión del resumen de agenda (21:00
-> por defecto) · Periodicidad del aviso de revisión de existencias (semanal por defecto).
+> Habilita baja automática de inscripción recurrente, sí o no · Umbral de ausencias consecutivas sin aviso (si la
+> habilita) · Anticipación del recordatorio de turno (24 horas por defecto) · Hora de emisión del resumen de agenda
+> (21:00 por defecto) · Periodicidad del aviso de revisión de existencias (semanal por defecto).
 >
 > **Proceso:**
 > 1. Recibir los datos del negocio.
@@ -201,12 +226,12 @@ numeración no indica orden de ejecución.
 > 5. Registrar los parámetros asociados al negocio.
 >
 > **Outputs:** Negocio registrado con su cuenta de acceso, su canal de contacto y sus parámetros, disponibles
-> para RF-06, RF-08, RF-14, RF-15 y RF-16.
+> para RF-06, RF-08, RF-09, RF-14, RF-15 y RF-16.
 >
 > **Error Handling:** Si la capacidad simultánea informada es menor que el producto del cupo máximo del
 > tarifario por la cantidad de trabajadores, no se registra ese valor. *(Restricción 10)*
 >
-> **Trazabilidad:** `R12`, `R16`, `R17`, `R21`, `R24`, D-06, D-11, Restricción 6, RNF Seguridad, RNF
+> **Trazabilidad:** `R12`, `R16`, `R17`, `R21`, `R24`, `R28`, D-06, D-11, D-13, Restricción 6, RNF Seguridad,
 > Mantenibilidad.
 >
 > **Nota:** el alta de la cuenta no proviene de un hecho relevado —los casos estudiados operan en papel y no
@@ -218,15 +243,18 @@ numeración no indica orden de ejecución.
 
 > ### RF-02: DEFINIR SERVICIO DEL TARIFARIO — `E`
 >
-> **Descripción:** Registrar o modificar un servicio ofrecido por el negocio, con su precio, sus tramos de
-> duración y su cupo.
+> **Descripción:** Registrar o modificar un servicio ofrecido por el negocio, con su precio, duración total
+> estimada y cupo. El negocio puede activar opcionalmente una configuración avanzada por tramos para reflejar una
+> espera aprovechable.
 >
-> **Inputs:** Nombre del servicio · Precio · Duración del tramo de aplicación · Duración del tramo de espera
-> (cero si no tiene) · Duración del tramo de terminación (cero si no tiene) · Cupo de clientes.
+> **Inputs:** Nombre del servicio · Precio · Duración total estimada · Cupo de clientes · Activa configuración
+> avanzada por tramos, sí o no · Si la activa: tiempo de atención inicial · Tiempo de espera aprovechable · Tiempo
+> de atención final.
 >
 > **Proceso:**
-> 1. Recibir los datos del servicio.
-> 2. Calcular la duración total como la suma de los tres tramos.
+> 1. Recibir los datos del servicio, incluida su duración total estimada y su cupo.
+> 2. Si el negocio activa la configuración avanzada, registrar los tiempos de atención inicial, espera
+>    aprovechable y atención final como composición de la duración total estimada.
 > 3. Registrar el servicio asociado al negocio.
 >
 > **Outputs:** Servicio registrado en el tarifario.
@@ -242,8 +270,8 @@ numeración no indica orden de ejecución.
 > **Descripción:** Registrar o modificar un trabajador del negocio con los días y horas en que atiende, y los
 > bloqueos no laborables dentro de su jornada.
 >
-> **Inputs:** Nombre del trabajador · Días de atención · Hora de inicio y de fin por día · Bloqueos no
-> laborables (hora de inicio y de fin).
+> **Inputs:** Nombre del trabajador · Apellido del trabajador · Teléfono del trabajador · CUIL del trabajador ·
+> Días de atención · Hora de inicio y de fin por día · Bloqueos no laborables (hora de inicio y de fin).
 >
 > **Proceso:**
 > 1. Recibir los datos del trabajador.
@@ -254,7 +282,7 @@ numeración no indica orden de ejecución.
 >
 > **Error Handling:** N/A.
 >
-> **Trazabilidad:** `R1`, `R25`.
+> **Trazabilidad:** `R1`, `R25`, `R32`, `R33`.
 
 ---
 
@@ -286,13 +314,16 @@ numeración no indica orden de ejecución.
 > **Proceso:**
 > 1. Recorrer las clases de la grilla.
 > 2. Crear un turno en estado `Programado` por cada una, con su fecha concreta, su trabajador y su cupo.
+> 3. Incorporar a cada turno generado los clientes con una inscripción recurrente activa en esa clase, respetando
+>    el cupo. *(`R13`)*
 >
-> **Outputs:** Turnos de la semana disponibles para inscripción.
+> **Outputs:** Turnos de la semana disponibles para inscripción, con los clientes de inscripción recurrente ya
+> incorporados.
 >
 > **Error Handling:** Si una clase generada debe caerse una semana puntual (feriado o ausencia del trabajador),
 > se da de baja esa instancia y se notifica a los clientes anotados, sin alterar la grilla. *(`R12`, Regla 9)*
 >
-> **Trazabilidad:** `R12`, D-05.
+> **Trazabilidad:** `R12`, `R13`, D-05.
 >
 > **Nota:** este requerimiento no proviene de un hecho relevado. En la situación actual la grilla *es* la
 > agenda, y los alumnos se anotan directamente sobre ella. La generación de instancias semanales surge de D-05 y
@@ -302,37 +333,54 @@ numeración no indica orden de ejecución.
 
 > ### RF-06: RESERVAR TURNO — `E`
 >
-> **Descripción:** Permitir que el cliente elija servicio y trabajador, consulte la disponibilidad real y reserve
-> su lugar, informando sus datos de contacto.
+> **Descripción:** Permitir que el cliente elija un servicio y un trabajador concreto o `Cualquiera`, consulte la
+> disponibilidad real y reserve su lugar mediante un turno puntual, o bien —para un servicio de cupo mayor a
+> 1— elija una frecuencia semanal para incorporarse con una inscripción recurrente a una o más clases fijas de la
+> grilla, informando en ambos casos sus datos de contacto.
 >
-> **Inputs:** Servicio elegido · Trabajador elegido · Fecha y hora elegidas · Nombre · Apellido · Teléfono.
+> **Inputs:** Servicio elegido · Trabajador concreto elegido o `Cualquiera` · Fecha y hora elegidas, o bien
+> frecuencia semanal y clases fijas elegidas para una inscripción recurrente · Nombre · Apellido · Teléfono.
 >
 > **Proceso:**
-> 1. Recibir el servicio y el trabajador elegidos.
-> 2. Determinar la oferta según el cupo del servicio. *(Regla 4)*
->    - **Cupo 1** — calcular los horarios libres: horario de atención del trabajador, menos sus bloqueos, menos
->      los tramos activos de sus turnos ya tomados, **sin contar los clientes en estado `Cancelado`**,
->      verificando que entre la duración total del servicio. *(Reglas 1 y 5)*
->    - **Cupo mayor a 1** — recuperar los turnos en estado `Programado` de ese servicio y de ese trabajador cuya
->      cantidad de clientes anotados, **excluidos los `Cancelado`**, sea menor que el cupo. *(Reglas 2 y 5)*
+> 1. Recibir el servicio y la opción de trabajador elegidos.
+> 2. Determinar la oferta según el cupo del servicio y la opción elegida. *(Regla 4)*
+>    - **Cupo 1** — si eligió un trabajador concreto, calcular sus horarios libres; si eligió `Cualquiera`,
+>      calcular los horarios libres de todos los trabajadores. En cada caso se descuentan los bloqueos y la ocupación
+>      estimada de los turnos ya tomados: por defecto, su duración total estimada; con configuración avanzada, los
+>      tiempos de atención inicial y final. Se verifica que la duración total estimada del servicio entre en la
+>      jornada, **sin contar los clientes en estado `Cancelado`**. *(Reglas 1 y 5)*
+>    - **Cupo mayor a 1** — recuperar los turnos en estado `Programado` de ese servicio del trabajador concreto
+>      elegido o, con `Cualquiera`, de todos los trabajadores, cuya cantidad de clientes anotados, **excluidos los
+>      `Cancelado`**, sea menor que el cupo. *(Reglas 1, 2 y 5)*
 > 3. Descartar los horarios en los que la cantidad de clientes en atención alcanza la capacidad simultánea del
 >    negocio. *(Regla 13)*
 > 4. Mostrar los horarios disponibles.
-> 5. Recibir el horario elegido y los datos de contacto.
-> 6. Identificar al cliente por su teléfono; si no existe, registrarlo. *(Regla 7)*
-> 7. Si el servicio tiene cupo 1, crear el turno en estado `Programado` con origen `Reservado`. Si tiene cupo
->    mayor a 1, incorporar al cliente al turno `Programado` elegido, sin crear ninguno. *(Regla 4)*
-> 8. Dejar al cliente en estado `Pendiente`.
+> 5. Recibir el horario elegido y los datos de contacto; determinar el trabajador concreto asignado a ese horario.
+>    Si el cliente eligió en cambio una frecuencia semanal recurrente, recibir las clases fijas elegidas para esa
+>    frecuencia y los datos de contacto.
+> 6. Identificar al cliente por su teléfono; si no existe, registrarlo. *(Regla 7, `R3`, `R29`)*
+> 7. Si el servicio tiene cupo 1, crear el turno en estado `Programado`, con origen `Reservado` y el trabajador
+>    concreto asignado. Si tiene cupo mayor a 1, incorporar al cliente al turno `Programado` elegido, sin crear
+>    ninguno. *(Regla 4)*
+> 8. Si el cliente eligió una frecuencia semanal recurrente en lugar de un turno puntual, registrar su inscripción
+>    recurrente a las clases fijas elegidas, e incorporarlo a los turnos `Programado` ya generados de esas clases y
+>    a los que RF-05 genere en las semanas siguientes, en lugar del paso anterior. *(`R13`, RF-05)*
+> 9. Dejar al cliente en estado `Pendiente`.
 >
-> **Outputs:** Reserva registrada en estado `Pendiente` · Confirmación de día, hora y trabajador al cliente.
+> **Outputs:** Reserva registrada en estado `Pendiente` · Confirmación de día, hora y trabajador al cliente. Para
+> una inscripción recurrente: inscripción registrada, con el cliente incorporado a los turnos de las clases
+> elegidas.
 >
 > **Error Handling:**
-> - Si el trabajador elegido no tiene disponibilidad en el día pedido, se ofrece su horario libre más cercano,
->   **de esa misma persona**. *(`R2`, D-01)*
+> - Si se eligió un trabajador concreto y no tiene disponibilidad en el día pedido, se ofrece su horario libre
+>   más cercano, **de esa misma persona**. *(`R2`, D-01)*
 > - Si el turno de cupo mayor a 1 ya está completo, se ofrecen otros días u horarios del mismo servicio.
->   *(`R13`, Regla 2)*
+>   *(`R31`, Regla 2)*
+> - Si, al inscribirse con una frecuencia semanal recurrente, alguna de las clases elegidas no tiene lugar para
+>   esa frecuencia, se informa la falta de disponibilidad en esa clase y se ofrecen otras clases con lugar.
+>   *(`R13`)*
 >
-> **Trazabilidad:** `R2`, `R3`, `R13`, `R15`, `R23`, `R24`, D-01, D-02, D-08, D-11, RF-01.
+> **Trazabilidad:** `R2`, `R3`, `R13`, `R15`, `R23`, `R24`, `R29`, `R31`, D-01, D-02, D-08, D-11, RF-01.
 
 ---
 
@@ -350,10 +398,14 @@ numeración no indica orden de ejecución.
 >
 > **Outputs:** Cliente en estado `Confirmado` dentro de su turno.
 >
-> **Error Handling:** Si el cliente avisa que no puede asistir, su estado pasa a `Cancelado` y su lugar vuelve a
-> estar disponible dentro del mismo turno. *(`R4`, `R13`, Regla 5)*
+> **Error Handling:**
+> - Si el cliente avisa que no puede asistir, su estado pasa a `Cancelado` y su lugar vuelve a estar disponible
+>   dentro del mismo turno. *(`R4`, `R30`, Regla 5)*
+> - Si el cliente tiene una inscripción recurrente, el lugar liberado en esa clase para esa semana puede
+>   recuperarse reservando, mediante RF-06, otro turno del mismo servicio dentro del mismo período con lugar
+>   disponible. *(`R30`)*
 >
-> **Trazabilidad:** `R4`, `R13`, `R15`.
+> **Trazabilidad:** `R4`, `R15`, `R30`.
 
 ---
 
@@ -363,7 +415,8 @@ numeración no indica orden de ejecución.
 > como para clientes que se presentaron sin turno.
 >
 > **Inputs:** Cliente · Servicio realizado · Trabajador que atendió · Fecha y hora de la atención · Importe
-> cobrado.
+> cobrado. Para el cobro de una inscripción recurrente por un período: Cliente · Inscripción recurrente · Período
+> cubierto · Importe cobrado, en lugar de un turno puntual.
 >
 > **Proceso:**
 > 1. Recibir los datos de la atención, con la fecha y hora en que efectivamente ocurrió. *(Regla 14)*
@@ -373,24 +426,29 @@ numeración no indica orden de ejecución.
 > 3. Registrar el ingreso asociado a ese turno.
 >
 > **Outputs:** Cliente en estado `Atendido` y `Cobrado` · Ingreso registrado. **Sin comprobante hacia el
-> cliente.** *(D-07)*
+> cliente.** *(D-07)* Para el cobro de una inscripción recurrente: ingreso registrado por el período, sin marca de
+> atención en ningún turno.
 >
 > **Error Handling:**
+> - Si el cobro corresponde a una inscripción recurrente por un período, y no a un turno puntual, registrar el
+>   ingreso asociado a esa inscripción y a ese período, sin marcar `Atendido` ni `Cobrado` en ningún turno. La
+>   asistencia de los clientes con inscripción recurrente se sigue registrando por turno, sin generar por eso un
+>   cobro adicional. *(`R13`)*
 > - Si el cliente se presentó **sin turno** y el servicio tiene **cupo 1**, se crea el turno en el mismo acto en
 >   estado `Programado` y con origen `Sin reserva`, con la fecha y hora de la atención, y se continúa desde el
 >   paso 2. *(`R21`, D-09, Regla 12)*
 > - Si el cliente se presentó **sin turno** y el servicio tiene **cupo mayor a 1**, no se crea ningún turno: se
 >   lo incorpora al turno `Programado` que ya existe para ese horario, respetando su cupo, y se continúa desde el
 >   paso 2. Crear un turno aparte duplicaría el horario y eludiría el control de cupo. *(Reglas 2 y 4, D-09)*
-> - Si la atención se superpone con otro turno del mismo trabajador, el sistema **informa el conflicto pero
+> - Si la atención manual se superpone con otro turno del mismo trabajador, el sistema **informa el conflicto pero
 >   registra igual**. *(`R22`, D-10, Regla 11)*
 > - Si no hay lugar para atender a quien se presentó sin turno, se le ofrece volver más tarde —lo que no genera
 >   ningún registro— o reservar un turno mediante RF-06. *(`R21`, Regla 15)*
 > - Si el negocio tiene desactivada la atención sin turno (RF-01), no se ofrece el alta de la atención sin
->   reserva. Es el caso del estudio de yoga, donde los alumnos siempre se anotan sobre una clase de la grilla.
->   *(`R13`, Regla 16)*
+>   reserva. Es el caso del estudio de yoga, donde los alumnos siempre se anotan sobre una clase de la grilla,
+>   sea por abono o por clase suelta. *(`R13`, `R31`, Regla 16)*
 >
-> **Trazabilidad:** `R5`, `R14`, `R21`, `R22`, `R24`, D-07, D-09, D-10, D-12.
+> **Trazabilidad:** `R5`, `R13`, `R14`, `R21`, `R22`, `R24`, `R31`, D-07, D-09, D-10, D-12.
 
 ---
 
@@ -403,12 +461,16 @@ numeración no indica orden de ejecución.
 > **Proceso:**
 > 1. Recibir la indicación de ausencia.
 > 2. Registrar al cliente como `Ausente` en ese turno.
+> 3. Si el negocio habilitó la baja automática y esta ausencia alcanza el umbral configurado de ausencias
+>    consecutivas sin aviso, dar de baja únicamente la inscripción recurrente del alumno a esa clase. No modificar
+>    al alumno ni sus inscripciones a otras clases, ni generar deuda. *(Regla 17)*
 >
-> **Outputs:** Cliente en estado `Ausente`, disponible para el reporte de ausencias.
+> **Outputs:** Cliente en estado `Ausente`, disponible para el reporte de ausencias · Si corresponde, inscripción
+> recurrente dada de baja sin deuda.
 >
 > **Error Handling:** N/A.
 >
-> **Trazabilidad:** `R6`, `R14`.
+> **Trazabilidad:** `R6`, `R14`, `R28`, `R30`, D-13, RF-01.
 
 ---
 
@@ -449,7 +511,7 @@ numeración no indica orden de ejecución.
 >
 > **Error Handling:** N/A.
 >
-> **Trazabilidad:** `R9`, `R17`, `R26`, D-03.
+> **Trazabilidad:** `R9`, `R17`, D-03.
 >
 > **Nota:** el alta y la actualización son el mismo proceso sobre el mismo objeto, con el mismo actor y el mismo
 > origen relevado. Dar de alta un insumo es declarar su existencia por primera vez, agregando el mínimo.
@@ -562,20 +624,24 @@ numeración no indica orden de ejecución.
 
 | Categoría | Requerimiento | Trazabilidad |
 |---|---|---|
-| **Desempeño** | La vista de reserva debe mostrar los horarios disponibles de un trabajador en menos de 3 segundos sobre red móvil 4G, sosteniendo el volumen relevado (~3.200 turnos y ~340 clientes por año, tomando el Caso A como caso de referencia superior). | `R15`, `R19`, volumetría |
+| **Desempeño** | La vista de reserva debe mostrar los horarios disponibles del trabajador concreto elegido o de todos los trabajadores al elegir `Cualquiera`, en menos de 3 segundos sobre red móvil 4G, sosteniendo el volumen relevado (~3.200 turnos y ~340 clientes por año, tomando el Caso A como caso de referencia superior). | `R15`, `R19`, D-01, volumetría |
 | **Disponibilidad** | La vista de reserva debe estar operativa las 24 horas: su razón de ser es recibir reservas fuera del horario de atención. El panel de gestión requiere disponibilidad durante el horario de atención. | `R15` |
-| **Confiabilidad** | Un turno confirmado no puede perderse ni duplicarse. Debe conservarse respaldo diario: la libreta y el cuaderno son hoy el único registro de turnos y de dinero, y el sistema los reemplaza. | `R2`, `R5`, `R7`, `R27` |
+| **Confiabilidad** | Un turno confirmado no puede perderse ni duplicarse. Debe conservarse respaldo diario: la agenda de turnos y el cuaderno de movimientos son hoy el único registro de turnos y de dinero, y el sistema los reemplaza. | `R2`, `R5`, `R7`, `R27` |
 | **Seguridad** | El panel de gestión se accede con usuario y contraseña por negocio. La vista de reserva es pública y **no debe exponer datos de otros clientes**: solo muestra horarios libres u ocupados, nunca el nombre de quien ocupa un turno. | D-02, D-06 |
 | **Portabilidad** | Aplicación web responsiva, operable desde el navegador de un celular sin instalar nada. Es el único dispositivo que usan ambas usuarias. | `R19` |
 | **Accesibilidad** | La vista de reserva debe ser operable por personas mayores con baja familiaridad tecnológica: debe cumplir **WCAG 2.1 nivel AA**, con ratio de contraste mínimo de 4,5:1 en texto normal y 3:1 en texto grande, tamaño de texto ampliable hasta el 200% sin pérdida de contenido, navegación completa por teclado y compatibilidad con lectores de pantalla. Un tercio de la cartera del Caso A entra en ese perfil. | `R19` |
-| **Mantenibilidad** | El tarifario, los horarios, los bloqueos, la capacidad simultánea, los mínimos de stock y los tiempos de aviso deben ser configurables por la propia usuaria, sin intervención técnica. | `R1`, `R16`, `R17`, `R24` |
+| **Mantenibilidad** | El tarifario —incluidas la duración total estimada y, si se activa para un servicio, su configuración avanzada por tramos—, los horarios, los bloqueos, la capacidad simultánea, los mínimos de stock, los tiempos de aviso y, si se habilita, el umbral de baja automática deben ser configurables por la propia usuaria, sin intervención técnica. | `R1`, `R16`, `R17`, `R24`, `R28`, D-08, D-13 |
 
 ---
 
 # 7. RESTRICCIONES
 
-1. La duración total de un servicio es la suma de sus tramos de aplicación, espera y terminación. *(D-08)*
-2. Solo los tramos de aplicación y terminación ocupan al trabajador. *(D-08)*
+1. Todo servicio registra una duración total estimada. Por defecto, se considera continuo y ocupa al trabajador
+   durante toda esa duración para calcular disponibilidad. *(D-08)*
+2. La configuración avanzada por tramos es opcional y solo se activa para un servicio con espera aprovechable. Si se
+   activa, sus tiempos de atención inicial, espera aprovechable y atención final componen la duración total estimada;
+   durante la espera el trabajador queda disponible, pero el cliente conserva capacidad física hasta finalizar el
+   servicio. *(D-08)*
 3. El cupo de un servicio determina cuántos clientes admite un turno; el turno individual es el caso de cupo 1.
    *(Regla 2, R11)*
 4. El cliente se identifica por su teléfono. No existen credenciales de cliente. *(D-02)*
@@ -588,6 +654,11 @@ numeración no indica orden de ejecución.
 10. La capacidad simultánea del negocio no puede ser menor que el **producto del cupo máximo de su tarifario por
     la cantidad de trabajadores**. Un tope menor impediría que dos trabajadores atiendan en paralelo a cupo
     completo, situación que `R12` describe como normal. *(Reglas 2 y 13, `R12`, `R24`, D-11)*
+11. La reserva admite elegir un trabajador concreto o `Cualquiera`; al seleccionar un horario, el turno debe
+    quedar asignado a un trabajador concreto. *(D-01)*
+12. La baja automática solo puede aplicarse si el negocio la habilitó y al alcanzar el umbral configurado de
+    ausencias consecutivas sin aviso. Solo afecta la inscripción recurrente a esa clase y no genera deuda.
+    *(D-13)*
 
 ---
 
