@@ -1,5 +1,6 @@
 # Local Pi runtime state
 .atl/
+.mcp.json
 
 # Material de cátedra: no es producción del equipo, no se redistribuye
 Metodologías de Análisis de Sistemas de Información v4.pdf

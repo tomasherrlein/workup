@@ -14,12 +14,12 @@ Victor Nahuel Velasquez · Erika Angelina Romeo
 
 | Archivo | Qué es |
 |---|---|
-| [`Relevamiento WorkUp.pdf`](./Relevamiento%20WorkUp.pdf) | **Entrega.** Relevamiento narrativo, formato de cátedra |
-| [`relevamiento-narrativo.md`](./relevamiento-narrativo.md) | Fuente del PDF anterior |
-| [`relevamiento.md`](./relevamiento.md) | Informe de Relevamiento extendido: reconocimiento, QQCCD, ambigüedades, variabilidad y volumetría |
-| [`srs.md`](./srs.md) | Especificación de Requerimientos IEEE 830: 16 requerimientos funcionales, RNF y restricciones |
+| [`Relevamiento WorkUp.md`](./Relevamiento%20WorkUp.md) | **Relevamiento narrativo**, formato de cátedra. Fuente de todos los demás documentos |
+| [`relevamiento.md`](./relevamiento.md) | Análisis del relevamiento: hechos identificados, QQCCD, ambigüedades y variabilidad entre rubros |
+| [`srs.md`](./srs.md) | Especificación de Requerimientos IEEE 830: 19 requerimientos funcionales, RNF y restricciones |
 | [`Propuestas Bapton Solutions.docx`](./Propuestas%20Bapton%20Solutions.docx) | Propuestas de sistemas presentadas por el equipo |
-| `relevamiento-v1-individual.md` · `relevamiento-v2-ampliado.md` | Versiones previas, se conservan como historial |
+| [`evoluciones/`](./evoluciones/) | Funcionalidades analizadas y dejadas para versiones futuras. **No forman parte del alcance** |
+| [`historial/`](./historial/) | Versiones anteriores del relevamiento y su PDF |
 
 ## Skill de Claude Code
 
@@ -33,15 +33,16 @@ carpeta a `~/.claude/skills/`.
 ## Casos relevados
 
 - **Peluquería** — atención individual, dos trabajadoras, servicios con tiempo de procesado.
-- **Estudio de yoga** — clases grupales de cupo limitado, grilla semanal recurrente, dos salas.
+- **Estudio de yoga** — clases grupales de cupo limitado, grilla semanal recurrente, dos salas, abono
+  mensual con clases fijas y sin recuperación de clases.
 
-El análisis concluye que **el turno individual es el caso particular de un servicio con cupo 1**, por lo que un
-único modelo cubre ambas formas de atención.
+El análisis concluye que **el turno individual es el caso particular de un servicio con cupo máximo 1**, por lo
+que un único modelo cubre ambas formas de atención.
 
 ## Estado
 
 | Etapa | Producto | Estado |
 |---|---|---|
-| Relevamiento | `relevamiento.md` · `Relevamiento WorkUp.pdf` | Cerrado |
+| Relevamiento | `Relevamiento WorkUp.md` · `relevamiento.md` | Cerrado |
 | Especificación de requerimientos | `srs.md` | Cerrado |
 | Análisis estructurado | Lista de Eventos, DFD, DD, DER | Pendiente |
