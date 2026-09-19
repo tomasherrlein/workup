@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Relevamiento WorkUp</title>
+<style>
+  @page { size: A4; margin: 2.2cm 2cm; }
+  body { font-family: "Georgia", "Times New Roman", serif; font-size: 11.5pt; line-height: 1.55; color: #1a1a1a; }
+  h1 { font-size: 20pt; margin: 0 0 1.2rem; }
+  h2 { font-size: 14pt; margin: 1.8rem 0 0.6rem; border-bottom: 1px solid #ccc; padding-bottom: 0.2rem; }
+  h3 { font-size: 12.5pt; margin: 1.2rem 0 0.6rem; break-after: avoid; }
+  hr { border: 0; border-top: 1px solid #bbb; margin: 1.6rem 0; }
+  strong { font-weight: 700; }
+  p { margin: 0 0 0.75rem; text-align: justify; }
+  ol, ul { margin: 0 0 0.9rem 1.2rem; padding: 0; }
+  li { margin-bottom: 0.25rem; }
+</style>
+</head>
+<body>
+<h1>Requerimientos Funcionales WorkUp</h1>
+<p><strong>Equipo:</strong> Bapton Solutions — <strong>Fecha:</strong> 15-09-2026</p>
+<p>Del RF 1 al RF 13 se mantiene el orden y la numeración del documento del grupo. Del RF 14 al RF 20 siguen los requerimientos que faltaban. La numeración no indica orden de ejecución.</p>
+<hr>
+<h3>Requerimiento Funcional 1: Registrar nuevo cliente</h3>
+<p><strong>Descripción:</strong> Permite dar de alta a un cliente nuevo en el sistema para asociarle turnos, inscripciones u observaciones.</p>
+<p><strong>Inputs:</strong> Nombre, apellido, teléfono, email, contraseña y observaciones.</p>
+<h2>Processing:</h2>
+<ol><li>Se ingresan los datos personales del cliente.</li><li>Se verifica que el email ingresado no exista previamente en el registro de clientes.</li><li>Se registran los datos personales, las observaciones y las credenciales de acceso.</li></ol>
+<p><strong>Outputs:</strong> Mensaje de confirmación y ficha de cliente.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si el cliente ya está registrado, el sistema muestra un mensaje de error.</li><li>Si falta ingresar el teléfono, el email, el nombre o la contraseña, el sistema impide el guardado e indica los campos obligatorios incompletos.</li><li>Si el teléfono o el email no tienen un formato válido, se pide corregirlo.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 2: Registrar y configurar servicios</h3>
+<p><strong>Descripción:</strong> Permite dar de alta los servicios que ofrece el negocio, definiendo las duraciones de los servicios o los cupos de las clases.</p>
+<p><strong>Inputs:</strong> Descripción, precio, cupo máximo y tiempo de duración.</p>
+<h2>Processing:</h2>
+<ol><li>Se rellenan los datos del servicio.</li><li>Se guarda el servicio en el tarifario.</li></ol>
+<p><strong>Outputs:</strong> Servicio registrado en el tarifario.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si el precio ingresado es menor o igual a cero, se solicitará un valor válido.</li><li>Si la duración total suma 0 minutos, no se permitirá guardar el servicio.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 3: Agendar Turno (Peluquería)</h3>
+<p><strong>Descripción:</strong> Permite registrar la reserva de un turno individual para un servicio específico con una trabajadora, evaluando huecos libres. El cliente reserva desde el link que le envía el negocio, o la dueña carga el turno cuando el cliente le escribe.</p>
+<p><strong>Inputs:</strong> Email del cliente, servicio, trabajadora, fecha y horario elegido entre los disponibles.</p>
+<h2>Processing:</h2>
+<ol><li>El sistema busca al cliente por el email ingresado.</li><li>Se consulta el horario de atención de la trabajadora elegida (días de trabajo, hora de inicio y fin, pausas no laborables) para verificar que el turno esté dentro de su jornada.</li><li>Se busca en la agenda un espacio libre que alcance para la duración total del servicio y se muestran los horarios disponibles.</li><li>Se guarda el turno incluyendo: código de turno, fecha, hora de inicio, servicio, trabajadora, cliente y estado.</li></ol>
+<p><strong>Outputs:</strong> Confirmación del turno y nuevo turno.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si no hay espacio libre suficiente de la misma trabajadora, el sistema rechaza la reserva y ofrece el horario libre más cercano que tenga esa misma persona.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 4: Inscripción a Clases (Estudio de Yoga)</h3>
+<p><strong>Descripción:</strong> Se da de alta un cliente a una clase suelta, o a las clases fijas de la grilla según la cantidad semanal que desee. La inscripción a clases fijas no requiere pago por adelantado: el alumno queda anotado en la primera de esas clases y el abono comienza cuando paga.</p>
+<p><strong>Inputs:</strong> Email del cliente, frecuencia semanal elegida y clases fijas seleccionadas de la grilla, o clase suelta elegida.</p>
+<h2>Processing:</h2>
+<ol><li>El sistema busca al cliente por su email; si es su primera inscripción, se lo da de alta (RF 1).</li><li>El sistema verifica que exista cupo disponible de manera permanente en las clases fijas seleccionadas de la grilla, o cupo en la clase suelta que eligió.</li><li>Se registra la inscripción con la frecuencia semanal y las clases fijas elegidas, en estado pendiente de pago.</li><li>Se anota al alumno únicamente en la primera de sus clases fijas, o en la clase suelta elegida. El lugar de las semanas siguientes queda reservado recién cuando registra el pago (RF 5).</li></ol>
+<p><strong>Outputs:</strong> Inscripción registrada y alumno anotado en esa clase, pendiente de pago.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si alguna de las clases elegidas ya alcanzó su capacidad máxima y no tiene vacantes fijas, el sistema emite el mensaje "Cupo permanente no disponible" y solicita elegir otra clase u horario.</li><li>Si la cantidad de clases fijas seleccionadas supera la frecuencia semanal elegida para el abono, el sistema impide guardar el registro.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 5: Registrar cobro</h3>
+<p><strong>Descripción:</strong> Se calcula el importe a cobrar y se registran los datos del cobro, sea por una atención de la peluquería, por una clase suelta o por un abono mensual. Cuando el cobro corresponde a un abono, el abono comienza en esa fecha y el alumno queda incorporado a sus listas fijas.</p>
+<p><strong>Inputs:</strong> Email del cliente, concepto cobrado (atención, clase suelta o abono), monto, pago efectuado, fecha.</p>
+<h2>Processing:</h2>
+<ol><li>Se busca al alumno o cliente en el registro a través de su email.</li><li>Si es su primera inscripción, darlo de alta (RF 1).</li><li>El sistema calcula el importe total a cobrar según el concepto:</li><ul><li>Atención de la peluquería: el precio del servicio del turno atendido, tomado del tarifario.</li><li>Clase suelta: el precio del tipo de clase, tomado del tarifario.</li><li>Abono mensual: el importe correspondiente a la frecuencia semanal y las clases fijas en que está inscripto, revisando las clases fijas elegidas que hay en la grilla.</li></ul><li>Se registra el cobro con el email, el monto, el concepto cobrado y la fecha. En la peluquería se registran además la hora, el servicio y la trabajadora que atendió; en el estudio, la clase cobrada.</li><li>Si el cobro corresponde a un abono, se incorpora al alumno a la lista fija de esas clases y el abono cubre un mes desde la fecha de pago.</li></ol>
+<p><strong>Outputs:</strong> Cobro registrado en el registro de movimientos y, cuando corresponde, abono vigente con el alumno en sus listas fijas.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si el alumno no paga al llegar a su primera clase, la inscripción queda sin efecto: no se lo incorpora a las listas fijas y su lugar queda disponible para otra persona.</li><li>El cobro de una atención sin turno se registra mediante el RF 11, que crea el movimiento sin turno asociado.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 6: Enviar recordatorio de turno</h3>
+<p><strong>Descripción:</strong> Avisar al cliente de su turno o clase un día antes.</p>
+<p><strong>Inputs:</strong> Turnos y clases próximos, anticipación configurada (24 horas por defecto).</p>
+<h2>Processing:</h2>
+<ol><li>Al cumplirse la anticipación configurada, recuperar los turnos y clases alcanzados.</li><li>Emitir el aviso al mail de cada cliente pendiente.</li></ol>
+<p><strong>Outputs:</strong> Recordatorio enviado al cliente.</p>
+<p><strong>Error Handling:</strong> N/A.</p>
+<hr>
+<h3>Requerimiento Funcional 7: Confirmar turno</h3>
+<p><strong>Descripción:</strong> El día anterior a cada turno, se le pide al cliente que confirme su asistencia.</p>
+<p><strong>Inputs:</strong> Turnos del día siguiente (cliente, email, fecha, hora, servicio y trabajadora) y respuesta del cliente.</p>
+<h2>Processing:</h2>
+<ol><li>El día anterior, se obtienen los turnos agendados para el día siguiente.</li><li>Se le envía a cada cliente un mensaje para confirmar que va a asistir.</li><li>Si el cliente confirma, el turno pasa a estado confirmado.</li><li>Si el cliente avisa que no puede asistir, el turno pasa a estado cancelado y ese horario queda libre en la agenda de la trabajadora.</li></ol>
+<p><strong>Outputs:</strong> Mensaje de confirmación enviado y turno confirmado.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si en lugar de cancelarlo quiere pasarlo a otro horario, se reprograma (RF 17).</li></ul>
+<hr>
+<h3>Requerimiento Funcional 8: Registrar trabajadora</h3>
+<p><strong>Descripción:</strong> Registrar y modificar trabajadora con sus datos, definiendo sus horarios de atención o disponibilidad semanal para la asignación de turnos o clases.</p>
+<p><strong>Inputs:</strong> Nombre, apellido, teléfono, CUIL, días de trabajo, hora de inicio y de fin por día, pausas no laborables.</p>
+<h2>Processing:</h2>
+<ol><li>Se ingresan los datos de la trabajadora.</li><li>Se verifica que el CUIL ingresado no se encuentre registrado previamente.</li><li>Se validan los horarios ingresados.</li><li>Se almacenan los datos de la trabajadora.</li></ol>
+<p><strong>Outputs:</strong> Trabajadora registrada con su horario de atención habilitado.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si ya existe una trabajadora con ese CUIL, se informa y no se duplica.</li><li>Si el rango horario o la pausa configurada son inconsistentes, el sistema solicita corregir el tramo horario.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 9: Definir clase en la grilla semanal</h3>
+<p><strong>Descripción:</strong> Registrar o modificar en la grilla semanal qué tipo de clase se dicta, qué día, a qué horario y con qué profesora.</p>
+<p><strong>Inputs:</strong> Tipo de clase, día de la semana, horario y profesora.</p>
+<h2>Processing:</h2>
+<ol><li>Recibir los datos de la clase.</li><li>Se verifica la disponibilidad horaria de la profesora seleccionada.</li><li>Registrar la clase en la grilla semanal, que se repite todas las semanas.</li><li>Publicar la grilla actualizada.</li></ol>
+<p><strong>Outputs:</strong> Clase incorporada a la grilla semanal publicada.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si el horario queda fuera de la disponibilidad de la profesora, no se registra.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 10: Registrar asistencia</h3>
+<p><strong>Descripción:</strong> Registrar si cada cliente asistió a su turno o si cada alumno asistió a su clase.</p>
+<p><strong>Inputs:</strong> Turno o clase y fecha, cliente, asistencia.</p>
+<h2>Processing:</h2>
+<ol><li>El sistema recupera el turno individual o la lista de la clase grupal correspondientes a la fecha seleccionada.</li><li>Si es un turno individual y el cliente asistió, se marca el turno como "Atendido"; si no asistió, se marca como "Ausente".</li><li>Si es una clase grupal, el sistema recorre la lista de alumnos anotados para esa fecha. Se marca como "Atendido" a los alumnos que hayan asistido y "Ausente" a los que no.</li><li>Se guarda el registro de asistencia.</li></ol>
+<p><strong>Outputs:</strong> Turno o lista de la clase con la asistencia registrada.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si el alumno falta a la clase, se lo registra como ausente. Si tiene abono, pierde esa clase, haya avisado o no.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 11: Registrar atención sin turno</h3>
+<p><strong>Descripción:</strong> Registrar la atención y el cobro de un cliente que llega sin turno.</p>
+<p><strong>Inputs:</strong> Servicio, trabajadora, fecha, hora y monto.</p>
+<h2>Processing:</h2>
+<ol><li>Se ingresan los datos de la atención.</li><li>Verificar que haya un puesto disponible en ese momento.</li><li>Registrar el cobro con fecha, hora, monto, servicio y trabajadora que atendió, sin turno asociado.</li></ol>
+<p><strong>Outputs:</strong> Cobro registrado en el registro de movimientos.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si todos los puestos están ocupados, no se registra y se ofrece volver más tarde o sacar un turno.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 12: Suspensión de clases y notificación</h3>
+<p><strong>Descripción:</strong> Suspender la clase de una semana puntual y dejar preparado el aviso para cada alumno anotado.</p>
+<p><strong>Inputs:</strong> Clase y fecha.</p>
+<h2>Processing:</h2>
+<ol><li>Recibir la clase cancelada con su fecha.</li><li>Marcar la clase de esa fecha como suspendida, sin alterar la grilla.</li><li>Identificar a los alumnos anotados para esa clase, tanto fijos como sueltos.</li><li>Redactar para cada alumno un mensaje de aviso listo para enviar.</li></ol>
+<p><strong>Outputs:</strong> Clase suspendida, lista de alumnos anotados y mensajes de aviso redactados.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si no hay alumnos anotados, se suspende la clase sin redactar mensajes.</li><li>La clase suspendida no se recupera ni se devuelve el dinero: los alumnos con abono la pierden igual que si hubieran faltado y quien iba a una clase suelta no la paga, porque abona al llegar.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 13: Reporte del período</h3>
+<p><strong>Descripción:</strong> Obtener el resultado de un período sumando los cobros y restando los gastos, junto con los indicadores del negocio.</p>
+<p><strong>Inputs:</strong> Período a consultar.</p>
+<h2>Processing:</h2>
+<ol><li>Recibir el período.</li><li>Sumar los cobros de atenciones con turno, atenciones sin turno, clases sueltas y abonos del período.</li><li>Restar los gastos del período.</li><li>Calcular los indicadores del negocio: margen por servicio, clientes que vuelven con frecuencia, clientes que dejaron de venir, recuento de turnos perdidos por ausencia y trabajo de cada trabajadora.</li></ol>
+<p><strong>Outputs:</strong> Reporte del resultado del período e indicadores del negocio.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si el período es posterior a la fecha actual, no se calcula y se solicita corregir el período.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 14: Registrar gasto</h3>
+<p><strong>Descripción:</strong> Registrar un gasto del negocio con su fecha, monto, tipo y descripción.</p>
+<p><strong>Inputs:</strong> Fecha, monto, tipo de gasto, descripción.</p>
+<h2>Processing:</h2>
+<ol><li>Se ingresan los datos del gasto.</li><li>Se registra el gasto clasificado por tipo.</li></ol>
+<p><strong>Outputs:</strong> Gasto registrado en el registro de movimientos, disponible para el reporte del período.</p>
+<p><strong>Error Handling:</strong> N/A.</p>
+<hr>
+<h3>Requerimiento Funcional 15: Iniciar sesión</h3>
+<p><strong>Descripción:</strong> Permite que el cliente acceda a su panel con sus credenciales.</p>
+<p><strong>Inputs:</strong> Email y contraseña.</p>
+<h2>Processing:</h2>
+<ol><li>Se verifica que exista una cuenta registrada con ese email.</li><li>Se valida la contraseña ingresada.</li><li>Se habilita el acceso al panel del cliente.</li></ol>
+<p><strong>Outputs:</strong> Sesión iniciada.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si el email no está registrado o la contraseña no coincide, no se habilita el acceso y se informa que los datos son incorrectos.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 16: Consultar mis turnos</h3>
+<p><strong>Descripción:</strong> Muestra al cliente los turnos y las clases que tiene reservados.</p>
+<p><strong>Inputs:</strong> Cliente con sesión iniciada.</p>
+<h2>Processing:</h2>
+<ol><li>Se recuperan los turnos y las clases del cliente con su fecha, horario, servicio, trabajadora y estado.</li></ol>
+<p><strong>Outputs:</strong> Detalle de los turnos y clases del cliente.</p>
+<p><strong>Error Handling:</strong> N/A.</p>
+<hr>
+<h3>Requerimiento Funcional 17: Reprogramar turno</h3>
+<p><strong>Descripción:</strong> Pasar un turno individual a otro horario libre de la misma trabajadora, a pedido del cliente desde su panel o de la dueña.</p>
+<p><strong>Inputs:</strong> Turno a reprogramar, nuevo horario elegido entre los disponibles.</p>
+<h2>Processing:</h2>
+<ol><li>Se recupera el turno a reprogramar.</li><li>Se calculan los horarios libres de esa misma trabajadora que alcancen para la duración del servicio.</li><li>Se muestran los horarios disponibles.</li><li>Se recibe el horario elegido y se cambian la fecha y la hora del turno, liberando el horario anterior.</li></ol>
+<p><strong>Outputs:</strong> Turno con su nueva fecha y hora, y confirmación al cliente.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si no hay ningún horario de esa trabajadora que le sirva al cliente, el turno se cancela (RF 18).</li><li>Las clases grupales no se reprograman: se cancelan y el alumno se anota en otra clase con lugar.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 18: Cancelar turno o clase</h3>
+<p><strong>Descripción:</strong> Registrar que el cliente no va a asistir, sea porque lo cancela desde su panel o porque avisa al negocio, liberando el lugar.</p>
+<p><strong>Inputs:</strong> Cliente, turno o clase a cancelar.</p>
+<h2>Processing:</h2>
+<ol><li>Se recupera el turno o la clase elegida.</li><li>Se registra el turno o la anotación como cancelada.</li><li>El horario o el lugar queda disponible para otra persona.</li></ol>
+<p><strong>Outputs:</strong> Turno cancelado y lugar liberado.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si se trata de una clase fija del abono, se libera el lugar solo para esa semana: la clase no se recupera y no se devuelve el dinero.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 19: Generar las clases de la semana</h3>
+<p><strong>Descripción:</strong> Crear las clases de una semana a partir de la grilla y anotar en ellas a los alumnos que las tienen como clases fijas.</p>
+<p><strong>Inputs:</strong> Grilla semanal, semana a generar, clases fijas de los alumnos, abonos vigentes.</p>
+<h2>Processing:</h2>
+<ol><li>Se recorren las clases de la grilla.</li><li>Se crea una clase por cada una, con su fecha, su profesora y su cupo máximo.</li><li>Se anota en cada clase a los alumnos que la tienen como clase fija y tienen el abono vigente.</li></ol>
+<p><strong>Outputs:</strong> Lista de cada clase de la semana, con su fecha y sus alumnos fijos anotados.</p>
+<h2>Error Handling:</h2>
+<ul><li>Si el alumno no renovó su abono al vencimiento, no se lo anota y su lugar queda disponible para otra persona.</li></ul>
+<hr>
+<h3>Requerimiento Funcional 20: Consultar la agenda del día</h3>
+<p><strong>Descripción:</strong> Mostrar a quiénes se atiende ese día, con su horario, servicio, trabajadora y estado.</p>
+<p><strong>Inputs:</strong> Fecha de la jornada.</p>
+<h2>Processing:</h2>
+<ol><li>Se recuperan los turnos y las clases de esa fecha con sus anotados y sus estados.</li></ol>
+<p><strong>Outputs:</strong> Detalle de la jornada.</p>
+<p><strong>Error Handling:</strong> N/A.</p>
+</body>
+</html>
