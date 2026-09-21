@@ -88,7 +88,7 @@ Decisiones tomadas para poder construir donde el SRS no alcanza o se contradice.
 - **Ruta:** T00 la hace el orquestador (pedido explícito del usuario). T01 en adelante: un agente escritor por tarea, que lee este documento y `WorkUp/README.md` antes de editar.
 - **Commits:** al menos un commit por tarea en `feat/workup-mvp`, con pruebas y documentación incluidas, mensaje Conventional Commit en español como el resto del repositorio. El hash se anota en la tarea.
 - **Tamaño:** unas 400 líneas por tarea es una referencia de planificación, no un límite.
-- **Entrega:** estrategia `ask-on-risk`. El pronóstico total supera ampliamente 400 líneas; la estrategia de encadenamiento de PRs se define con el usuario antes del primer commit que la necesite.
+- **Entrega:** estrategia `ask-on-risk` con encadenamiento `feature-branch-chain` (decisión del usuario, 2026-09-21): cada porción revisable es un PR contra `feat/workup-mvp`; al final `feat/workup-mvp` entra a `main` en un solo merge. `main` conserva solo documentación aprobada mientras el MVP se prueba. Los límites de cada PR (qué commits contiene) se anotan en la sección 6.
 - **Revisión RDD:** desactivada (`gentle-ai review mode status`: off por defecto). No se inicia.
 
 ---
@@ -159,7 +159,7 @@ Cada tarea indica los RF que cubre, lo que debe quedar funcionando y las reglas 
 
 ## 6. Progreso
 
-- 2026-09-21: rama `feat/workup-mvp` creada desde `docs/nuevo-srs-rf` (incluye SRS v3.0). La paleta verde de `DESIGN.md` está en `design/paleta-verde` sin mergear; los tokens de `wwwroot/css` usan esos valores.
+- 2026-09-21: rama `feat/workup-mvp` creada desde `docs/nuevo-srs-rf` (incluye SRS v3.0). `design/paleta-verde` mergeada en la rama: `DESIGN.md` ya describe la paleta verde que usan los tokens de `wwwroot/css`.
 - Espejo en Engram: pendiente (el guardado de memoria falla en esta sesión por sesiones activas ambiguas).
 
 ## 7. Próximo paso
