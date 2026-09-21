@@ -2,7 +2,7 @@
 
 ## Estado, alcance y línea de base
 
-**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02, los detalles de ajustes de D03 y la decisión D08 permanecen **Pendientes**. D07 está **Aprobada para consecuencias económicas externas y conservación de cobros**. D06 está **Aprobada**, incluido el ciclo de abono, la resolución manual del vencimiento y las listas semanales. D04 está **Aprobada con liberación manual de cupos**.
+**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02 y los detalles de ajustes de D03 permanecen **Pendientes**. D08 está **Aprobada con disponibilidad simple y registro sin turno no bloqueante**. D07 está **Aprobada para consecuencias económicas externas y conservación de cobros**. D06 está **Aprobada**, incluido el ciclo de abono, la resolución manual del vencimiento y las listas semanales. D04 está **Aprobada con liberación manual de cupos**.
 
 **Contexto:** WorkUp es un caso ficticio. Las decisiones se acuerdan para el proyecto con criterios realistas y simples; la dueña es un rol del sistema, no una entrevistada real.
 
@@ -23,7 +23,7 @@
 | D05 | Notificaciones | Al reservar un turno individual se envía inmediatamente un email con sus detalles y el enlace privado; 24 horas antes se envía un recordatorio con ese mismo enlace, sujeto a las reglas aprobadas de confirmación y deduplicación. La dueña puede compartir manualmente el enlace vigente. Clases con abono sin recordatorios ni confirmación; clases sueltas con recordatorio por email 24 h antes; suspensión con email inmediato a los anotados. Abonos: email 3 días antes y al vencer si no renovó, sin insistencia diaria ni liberación automática. | Reglas aprobadas |
 | D06 | Vencimiento y renovación | Un mes desde el alta del abono; renovación anticipada desde el vencimiento y tardía desde el pago. El lugar se conserva hasta resolución manual; la lista muestra “Pendiente de renovación” sin habilitar asistencia y se regenera sin duplicar ni borrar cancelaciones o suspensiones. | Aprobada |
 | D07 | Consecuencias financieras | Cancelar no genera devolución, crédito ni penalización automáticos y no borra cobros. Las señas y los acuerdos económicos los gestiona la dueña fuera de WorkUp. | Aprobada |
-| D08 | Capacidades y solapamientos | Validar una combinación de capacidad de servicio, trabajadora, puesto y negocio antes de reservar. | Pendiente |
+| D08 | Disponibilidad y atenciones sin turno | Reservas sin superposición por trabajadora, cupo máximo por clase y protección del último lugar. La dueña puede registrar atenciones sin turno aunque se superpongan. Sin tramos de aplicación/espera ni nuevas capas de capacidad física. | Aprobada |
 
 ---
 
@@ -346,36 +346,30 @@ Las políticas de depósitos, cobro, reintegro, traslado y aplicación de penali
 
 ---
 
-## D08 — Capacidad por trabajadora, segmento, puesto, negocio y servicio
+## D08 — Disponibilidad simple y registro de atenciones sin turno
 
-**Evidencia actual.** RF 2 configura duración y cupo máximo; RF 3 valida huecos de la trabajadora; RF 8 registra horarios de trabajadoras; RF 9 valida disponibilidad de profesora; RF 11 exige un puesto disponible para atención sin turno; RF 4 y RF 19 controlan cupos de clases. Los RF no explicitan cómo combinar esas restricciones cuando hay turnos simultáneos, segmentos de servicio, puestos físicos o carga manual.
+**Estado:** **Aprobada en este documento; pendiente de incorporación a los RF y al SRS**.
 
-**Recomendación propuesta.** Evaluar la disponibilidad como la intersección de restricciones aplicables, antes de confirmar una reserva o inscripción:
+**Evidencia actual.** RF 2 configura duración y cupo máximo; RF 3 valida huecos de la trabajadora; RF 8 registra sus horarios; RF 9 valida disponibilidad de profesora; RF 11 exige un puesto disponible para atención sin turno; RF 4 y RF 19 controlan cupos de clases. La decisión siguiente simplifica el modelo propuesto y cambia el bloqueo de RF 11; todavía no modifica esos documentos.
 
-1. **Servicio/clase:** no superar el cupo máximo de esa ocurrencia.
-2. **Trabajadora:** respetar jornada, pausas y los segmentos que efectivamente requieren a esa persona; el tiempo de espera no consume su disponibilidad si el servicio lo declara así.
-3. **Puesto o estación:** consumir una unidad física durante los segmentos en que el cliente ocupa el lugar. Configurar solo una cantidad de puestos, no una asignación nominal, salvo que el negocio necesite distinguir recursos incompatibles.
-4. **Negocio:** no exceder la capacidad simultánea global durante los segmentos donde hay clientes presentes, incluso si la trabajadora está en espera.
+### Reglas aprobadas
 
-Una reserva del cliente o cargada por la dueña aplica estas validaciones de forma atómica. Para una atención sin turno, RF 11 conserva el rechazo si no hay puesto; si se habilita una excepción operativa futura, debe quedar marcada como conflicto y no alterar silenciosamente la capacidad. Las clases compiten por su cupo y, cuando compartan espacio o profesora, también por las restricciones de estación y negocio.
+- **Reservas planificadas:** cada trabajadora tiene un turno a la vez, dentro de su horario disponible. El servicio ocupa su duración completa, sin dividirlo en tramos de aplicación y espera.
+- **Clases:** cada ocurrencia tiene un cupo máximo. Si dos personas intentan reservar la última vacante, solo una obtiene la reserva; no se confirma sobrecupo.
+- **Registro de atención sin turno:** la dueña puede cargar el servicio realizado cuando lo necesite, aunque se superponga con otras atenciones o turnos. La superposición no impide guardar el registro ni exige inventar otro horario.
+- Registrar una atención sin turno no cancela, desplaza ni modifica las reservas existentes. Esta excepción de carga no autoriza reservas públicas superpuestas ni elimina el cupo de clases.
+- No se incorporan tramos de aplicación/espera, asignación de estaciones ni una nueva capa de capacidad global: se mantiene el alcance simple elegido para el proyecto universitario.
 
-**Rationale.** Unifica la disponibilidad de RF 3 con los cupos de RF 4/RF 19 y el puesto de RF 11, sin modelar una asignación de silla, sala o arquitectura de recursos más compleja de la necesaria.
+**Justificación.** Planificar una reserva y registrar un servicio realizado son operaciones diferentes. La primera evita comprometer horarios o lugares duplicados; la segunda debe reflejar lo ocurrido, incluso cuando hubo una superposición. Rechazar ese registro ocultaría actividad real y dificultaría registrar su cobro.
 
-**Alternativas reales.**
+### Ejemplos de aceptación
 
-1. **Controlar solo la agenda de la trabajadora.** Es insuficiente cuando falta espacio físico o una clase comparte recursos.
-2. **Asignar una estación identificada a cada turno.** Da detalle, pero agrega operación diaria y no es necesaria si basta con contar puestos.
+- Una trabajadora tiene un turno de 15:00 a 16:00; no se ofrece otro turno planificado para ella a las 15:30.
+- Dos clientas intentan reservar la última vacante de una clase: solo una inscripción se confirma.
+- La dueña registra una atención sin turno de 15:30 a 16:00 que se superpone con otra atención. El sistema permite guardarla con su horario real y conserva los registros existentes.
+- Una coloración reserva la duración completa del servicio para esa trabajadora; no se calcula disponibilidad durante un supuesto tramo de espera.
 
-**Ejemplos de aceptación propuestos.**
-
-- Normal: dos servicios de distintas trabajadoras se superponen; se confirman si cada una está disponible, hay puestos y no se supera la capacidad global.
-- Normal: durante el segmento de espera de una coloración, la trabajadora puede tomar otro servicio, pero el puesto y la capacidad global siguen ocupados por la primera clienta.
-- Borde: la última vacante de una clase se reserva concurrentemente; solo una inscripción se confirma.
-- Borde: llega una persona sin turno y todos los puestos están ocupados; RF 11 rechaza el registro y ofrece volver más tarde o reservar.
-
-**Pregunta posterior.** ¿Se aprueba este control por capas, usando cantidad de puestos y capacidad global sin asignar una estación nominal a cada turno?
-
-**Opciones.** A) Sí. B) Controlar solo trabajadora y cupo del servicio. C) Asignar estaciones identificadas.
+La implementación de los controles de concurrencia queda para diseño técnico; estas reglas no prescriben tecnología ni agregan advertencias obligatorias o autorizaciones adicionales al registro manual.
 
 ---
 
@@ -390,7 +384,7 @@ Una reserva del cliente o cargada por la dueña aplica estas validaciones de for
 7. [x] D06: aprobado mes desde alta, ajuste al último día si no existe fecha equivalente, renovación anticipada desde vencimiento y tardía desde pago, conservación manual del lugar sin asistencia hasta renovar. Aprobado que el vencimiento sea el primer día sin cobertura, sin depender de la hora de pago. Aprobado conservar el día de referencia al renovar sin interrupción y reiniciarlo con el día de pago al renovar tarde. Aprobado el regreso tras baja mediante nueva inscripción sujeta a cupo, conservando cliente, cuenta e historial. Aprobadas las listas semanales con “Pendiente de renovación”, sin asistencia hasta renovar ni duplicación o pérdida de cancelaciones y suspensiones al regenerar. D06 cerrada en este documento.
 8. [x] D07: aprobada la gestión externa de señas y acuerdos económicos; cancelar no genera devoluciones, créditos ni penalizaciones automáticos ni borra los cobros registrados.
 9. [x] D03: aprobados cobro y asistencia independientes, concepto y referencia concretos, cobro por abono sin duplicación por clase y respeto del precio pactado. Ajustes, descuentos y reintegros continúan pendientes.
-10. [ ] D08: validar las restricciones de capacidad que se aplican a reservas y atenciones sin turno.
+10. [x] D08: aprobadas reservas sin superposición por trabajadora, cupo máximo de clases y protección de la última vacante. La dueña registra atenciones sin turno aunque se superpongan; sin tramos de aplicación/espera ni nuevas capas de capacidad física.
 11. [x] D05: aprobadas clases con abono sin recordatorio ni confirmación, clase suelta con email 24 h antes sin pedir confirmación y suspensión con email inmediato a los anotados. También aprobados email de abono 3 días antes y al vencer si no renovó, sin mensajes diarios. Aprobada también la inscripción a clase suelta con menos de 24 h: único email inmediato con fecha y horario, sin confirmación ni recordatorio adicional.
 
 Nada de este documento actualiza los RF vigentes hasta que el usuario acepte expresamente las decisiones correspondientes.
