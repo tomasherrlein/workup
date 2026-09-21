@@ -2,7 +2,7 @@
 
 ## Estado, alcance y línea de base
 
-**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, con el caso de inscripción tardía a clase suelta pendiente. Las demás reglas de D02, los detalles de ajustes de D03 y las decisiones D07–D08 permanecen **Pendientes**. D06 tiene **Aprobado el ciclo de abono y la resolución manual del vencimiento**, con detalles de generación y límites horarios pendientes. D04 está **Aprobada con liberación manual de cupos**.
+**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02, los detalles de ajustes de D03 y las decisiones D07–D08 permanecen **Pendientes**. D06 tiene **Aprobado el ciclo de abono y la resolución manual del vencimiento**, con detalles de generación y límites horarios pendientes. D04 está **Aprobada con liberación manual de cupos**.
 
 **Contexto:** WorkUp es un caso ficticio. Las decisiones se acuerdan para el proyecto con criterios realistas y simples; la dueña es un rol del sistema, no una entrevistada real.
 
@@ -20,7 +20,7 @@
 | D02 | Reprogramación y cancelación | Para un turno individual, el enlace permite cancelar directamente antes del inicio, sin plazo mínimo ni aprobación de la dueña; una notificación posterior no altera asistencia ni estados completados. En clases con abono se libera solo la fecha cancelada antes del inicio, conservando horarios fijos y sin recuperación ni devolución automáticas. Reprogramación y clases sueltas siguen pendientes. | Parcialmente aprobada |
 | D03 | Cobros y asistencia | Cobro y asistencia independientes; cada cobro identifica el concepto concreto; se respeta el precio acordado y el abono no se cobra por cada clase. | Núcleo aprobado; ajustes pendientes |
 | D04 | Inscripción pendiente y cupos | La inscripción pendiente ocupa los lugares fijos; el cobro activa el abono. Si no paga o no se presenta, la dueña anula la inscripción y libera los lugares, sin vencimiento automático al inicio. | Aprobada |
-| D05 | Notificaciones | Al reservar un turno individual se envía inmediatamente un email con sus detalles y el enlace privado; 24 horas antes se envía un recordatorio con ese mismo enlace, sujeto a las reglas aprobadas de confirmación y deduplicación. La dueña puede compartir manualmente el enlace vigente. Clases con abono sin recordatorios ni confirmación; clases sueltas con recordatorio por email 24 h antes; suspensión con email inmediato a los anotados. Abonos: email 3 días antes y al vencer si no renovó, sin insistencia diaria ni liberación automática. | Reglas aprobadas; inscripción tardía pendiente |
+| D05 | Notificaciones | Al reservar un turno individual se envía inmediatamente un email con sus detalles y el enlace privado; 24 horas antes se envía un recordatorio con ese mismo enlace, sujeto a las reglas aprobadas de confirmación y deduplicación. La dueña puede compartir manualmente el enlace vigente. Clases con abono sin recordatorios ni confirmación; clases sueltas con recordatorio por email 24 h antes; suspensión con email inmediato a los anotados. Abonos: email 3 días antes y al vencer si no renovó, sin insistencia diaria ni liberación automática. | Reglas aprobadas |
 | D06 | Vencimiento y renovación | Un mes desde el alta del abono; renovación anticipada desde el vencimiento y tardía desde el pago. El lugar se conserva hasta resolución manual, pero no habilita asistencia sin renovar. | Núcleo aprobado; detalles pendientes |
 | D07 | Consecuencias financieras | Mantener el registro trazable de cobros; las políticas de depósitos, cobro, reintegro, traslado y penalidades quedan pendientes y fuera de WorkUp, a cargo de la dueña. | Pendiente |
 | D08 | Capacidades y solapamientos | Validar una combinación de capacidad de servicio, trabajadora, puesto y negocio antes de reservar. | Pendiente |
@@ -204,7 +204,7 @@ Esta aprobación no define la política de renovación ni vencimiento de abonos 
 
 ## D05 — Matriz de notificaciones y significado de cada mensaje
 
-**Estado:** **Reglas de notificación aprobadas para turnos, clases y vencimiento de abonos**. Permanece pendiente el tratamiento de inscripciones a clases sueltas con menos de 24 horas de anticipación.
+**Estado:** **Reglas de notificación aprobadas para turnos, clases y vencimiento de abonos**. Incluye el tratamiento aprobado de inscripciones a clases sueltas con menos de 24 horas de anticipación.
 
 **Evidencia actual.** RF 6 envía recordatorio por email 24 horas antes para turnos y clases; RF 7 pide confirmar asistencia; RF 12 prepara, pero no envía, avisos de suspensión. La intención confirmada requiere que el cliente reciba avisos de cancelación de clase y vencimiento de abono, y que la confirmación de asistencia aplique solo a turnos individuales. También expresa preferencia por no recibir recordatorios de clases recurrentes de abono.
 
@@ -222,7 +222,8 @@ Esta aprobación no define la política de renovación ni vencimiento de abonos 
 - Las clases con abono no generan recordatorios recurrentes ni solicitudes de confirmación.
 - Las clases sueltas generan un recordatorio por email 24 horas antes, sin solicitar confirmación de asistencia.
 - Al suspender una clase, se envía inmediatamente un email a cada alumno anotado; el aviso no queda solo preparado para envío manual.
-- No se extiende a clases el enlace privado de turnos individuales. El tratamiento de inscripciones a clases sueltas realizadas con menos de 24 horas de anticipación queda pendiente; no se infiere un envío inicial nuevo.
+- Si una clase suelta se reserva con menos de 24 horas de anticipación, se envía un único email al inscribirse con fecha y horario, sin solicitar confirmación ni agregar otro recordatorio.
+- No se extiende a clases el enlace privado de turnos individuales.
 
 ### Reglas aprobadas para avisos de abono
 
@@ -237,7 +238,7 @@ Esta aprobación no define la política de renovación ni vencimiento de abonos 
 | Email inicial “Ver mi turno” | Cliente de turno individual | Email inmediato al reservar, con detalles y enlace privado. | **Aprobado.** Da acceso privado y acotado a ese turno individual. |
 | Recordatorio de turno individual | Cliente de turno individual | Email 24 h antes del inicio, con el mismo enlace. No se envía si el turno fue cancelado; si se reservó con menos de 24 h, solo se emite el email inicial. | **Aprobado.** Informa el turno; la coincidencia exacta de 24 h se deduplica en un solo email con el contenido aplicable del recordatorio. |
 | Solicitud de confirmación | Cliente de turno individual aún no confirmado | En el recordatorio de 24 h. | **Aprobado.** Declara intención de asistir; no registra asistencia real. La falta de respuesta conserva la reserva. |
-| Recordatorio de clase suelta | Cliente | Email 24 h antes. | **Aprobado.** Informa, sin solicitar confirmación de asistencia. |
+| Recordatorio de clase suelta | Cliente | Email 24 h antes; si se inscribe con menos de 24 h, un único email inmediato al inscribirse. | **Aprobado.** Informa fecha y horario sin solicitar confirmación de asistencia ni agregar otro recordatorio para la inscripción tardía. |
 | Clase fija de abono | Cliente | Sin recordatorio recurrente ni solicitud de confirmación. | **Aprobado.** No exige respuesta semanal del alumno. |
 | Clase suspendida | Cada alumno anotado | Email inmediato tras suspender. | **Aprobado.** Envía el aviso; amplía RF 12, que hoy solo deja el mensaje preparado. |
 | Vencimiento próximo de abono | Alumno | Email 3 días antes del vencimiento. | **Aprobado.** Recuerda la fecha de vencimiento. |
@@ -268,7 +269,9 @@ Una clase “suspendida” se diferencia de un mensaje “preparado” o “envi
 - Si renovó antes del vencimiento, no se envía el aviso de abono vencido correspondiente a ese período.
 - Un abono vencido no genera emails diarios ni libera el lugar por el envío del aviso.
 
-**Discusión pendiente.** Definir el tratamiento de inscripciones tardías a clases sueltas. Los avisos de abono ya están aprobados; la hora exacta de vencimiento continúa pendiente en D06.
+**Caso aprobado de inscripción tardía.** Una alumna se inscribe a una clase suelta que comienza en dos horas: recibe un único email con fecha y horario al inscribirse, sin solicitud de confirmación ni otro recordatorio.
+
+**Dependencia pendiente.** La hora exacta de vencimiento del abono continúa pendiente en D06; no reabre los canales ni la frecuencia de avisos aprobados en D05.
 
 ---
 
@@ -382,6 +385,6 @@ Una reserva del cliente o cargada por la dueña aplica estas validaciones de for
 8. [ ] D07: definir fuera de WorkUp las consecuencias financieras y conservar en WorkUp el registro trazable de cobros ya previsto.
 9. [x] D03: aprobados cobro y asistencia independientes, concepto y referencia concretos, cobro por abono sin duplicación por clase y respeto del precio pactado. Ajustes, descuentos y reintegros continúan pendientes.
 10. [ ] D08: validar las restricciones de capacidad que se aplican a reservas y atenciones sin turno.
-11. [x] D05: aprobadas clases con abono sin recordatorio ni confirmación, clase suelta con email 24 h antes sin pedir confirmación y suspensión con email inmediato a los anotados. También aprobados email de abono 3 días antes y al vencer si no renovó, sin mensajes diarios. Solo queda pendiente el caso de inscripción tardía a clase suelta.
+11. [x] D05: aprobadas clases con abono sin recordatorio ni confirmación, clase suelta con email 24 h antes sin pedir confirmación y suspensión con email inmediato a los anotados. También aprobados email de abono 3 días antes y al vencer si no renovó, sin mensajes diarios. Aprobada también la inscripción a clase suelta con menos de 24 h: único email inmediato con fecha y horario, sin confirmación ni recordatorio adicional.
 
 Nada de este documento actualiza los RF vigentes hasta que el usuario acepte expresamente las decisiones correspondientes.
