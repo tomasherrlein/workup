@@ -1,0 +1,24 @@
+@{
+    ViewData["Title"] = "Configuración";
+}
+<div class="page-header">
+    <div>
+        <h1>Configuración</h1>
+    </div>
+</div>
+
+@* Later tasks append their own row here (Servicios, Trabajadoras, Grilla). *@
+<ul class="choice-list">
+    <li>
+        <a class="choice" asp-action="Business">
+            <span><strong>Negocio y avisos</strong><br /><span class="muted">Datos del negocio, contacto y parámetros de avisos</span></span>
+            @Icons.Svg("arrow-right")
+        </a>
+    </li>
+    <li>
+        <a class="choice" asp-action="ExpenseTypes">
+            <span><strong>Tipos de gasto</strong><br /><span class="muted">Categorías para registrar los gastos del negocio</span></span>
+            @Icons.Svg("arrow-right")
+        </a>
+    </li>
+</ul>

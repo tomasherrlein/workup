@@ -1,0 +1,14 @@
+@model DateOnly
+@{
+    ViewData["Title"] = "Jornada";
+}
+<div class="page-header">
+    <div>
+        <h1>Jornada</h1>
+        <p>@Formatting.LongDate(Model)</p>
+    </div>
+</div>
+
+<div class="empty-state">
+    <p>Todavía no hay turnos ni clases para hoy.</p>
+</div>

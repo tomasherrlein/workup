@@ -1,0 +1,63 @@
+@model BusinessSettingsViewModel
+@{
+    ViewData["Title"] = "Negocio y avisos";
+}
+<div class="page-header">
+    <div>
+        <h1>Negocio y avisos</h1>
+    </div>
+</div>
+
+<form asp-action="Business" method="post" class="form" novalidate>
+    <div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+    <div class="field">
+        <label asp-for="Name"></label>
+        <input asp-for="Name" />
+        <span asp-validation-for="Name" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="Slug"></label>
+        <input asp-for="Slug" />
+        <p class="hint">/r/@Model.Slug</p>
+        <span asp-validation-for="Slug" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="ContactPhone"></label>
+        <input asp-for="ContactPhone" autocomplete="tel" />
+        <span asp-validation-for="ContactPhone" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="NotificationEmail"></label>
+        <input asp-for="NotificationEmail" autocomplete="email" />
+        <p class="hint">Ahí llegan el resumen diario y los avisos de existencias.</p>
+        <span asp-validation-for="NotificationEmail" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label class="check">
+            <input asp-for="AllowsWalkIns" />
+            Admite atención sin turno
+        </label>
+    </div>
+    <div class="field">
+        <label asp-for="ReminderLeadHours"></label>
+        <input asp-for="ReminderLeadHours" type="number" min="1" max="168" />
+        <span asp-validation-for="ReminderLeadHours" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="DailySummaryTime"></label>
+        <input asp-for="DailySummaryTime" type="time" asp-format="{0:HH:mm}" />
+        <span asp-validation-for="DailySummaryTime" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="StockReviewEveryDays"></label>
+        <input asp-for="StockReviewEveryDays" type="number" min="1" max="90" />
+        <span asp-validation-for="StockReviewEveryDays" class="field-error"></span>
+    </div>
+    <div class="actions">
+        <button type="submit" class="btn btn-primary">Guardar cambios</button>
+    </div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

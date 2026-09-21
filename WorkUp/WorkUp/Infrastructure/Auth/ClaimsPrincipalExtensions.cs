@@ -8,6 +8,10 @@ public static class ClaimsPrincipalExtensions
         int.Parse(user.FindFirstValue(WorkUpClaims.BusinessId)
             ?? throw new InvalidOperationException("The signed-in user has no business."));
 
+    public static int GetOwnerAccountId(this ClaimsPrincipal user) =>
+        int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new InvalidOperationException("The signed-in user has no owner account."));
+
     public static string GetBusinessName(this ClaimsPrincipal user) => user.FindFirstValue(WorkUpClaims.BusinessName) ?? "";
 
     public static string GetBusinessSlug(this ClaimsPrincipal user) => user.FindFirstValue(WorkUpClaims.BusinessSlug) ?? "";

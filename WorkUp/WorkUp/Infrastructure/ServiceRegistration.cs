@@ -1,5 +1,7 @@
 using WorkUp.Business.Abstractions;
+using WorkUp.Business.Businesses;
 using WorkUp.Data;
+using WorkUp.Data.Businesses;
 
 namespace WorkUp.Infrastructure;
 
@@ -28,6 +30,15 @@ public static class ServiceRegistration
         services.AddSingleton<ILinkTokenProtector, DataProtectionLinkTokenProtector>();
 
         // Modules: add repositories and services below as each task introduces them.
+
+        // Businesses (T01)
+        services.AddScoped<IBusinessRepository, SqlBusinessRepository>();
+        services.AddScoped<IOwnerAccountRepository, SqlOwnerAccountRepository>();
+        services.AddScoped<IExpenseTypeRepository, SqlExpenseTypeRepository>();
+        services.AddScoped<RegisterBusinessService>();
+        services.AddScoped<OwnerLoginService>();
+        services.AddScoped<BusinessSettingsService>();
+        services.AddScoped<ExpenseTypeService>();
 
         return services;
     }

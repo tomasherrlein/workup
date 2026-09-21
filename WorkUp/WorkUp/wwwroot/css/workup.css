@@ -478,6 +478,9 @@ a:hover { color: var(--pine-deep); }
 
 .row.is-cancelled .row-time { text-decoration: line-through; color: var(--counter-ink-muted); }
 
+/* Row without a leading time column, for plain settings lists (not agenda entries). */
+.row-flat { grid-template-columns: 1fr; }
+
 .occupancy { display: flex; align-items: center; gap: var(--space-sm); margin-top: var(--space-xs); }
 
 .occupancy-bar {

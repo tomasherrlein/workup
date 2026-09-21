@@ -75,4 +75,21 @@
       if (!window.confirm(form.dataset.confirm)) event.preventDefault();
     });
   });
+
+  // <input data-slug-source> suggests a slug into <input data-slug-target> (RF-01), only until the person edits the
+  // target by hand. The server is the source of truth for the format and for uniqueness either way.
+  const slugSource = document.querySelector("[data-slug-source]");
+  const slugTarget = document.querySelector("[data-slug-target]");
+  if (slugSource && slugTarget) {
+    let targetEdited = slugTarget.value.trim().length > 0;
+    const slugify = (value) => value
+      .normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    slugTarget.addEventListener("input", () => { targetEdited = true; });
+    slugSource.addEventListener("input", () => {
+      if (!targetEdited) slugTarget.value = slugify(slugSource.value);
+    });
+  }
 })();

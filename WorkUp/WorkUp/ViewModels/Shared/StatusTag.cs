@@ -38,4 +38,9 @@ public sealed record StatusTag(string Label, string CssClass, string Icon)
     public static readonly StatusTag PendingPayment = new("Pendiente de pago", "tag-pending", "coin");
 
     public static readonly StatusTag Annulled = new("Anulado", "tag-cancelled", "cross");
+
+    /// <summary>Generic on/off state for catalogues that are archived instead of deleted (RF-01, RF-13).</summary>
+    public static readonly StatusTag Active = new("Activo", "tag-confirmed", "check");
+
+    public static readonly StatusTag Archived = new("Archivado", "tag-neutral", "pause");
 }
