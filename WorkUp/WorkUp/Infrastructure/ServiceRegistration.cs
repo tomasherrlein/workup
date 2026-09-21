@@ -1,9 +1,11 @@
 using WorkUp.BusinessLogic.Abstractions;
 using WorkUp.BusinessLogic.Businesses;
 using WorkUp.BusinessLogic.Catalog;
+using WorkUp.BusinessLogic.Staff;
 using WorkUp.Data;
 using WorkUp.Data.Businesses;
 using WorkUp.Data.Catalog;
+using WorkUp.Data.Staff;
 
 namespace WorkUp.Infrastructure;
 
@@ -48,6 +50,10 @@ public static class ServiceRegistration
         services.AddScoped<CatalogService>();
         services.AddScoped<MembershipPriceService>();
         services.AddScoped<OwnerNavigationProvider>();
+
+        // Staff (T03)
+        services.AddScoped<IWorkerRepository, SqlWorkerRepository>();
+        services.AddScoped<StaffService>();
 
         return services;
     }

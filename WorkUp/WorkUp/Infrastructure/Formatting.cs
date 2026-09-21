@@ -31,4 +31,22 @@ public static class Formatting
 
     /// <summary><c>lunes</c></summary>
     public static string DayName(DayOfWeek day) => Culture.DateTimeFormat.GetDayName(day);
+
+    private static readonly string[] ShortDayNames = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+
+    /// <summary><c>Lun</c>. Used for one-line summaries (worker rows) where the full day name would not fit.</summary>
+    public static string ShortDayName(DayOfWeek day) => ShortDayNames[(int)day];
+
+    /// <summary>
+    /// <c>••••••5678</c>: every digit but the last four hidden behind a bullet (DESIGN.md "masked phone" secondary
+    /// line, owner lists only). Non-digit characters (spaces, dashes) are dropped instead of preserved, since the
+    /// point is to shorten what is shown, not to reproduce the original formatting.
+    /// </summary>
+    public static string MaskPhone(string phone)
+    {
+        var digits = new string(phone.Where(char.IsDigit).ToArray());
+        return digits.Length <= 4
+            ? new string('•', digits.Length)
+            : new string('•', digits.Length - 4) + digits[^4..];
+    }
 }
