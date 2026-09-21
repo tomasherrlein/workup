@@ -108,7 +108,7 @@ components:
 
 **Creative North Star: "The Cutting Mat"**
 
-WorkUp looks like a working ledger laid on a workshop cutting mat: ruled lines, hard columns, bold times, and marks that mean something. It is a tool you use standing at a counter with one hand, in good daylight, with a customer waiting. Every screen is a list you scan top to bottom; structure comes from rules and alignment, not from boxes. The palette comes from the self-healing cutting mat: a deep pine green frames the app, mid greens draw the working marks (segment bars, selection), the saturated pine is the owner's pen for actions, and a single grid yellow marks position on the dark frame, like the grid printed on the mat.
+WorkUp looks like a working ledger laid on a workshop cutting mat: ruled lines, hard columns, bold times, and marks that mean something. It is a tool you use standing at a counter with one hand, in good daylight, with a customer waiting. Every screen is a list you scan top to bottom; structure comes from rules and alignment, not from boxes. The palette comes from the self-healing cutting mat: a deep pine green frames the app, mid greens draw the working marks (occupancy bars, selection), the saturated pine is the owner's pen for actions, and a single grid yellow marks position on the dark frame, like the grid printed on the mat.
 
 The system is dense on purpose and calm by restraint. Time sits in a fixed left column in bold tabular numerals, the person and service read next to it, and the state sits right-aligned as a hard-edged tag. Sections are separated by a 2px ink rule and a plain sentence-case heading, like the ruled headers of an accounts book.
 
@@ -117,7 +117,7 @@ It explicitly rejects the anti-references in PRODUCT.md: the **"warm AI" look** 
 **Key Characteristics:**
 - Full-width rows divided by 1px rules; cards are the exception, never the layout.
 - Near-square geometry: 4px controls, 2px tags, 8px only on bottom sheets.
-- A pine tonal family: Mat Night frames (app bar, rail, section rules, time column), Pine acts (buttons, links, focus), mint tints mark (segment bars, selection, summary band).
+- A pine tonal family: Mat Night frames (app bar, rail, section rules, time column), Pine acts (buttons, links, focus), mint tints mark (occupancy bars, selection, summary band).
 - Grid Yellow is the only accent and lives only on the dark frame.
 - State is always a word from the glossary, in a rectangular tag with an icon.
 - Flat at rest; the only shadow belongs to sheets that float over content.
@@ -132,8 +132,8 @@ Values were defined in OKLCH and are stored as hex. Contrast ratios below are WC
 - **Mat Night** (#002F28, oklch 0.27 0.055 182): the frame. Mobile app bar and desktop rail background (Sheet text on it: 14.4:1), public booking header band, 2px section rules, section heading text, and row times.
 - **Pine Deep** (#00493D): pressed and hover state of Pine.
 - **Pine** (#006251, oklch 0.44 0.09 176): the owner's pen. Primary buttons, row actions and links, selected date or slot border, and the 3px focus ring. Sheet text on it: 7.2:1; on Paper as text: 6.8:1.
-- **Mat Mid** (#1B9579): working marks, non-text only. `Terminación` segment, progress and occupancy fill, selected-slot inner mark. 3.7:1 against Sheet.
-- **Mat Light** (#B4DFD0): the `Espera` segment (hatched), inactive text on Mat Night (10.1:1), and dividers inside the app bar.
+- **Mat Mid** (#1B9579): working marks, non-text only. Occupancy and progress fill, selected-slot inner mark. 3.7:1 against Sheet.
+- **Mat Light** (#B4DFD0): inactive text on Mat Night (10.1:1) and dividers inside the app bar.
 - **Pine Wash** (#E1F4ED): active navigation item and selected row or slot background.
 - **Pine Mist** (#F0F9F6): the day summary band and sticky action bar background. Never the whole app background.
 
@@ -166,7 +166,7 @@ Values were defined in OKLCH and are stored as hex. Contrast ratios below are WC
 
 **The Two-Greens Rule.** `Atendido` leaf green and brand Pine must stay visibly apart: never show an `Atendido` tag on a Pine Wash selected row without its word and double-check icon, and never tint a selection with leaf green.
 
-**The Adjacent-Greens Rule.** Pine and Mat Mid are only 2.0:1 apart; never place them touching without a 2px gap or a Mat Light segment between, and always label segments with text.
+**The Adjacent-Greens Rule.** Pine and Mat Mid are only 2.0:1 apart; never place them touching without a 2px gap, and always state the value of a bar in text.
 
 **The No-Cream Rule.** Backgrounds stay cool. Any neutral with a visible warm or yellow cast is prohibited; the only yellow in the system is Grid Yellow on the frame.
 
@@ -217,7 +217,7 @@ Flat by default. Depth comes from rules and from the contrast between Paper and 
 ### Agenda Row (signature component)
 - **Structure:** full-width Sheet row, 1px Rule divider below. A fixed 64px left column holds the start time (Label, tabular) with the end time muted underneath; the middle holds the person or class (Body, bold name) and the service and worker (Counter Ink Muted); the right holds the status tags.
 - **Time column:** start time in Mat Night, bold tabular.
-- **Individual appointments:** a 6px segmented bar under the text with 2px gaps: Aplicación (Pine), Espera (Mat Light, hatched), Terminación (Mat Mid), each labeled below in muted text.
+- **Individual appointments:** no bar. The service occupies its full duration (`docs/srs.md`, D-25), shown as start and end time in the time column.
 - **Classes:** occupancy `6 de 10` in bold tabular numerals plus a 6px occupancy bar (Mat Mid fill on Pine Wash track).
 - **Actions:** one to three row actions under the text; overflow goes to a `Más acciones` sheet.
 
