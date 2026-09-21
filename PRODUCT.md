@@ -8,11 +8,11 @@ product
 
 **Owners (primary surface).** One owner per business, working standing up and exclusively from a phone, between one attention and the next. Reference cases: Marina, who runs a hair salon with individual appointments, two workers, and four stations, and Lucía, who runs a yoga studio with recurring group classes, fixed monthly memberships, and drop-in students. Today they run the business on a notebook, loose pages, and spreadsheets, and coordinate everything through WhatsApp. Workers and teachers are data, not users.
 
-**Customers (public booking).** People who book, confirm, cancel, or reschedule from a shared link without creating an account. About a third of a salon's customers are over 65; if booking is not simple and large, they keep writing on WhatsApp.
+**Customers (public booking).** People who book without creating an account and confirm or cancel an individual appointment from a private link; an optional account adds self-service rescheduling. About a third of a salon's customers are over 65; if booking is not simple and large, they keep writing on WhatsApp.
 
 ## Product Purpose
 
-WorkUp replaces the counter notebook for appointment-based service businesses: agenda, weekly class grid, memberships, attendance, charges, walk-ins, expenses, declared stock, automatic reminders, and period results. Success means the owner records reality faster than with a pen, customers book on their own outside business hours, and nothing is lost or duplicated. Source of truth for scope: `srs.md`.
+WorkUp replaces the counter notebook for appointment-based service businesses: agenda, weekly class grid, memberships, attendance, charges, walk-ins, expenses, declared stock, automatic reminders, and period results. Success means the owner records reality faster than with a pen, customers book on their own outside business hours, and nothing is lost or duplicated. Source of truth for scope: `docs/srs.md` (v3.0) and `docs/requerimientos-funcionales.md`.
 
 ## Brand Personality
 
