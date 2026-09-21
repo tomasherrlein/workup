@@ -2,7 +2,7 @@
 
 ## Estado, alcance y línea de base
 
-**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02, los detalles de ajustes de D03 y las decisiones D07–D08 permanecen **Pendientes**. D06 tiene **Aprobado el ciclo de abono y la resolución manual del vencimiento**, con detalles de generación y regreso tras baja pendientes. D04 está **Aprobada con liberación manual de cupos**.
+**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02, los detalles de ajustes de D03 y las decisiones D07–D08 permanecen **Pendientes**. D06 tiene **Aprobado el ciclo de abono y la resolución manual del vencimiento**, con detalles de generación semanal pendientes. D04 está **Aprobada con liberación manual de cupos**.
 
 **Contexto:** WorkUp es un caso ficticio. Las decisiones se acuerdan para el proyecto con criterios realistas y simples; la dueña es un rol del sistema, no una entrevistada real.
 
@@ -310,7 +310,8 @@ La conservación de lugar debe distinguirse de la cobertura para asistir. No se 
 
 Se mantiene como propuesta pendiente que repetir la generación no duplique anotaciones ni borre historial, cancelaciones o suspensiones. Su coordinación con la renovación y la baja manual se definirá antes de actualizar RF 19.
 
-- Resolver el regreso tras una baja que ya liberó el lugar, sin confundirlo con la renovación tardía de una inscripción aún retenida.
+**Regreso tras baja aprobado.** La baja termina la inscripción a los horarios fijos y libera sus lugares; no elimina la ficha del cliente, su cuenta ni su historial. Si vuelve, usa la misma cuenta si ya tenía una y realiza una nueva inscripción en horarios con cupo, con un nuevo abono. No tiene garantizados sus antiguos horarios. Si la inscripción todavía conserva sus lugares y solo venció el abono, corresponde renovar, no crear una inscripción nueva.
+
 Los avisos se rigen por D05: email 3 días antes y al vencer si no renovó, sin mensajes diarios ni liberación automática del lugar.
 
 ---
@@ -382,7 +383,7 @@ Una reserva del cliente o cargada por la dueña aplica estas validaciones de for
 4. [ ] D01: definir la presentación y el tratamiento operativo de la notificación posterior al inicio, la asociación histórica de cuentas y el flujo de autoregistro opcional. La mecánica técnica de enlaces y emails queda pendiente sin reabrir sus reglas de negocio aprobadas.
 5. [x] D02: cancelar una clase con abono antes del inicio libera solo esa fecha, conserva horarios fijos y no genera recuperación ni devolución automáticas; desde el inicio la dueña registra ausencia cuando corresponde. Siguen pendientes reprogramación autenticada, cambio de horario fijo y clases sueltas.
 6. [x] D04: inscripción pendiente ocupa lugares fijos, cobro registrado activa el abono y anulación manual por falta de pago o inasistencia libera los lugares. Sin vencimiento automático al inicio de la primera clase.
-7. [x] D06: aprobado mes desde alta, ajuste al último día si no existe fecha equivalente, renovación anticipada desde vencimiento y tardía desde pago, conservación manual del lugar sin asistencia hasta renovar. Aprobado que el vencimiento sea el primer día sin cobertura, sin depender de la hora de pago. Aprobado conservar el día de referencia al renovar sin interrupción y reiniciarlo con el día de pago al renovar tarde. Quedan pendientes generación semanal y regreso tras baja.
+7. [x] D06: aprobado mes desde alta, ajuste al último día si no existe fecha equivalente, renovación anticipada desde vencimiento y tardía desde pago, conservación manual del lugar sin asistencia hasta renovar. Aprobado que el vencimiento sea el primer día sin cobertura, sin depender de la hora de pago. Aprobado conservar el día de referencia al renovar sin interrupción y reiniciarlo con el día de pago al renovar tarde. Aprobado el regreso tras baja mediante nueva inscripción sujeta a cupo, conservando cliente, cuenta e historial. Solo queda pendiente la generación semanal de D06.
 8. [ ] D07: definir fuera de WorkUp las consecuencias financieras y conservar en WorkUp el registro trazable de cobros ya previsto.
 9. [x] D03: aprobados cobro y asistencia independientes, concepto y referencia concretos, cobro por abono sin duplicación por clase y respeto del precio pactado. Ajustes, descuentos y reintegros continúan pendientes.
 10. [ ] D08: validar las restricciones de capacidad que se aplican a reservas y atenciones sin turno.
