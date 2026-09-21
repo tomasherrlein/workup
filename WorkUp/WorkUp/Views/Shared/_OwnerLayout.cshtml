@@ -1,0 +1,62 @@
+@inject Microsoft.Extensions.Options.IOptions<WorkUpOptions> Options
+@{
+    Layout = "_Layout";
+    var current = ViewContext.RouteData.Values["controller"] as string;
+    var sections = OwnerNavigation.Sections.ToList();
+    if (Options.Value.Features.DevTools)
+    {
+        sections.Add(OwnerNavigation.DevTools);
+    }
+    string? CurrentFor(NavItem item) => string.Equals(item.Controller, current, StringComparison.OrdinalIgnoreCase) ? "page" : null;
+}
+<div class="owner-shell">
+    <header class="app-bar on-frame">
+        <button class="icon-button" type="button" data-nav-open aria-controls="nav-sheet" aria-expanded="false">
+            @Icons.Svg("menu")<span class="visually-hidden">Menú</span>
+        </button>
+        <a class="brand" asp-area="Owner" asp-controller="Day" asp-action="Index">WorkUp</a>
+        <span class="business-name">@User.GetBusinessName()</span>
+    </header>
+
+    <nav class="rail on-frame" aria-label="Principal">
+        <a class="brand" asp-area="Owner" asp-controller="Day" asp-action="Index">WorkUp</a>
+        <div class="business-name">@User.GetBusinessName()</div>
+        <ul class="nav-list">
+            @foreach (var item in sections)
+            {
+                <li><a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon) @item.Label</a></li>
+            }
+        </ul>
+        <div class="rail-footer">
+            <partial name="_OwnerAccountLinks" />
+        </div>
+    </nav>
+
+    <main id="main" class="content" tabindex="-1">
+        <partial name="_Flash" />
+        @RenderBody()
+    </main>
+
+    <nav class="bottom-bar" aria-label="Accesos rápidos">
+        @foreach (var item in sections.Where(s => s.InBottomBar))
+        {
+            <a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon)<span>@item.Label</span></a>
+        }
+        <button type="button" data-nav-open aria-controls="nav-sheet" aria-expanded="false">@Icons.Svg("more")<span>Más</span></button>
+    </nav>
+
+    <div id="nav-sheet" class="nav-sheet" hidden>
+        <div class="nav-sheet-panel" role="dialog" aria-modal="true" aria-label="Menú">
+            <ul class="nav-list">
+                @foreach (var item in sections)
+                {
+                    <li><a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon) @item.Label</a></li>
+                }
+            </ul>
+            <partial name="_OwnerAccountLinks" />
+        </div>
+    </div>
+</div>
+@section Scripts {
+    @await RenderSectionAsync("Scripts", required: false)
+}

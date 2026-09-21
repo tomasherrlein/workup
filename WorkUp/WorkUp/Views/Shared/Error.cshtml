@@ -1,0 +1,16 @@
+@model ErrorViewModel
+@{
+    ViewData["Title"] = "Algo salió mal";
+}
+<div class="notice notice-error" role="alert">
+    @Icons.Svg("alert")
+    <div>
+        <p><strong>No pudimos completar lo que pediste.</strong></p>
+        <p>Probá de nuevo en unos minutos. Si sigue pasando, avisale al equipo.</p>
+        @if (Model.ShowRequestId)
+        {
+            <p class="muted">Código de referencia: <code>@Model.RequestId</code></p>
+        }
+    </div>
+</div>
+<a class="btn btn-secondary" href="/">Volver al inicio</a>

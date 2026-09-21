@@ -1,0 +1,26 @@
+@inject Microsoft.Extensions.Options.IOptions<WorkUpOptions> Options
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#002F28" />
+    <title>@(ViewData["Title"] is string title ? $"{title} · WorkUp" : "WorkUp")</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;700&display=swap" />
+    <link rel="stylesheet" href="~/css/workup.css" asp-append-version="true" />
+</head>
+<body>
+    <a class="skip-link" href="#main">Saltar al contenido</a>
+    @if (Options.Value.Features.DevTools)
+    {
+        <div class="devtools-banner on-frame">Versión de prueba: los emails no se envían, se ven en Herramientas de prueba.</div>
+    }
+    @RenderBody()
+    <div id="live-region" class="visually-hidden" aria-live="polite"></div>
+    <script src="~/lib/jquery/dist/jquery.min.js"></script>
+    <script src="~/js/site.js" asp-append-version="true"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

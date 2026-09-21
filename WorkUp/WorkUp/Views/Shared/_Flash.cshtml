@@ -1,0 +1,12 @@
+@{
+    var message = TempData["FlashMessage"] as string;
+    var type = (TempData["FlashType"] as string ?? "Success").ToLowerInvariant();
+    var icon = type switch { "error" => "alert", "warning" => "alert", "info" => "info", _ => "check" };
+}
+@if (!string.IsNullOrEmpty(message))
+{
+    <div class="notice notice-@type" role="@(type == "error" ? "alert" : "status")">
+        @Icons.Svg(icon)
+        <p>@message</p>
+    </div>
+}
