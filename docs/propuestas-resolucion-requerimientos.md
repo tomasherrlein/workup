@@ -2,7 +2,7 @@
 
 ## Estado, alcance y línea de base
 
-**Estado:** documento de propuesta; D01 tiene **Aprobados el enlace individual y los flujos de cuenta opcional** y D02 está **Aprobada**, incluido el cambio de horario fijo del abono. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Los detalles de ajustes de D03 permanecen **Pendientes**. D08 está **Aprobada con disponibilidad simple y registro sin turno no bloqueante**. D07 está **Aprobada para consecuencias económicas externas y conservación de cobros**. D06 está **Aprobada**, incluido el ciclo de abono, la resolución manual del vencimiento y las listas semanales. D04 está **Aprobada con liberación manual de cupos**.
+**Estado:** documento de propuesta; D01 tiene **Aprobados el enlace individual y los flujos de cuenta opcional** y D02 está **Aprobada**, incluido el cambio de horario fijo del abono. D03 está **Aprobada**, incluidos descuentos documentados, anulación de cobros y devoluciones manuales. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. D08 está **Aprobada con disponibilidad simple y registro sin turno no bloqueante**. D07 está **Aprobada para consecuencias económicas externas y conservación de cobros**. D06 está **Aprobada**, incluido el ciclo de abono, la resolución manual del vencimiento y las listas semanales. D04 está **Aprobada con liberación manual de cupos**.
 
 **Contexto:** WorkUp es un caso ficticio. Las decisiones se acuerdan para el proyecto con criterios realistas y simples; la dueña es un rol del sistema, no una entrevistada real.
 
@@ -18,7 +18,7 @@
 |---|---|---|---|
 | D01 | Acceso a un turno, cuenta opcional y vinculación | Sin cuenta obligatoria: la persona puede reservar o asistir con ayuda de la dueña; un enlace privado, reutilizable y acotado permite gestionar un único turno durante su vigencia aprobada. Cuenta opcional con registro autónomo, invitación de vinculación de 48 h y recuperación de 30 min; sin fusiones automáticas. | Enlace y flujos de cuenta aprobados |
 | D02 | Reprogramación y cancelación | Para un turno individual, el enlace permite cancelar directamente antes del inicio, sin plazo mínimo ni aprobación de la dueña; confirmar “No voy a asistir” desde el inicio marca Ausente, sin sobrescribir una asistencia ni un estado completado. En clases con abono se libera solo la fecha cancelada antes del inicio, conservando horarios fijos y sin recuperación ni devolución automáticas. Reprogramación autenticada antes del inicio, con la misma trabajadora y sin perder la reserva original hasta confirmar otra. Clase suelta: cancelar antes del inicio libera el lugar; sin cuenta la registra la dueña; desde el inicio la dueña registra la ausencia; otra clase requiere nueva inscripción con cupo, sin traslado automático. Cambio de horario fijo registrado por la dueña, sujeto a cupo y desde una fecha de vigencia, sin alterar vencimiento ni precio. | Aprobada |
-| D03 | Cobros y asistencia | Cobro y asistencia independientes; cada cobro identifica el concepto concreto; se respeta el precio acordado y el abono no se cobra por cada clase. | Núcleo aprobado; ajustes pendientes |
+| D03 | Cobros y asistencia | Cobro y asistencia independientes; cada cobro identifica el concepto concreto; se respeta el precio acordado y el abono no se cobra por cada clase. Descuentos como precio acordado con motivo opcional; los cobros no se editan ni borran, se anulan con motivo; devoluciones manuales enlazadas al cobro original. | Aprobada |
 | D04 | Inscripción pendiente y cupos | La inscripción pendiente ocupa los lugares fijos; el cobro activa el abono. Si no paga o no se presenta, la dueña anula la inscripción y libera los lugares, sin vencimiento automático al inicio. | Aprobada |
 | D05 | Notificaciones | Al reservar un turno individual se envía inmediatamente un email con sus detalles y el enlace privado; 24 horas antes se envía un recordatorio con ese mismo enlace, sujeto a las reglas aprobadas de confirmación y deduplicación. La dueña puede compartir manualmente el enlace vigente. Clases con abono sin recordatorios ni confirmación; clases sueltas con recordatorio por email 24 h antes; suspensión con email inmediato a los anotados. Abonos: email 3 días antes y al vencer si no renovó, sin insistencia diaria ni liberación automática. | Reglas aprobadas |
 | D06 | Vencimiento y renovación | Un mes desde el alta del abono; renovación anticipada desde el vencimiento y tardía desde el pago. El lugar se conserva hasta resolución manual; la lista muestra “Pendiente de renovación” sin habilitar asistencia y se regenera sin duplicar ni borrar cancelaciones o suspensiones. | Aprobada |
@@ -173,7 +173,7 @@ El aviso explícito y confirmado posterior al inicio registra Ausente y sustituy
 
 ## D03 — Independencia, vínculo e importe de cobros y asistencias
 
-**Estado:** **Núcleo aprobado; ajustes pendientes**.
+**Estado:** **Aprobada**.
 
 **Reglas aceptadas en la conversación.**
 
@@ -187,13 +187,19 @@ El aviso explícito y confirmado posterior al inicio registra Ausente y sustituy
 
 **Evidencia actual.** RF 5 calcula y registra cobros; RF 10 registra asistencia; RF 11 describe el registro de una atención sin turno y su cobro, sin establecer que puedan registrarse en cualquier orden. La independencia y el orden flexible se aprobaron en esta conversación, pero todavía no son una regla expresa del RF vigente. RF 13 usa cobros para el resultado del período. Falta precisar el vínculo cuando existen pagos previos, pagos posteriores, diferencias de importe o correcciones de tarifa.
 
-**Detalle aprobado y propuestas adicionales.** Los tres primeros puntos desarrollan el núcleo acordado; las políticas de ajustes y devoluciones de los dos últimos siguen pendientes:
+**Detalle aprobado.**
 
 - La asistencia expresa si se prestó el servicio; el cobro expresa importe, fecha y concepto percibido. Ninguno cambia por sí solo el estado del otro.
 - Si existe una reserva, atención registrada o abono, cada asistencia y movimiento debe enlazarse a ese origen; un abono puede vincularse a varias ocurrencias fijas, sin duplicar cobros. Una atención sin reserva también debe identificarse en el cobro: no tener reserva previa no exime de indicar el concepto concreto.
 - El importe se captura al acordar la reserva, inscripción o abono; para una atención sin reserva, se captura al acordar esa atención. El pago usa ese importe acordado: un cambio posterior del tarifario no puede aumentarlo silenciosamente. El tarifario solo propone precios para nuevos acuerdos.
-- **Pendiente de aprobación:** conservar el importe efectivamente registrado y exigir motivo y responsable para ajustes posteriores, sin reescribir el movimiento original.
-- **Pendiente de aprobación:** registrar una devolución manual asociada al cobro original. No se aprueba aquí una billetera, saldo interno ni pasarela de pagos; el alcance de reintegros se resolverá junto con D07.
+
+### Regla aceptada: descuentos, anulaciones y devoluciones
+
+- **Descuentos y excepciones.** No hay un módulo de descuentos. La dueña registra el precio acordado al reservar, inscribir o contratar el abono; si difiere del tarifario, puede indicar un motivo opcional, por ejemplo “promoción”.
+- **Corrección de cobros.** Un cobro registrado no se edita ni se borra. Para corregirlo, la dueña lo anula indicando motivo; la anulación conserva fecha y responsable y queda enlazada al cobro original. Si corresponde, luego registra el cobro correcto.
+- El resultado del período (RF 13) excluye los cobros anulados; el historial conserva el cobro original y su anulación.
+- **Devoluciones.** Si la dueña devuelve dinero fuera del sistema, puede registrar una devolución manual enlazada al cobro original, con importe, fecha y motivo. RF 13 la descuenta del período en que se registra.
+- No se aprueba cálculo automático de devoluciones, saldo a favor, créditos ni pasarela de pagos. La política de cuándo devolver sigue fuera de WorkUp según D07.
 
 **Rationale.** Amplía lo descrito en RF 5 y RF 11 con una independencia propuesta, conserva trazabilidad para RF 13 y permite que una clase suelta se cobre al llegar sin falsear la asistencia, el origen del cobro ni el precio que el cliente aceptó.
 
@@ -210,12 +216,13 @@ El aviso explícito y confirmado posterior al inicio registra Ausente y sustituy
 - Normal: se registra la asistencia a una clase con abono; no se genera un cobro adicional por esa clase.
 - Normal: una promoción acuerda $8.000 para una reserva cuando el tarifario vigente sugería $10.000; el cobro posterior usa $8.000 con el motivo “promoción”, aunque luego cambie el tarifario.
 - Borde: se registra una atención sin turno; el cobro puede no tener reserva previa, pero conserva el motivo y el vínculo con la atención creada conforme a RF 11.
-- Borde: se corrige un cobro duplicado; se registra un reintegro manual enlazado al original, en vez de borrar el ingreso.
+- Borde: se registró dos veces el mismo cobro; la dueña anula el duplicado con el motivo “cobro duplicado” y el informe cuenta un solo ingreso, conservando ambos movimientos en el historial.
+- Borde: Lucía pagó $10.000 y se cargaron $1.000 por error; la dueña anula ese cobro con motivo y registra uno nuevo por $10.000.
+- Borde: la dueña devuelve $5.000 a una clienta fuera del sistema; registra una devolución manual enlazada al cobro original y RF 13 la descuenta del período.
 
-**Subdecisiones pendientes para discusión posterior.**
+**Alternativa descartada.** Editar el cobro con historial de cambios: resulta más directo, pero permite alterar silenciosamente el resultado de un período ya informado.
 
-- Definir cómo se documentan descuentos o excepciones, sin alterar la regla aprobada de respetar el precio pactado.
-- Definir la mecánica de un ajuste posterior sin alterar el movimiento original.
+**Cierre.** D03 queda cerrada en este documento.
 
 ---
 
@@ -386,7 +393,7 @@ Las políticas de depósitos, cobro, reintegro, traslado y aplicación de penali
 - Borde: el cliente confirma desde el enlace que no asistirá a un turno ya iniciado; se registra Ausente según D01/D02, pero no se genera un cobro, reintegro ni penalidad por esa acción.
 - Borde: se suspende una clase fija de abono; la ocurrencia queda suspendida y no se marca a ningún alumno como ausente. No se ejecuta automáticamente una devolución ni se borra el cobro del abono; los acuerdos económicos se gestionan fuera de WorkUp.
 
-**Límites del acuerdo.** No se incorpora una política económica externa concreta ni un módulo de reintegros. Esta decisión no aprueba las propuestas pendientes de ajustes y correcciones de cobros de D03. Las reglas de cancelación por ocurrencia y conservación del abono de D02 permanecen vigentes en este documento.
+**Límites del acuerdo.** No se incorpora una política económica externa concreta ni un módulo de reintegros. La anulación de cobros y el registro manual de devoluciones se definen en D03 y no cambian este alcance. Las reglas de cancelación por ocurrencia y conservación del abono de D02 permanecen vigentes en este documento.
 
 - Borde: una clienta había pagado y cancela. El cobro original sigue registrado; WorkUp no crea un crédito, un reintegro ni una penalización por esa acción.
 
@@ -434,5 +441,6 @@ La implementación de los controles de concurrencia queda para diseño técnico;
 11. [x] D05: aprobadas clases con abono sin recordatorio ni confirmación, clase suelta con email 24 h antes sin pedir confirmación y suspensión con email inmediato a los anotados. También aprobados email de abono 3 días antes y al vencer si no renovó, sin mensajes diarios. Aprobada también la inscripción a clase suelta con menos de 24 h: único email inmediato con fecha y horario, sin confirmación ni recordatorio adicional.
 12. [x] D02: aprobada la clase suelta: cancelación desde el panel antes del inicio que libera el lugar; sin cuenta, la dueña registra la cancelación; desde el inicio, la dueña registra la ausencia; asistir a otra clase requiere nueva inscripción con cupo, sin traslado automático. Sigue pendiente el cambio de horario fijo del abono.
 13. [x] D02: aprobado el cambio de horario fijo del abono: lo registra la dueña, solo con cupo disponible y conservando los horarios actuales si no hay lugar; rige desde una fecha de vigencia sin modificar fechas anteriores y no altera vencimiento, día de referencia ni precio. D02 cerrada en este documento.
+14. [x] D03: aprobados descuentos como precio acordado con motivo opcional, corrección de cobros mediante anulación con motivo, fecha y responsable (sin editar ni borrar) y devoluciones manuales enlazadas al cobro original que RF 13 descuenta del período; sin créditos, saldos ni cálculo automático. D03 cerrada en este documento.
 
 Nada de este documento actualiza los RF vigentes hasta que el usuario acepte expresamente las decisiones correspondientes.
