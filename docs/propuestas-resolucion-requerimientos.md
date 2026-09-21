@@ -2,7 +2,7 @@
 
 ## Estado, alcance y línea de base
 
-**Estado:** documento de propuesta; D01 tiene **Aprobados el enlace individual y los flujos de cuenta opcional** y D02 está **Parcialmente aprobada para turnos individuales, clases con abono y clases sueltas**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. El cambio de horario fijo de D02 y los detalles de ajustes de D03 permanecen **Pendientes**. D08 está **Aprobada con disponibilidad simple y registro sin turno no bloqueante**. D07 está **Aprobada para consecuencias económicas externas y conservación de cobros**. D06 está **Aprobada**, incluido el ciclo de abono, la resolución manual del vencimiento y las listas semanales. D04 está **Aprobada con liberación manual de cupos**.
+**Estado:** documento de propuesta; D01 tiene **Aprobados el enlace individual y los flujos de cuenta opcional** y D02 está **Aprobada**, incluido el cambio de horario fijo del abono. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Los detalles de ajustes de D03 permanecen **Pendientes**. D08 está **Aprobada con disponibilidad simple y registro sin turno no bloqueante**. D07 está **Aprobada para consecuencias económicas externas y conservación de cobros**. D06 está **Aprobada**, incluido el ciclo de abono, la resolución manual del vencimiento y las listas semanales. D04 está **Aprobada con liberación manual de cupos**.
 
 **Contexto:** WorkUp es un caso ficticio. Las decisiones se acuerdan para el proyecto con criterios realistas y simples; la dueña es un rol del sistema, no una entrevistada real.
 
@@ -17,7 +17,7 @@
 | ID | Tema | Recomendación resumida | Estado |
 |---|---|---|---|
 | D01 | Acceso a un turno, cuenta opcional y vinculación | Sin cuenta obligatoria: la persona puede reservar o asistir con ayuda de la dueña; un enlace privado, reutilizable y acotado permite gestionar un único turno durante su vigencia aprobada. Cuenta opcional con registro autónomo, invitación de vinculación de 48 h y recuperación de 30 min; sin fusiones automáticas. | Enlace y flujos de cuenta aprobados |
-| D02 | Reprogramación y cancelación | Para un turno individual, el enlace permite cancelar directamente antes del inicio, sin plazo mínimo ni aprobación de la dueña; confirmar “No voy a asistir” desde el inicio marca Ausente, sin sobrescribir una asistencia ni un estado completado. En clases con abono se libera solo la fecha cancelada antes del inicio, conservando horarios fijos y sin recuperación ni devolución automáticas. Reprogramación autenticada antes del inicio, con la misma trabajadora y sin perder la reserva original hasta confirmar otra. Clase suelta: cancelar antes del inicio libera el lugar; sin cuenta la registra la dueña; desde el inicio la dueña registra la ausencia; otra clase requiere nueva inscripción con cupo, sin traslado automático. Cambio de horario fijo pendiente. | Parcialmente aprobada |
+| D02 | Reprogramación y cancelación | Para un turno individual, el enlace permite cancelar directamente antes del inicio, sin plazo mínimo ni aprobación de la dueña; confirmar “No voy a asistir” desde el inicio marca Ausente, sin sobrescribir una asistencia ni un estado completado. En clases con abono se libera solo la fecha cancelada antes del inicio, conservando horarios fijos y sin recuperación ni devolución automáticas. Reprogramación autenticada antes del inicio, con la misma trabajadora y sin perder la reserva original hasta confirmar otra. Clase suelta: cancelar antes del inicio libera el lugar; sin cuenta la registra la dueña; desde el inicio la dueña registra la ausencia; otra clase requiere nueva inscripción con cupo, sin traslado automático. Cambio de horario fijo registrado por la dueña, sujeto a cupo y desde una fecha de vigencia, sin alterar vencimiento ni precio. | Aprobada |
 | D03 | Cobros y asistencia | Cobro y asistencia independientes; cada cobro identifica el concepto concreto; se respeta el precio acordado y el abono no se cobra por cada clase. | Núcleo aprobado; ajustes pendientes |
 | D04 | Inscripción pendiente y cupos | La inscripción pendiente ocupa los lugares fijos; el cobro activa el abono. Si no paga o no se presenta, la dueña anula la inscripción y libera los lugares, sin vencimiento automático al inicio. | Aprobada |
 | D05 | Notificaciones | Al reservar un turno individual se envía inmediatamente un email con sus detalles y el enlace privado; 24 horas antes se envía un recordatorio con ese mismo enlace, sujeto a las reglas aprobadas de confirmación y deduplicación. La dueña puede compartir manualmente el enlace vigente. Clases con abono sin recordatorios ni confirmación; clases sueltas con recordatorio por email 24 h antes; suspensión con email inmediato a los anotados. Abonos: email 3 días antes y al vencer si no renovó, sin insistencia diaria ni liberación automática. | Reglas aprobadas |
@@ -97,7 +97,7 @@ El aviso explícito y confirmado posterior al inicio registra Ausente y sustituy
 
 ## D02 — Reprogramación individual, cancelación de ocurrencia y clase suelta
 
-**Estado:** **Parcialmente aprobada para turnos individuales, clases con abono y clases sueltas**; el cambio de horario fijo del abono sigue pendiente.
+**Estado:** **Aprobada**, incluidos turnos individuales, clases con abono, clases sueltas y cambio de horario fijo del abono.
 
 **Evidencia actual.** RF 17 limita la reprogramación a un turno individual, con la misma trabajadora, y ordena cancelar una clase grupal para anotarse en otra con lugar. RF 18 libera solo esa semana cuando se cancela una clase fija. RF 4 distingue clases fijas de clase suelta, pero no explicita cómo operar desde el panel una clase suelta ya anotada ni cómo impedir que una cancelación modifique la recurrencia.
 
@@ -120,7 +120,7 @@ El aviso explícito y confirmado posterior al inicio registra Ausente y sustituy
 ### Regla aceptada: cancelación de una clase con abono
 
 - El alumno puede cancelar hasta antes del inicio de la clase, sin anticipación mínima. Se libera únicamente su lugar en esa fecha.
-- Los días y horarios fijos del abono se conservan. Cambiarlos constituye una operación distinta, todavía pendiente de definir.
+- Los días y horarios fijos del abono se conservan. Cambiarlos constituye una operación distinta, definida en la regla de cambio de horario fijo.
 - La cancelación no genera recuperación ni devolución automáticas.
 - Desde el inicio, la dueña registra la ausencia cuando corresponda; el aviso no modifica automáticamente la asistencia ni sobrescribe una asistencia registrada.
 - Esta decisión no extiende a clases el enlace privado de turnos individuales ni define un nuevo canal de acceso.
@@ -134,9 +134,16 @@ El aviso explícito y confirmado posterior al inicio registra Ausente y sustituy
 - Las consecuencias económicas de una clase suelta ya pagada siguen D07: no hay devolución ni crédito automáticos.
 - Esta regla no extiende a clases el enlace privado de turnos individuales.
 
-### Reglas pendientes
+### Regla aceptada: cambio de horario fijo del abono
 
-- El cambio de horario fijo del abono sigue pendiente.
+- La dueña registra el cambio a pedido del alumno; no es una operación autogestionada desde el panel.
+- El nuevo horario fijo solo se asigna si tiene cupo disponible según D08. Si no hay lugar, el alumno conserva sus horarios actuales; nunca queda sin lugar durante el cambio.
+- El cambio rige desde una fecha de vigencia que elige la dueña. Desde esa fecha se liberan los lugares anteriores y las listas semanales se generan con el nuevo horario.
+- Las fechas anteriores a la vigencia, con sus asistencias, cancelaciones y suspensiones, no se modifican.
+- El cambio no altera el vencimiento, el día de referencia ni el precio del abono; el ciclo sigue las reglas de D06.
+
+### Fuera de alcance
+
 - No se aprueba una reprogramación por enlace ni un traslado automático entre clases.
 
 **Rationale.** La cancelación individual aprobada libera el horario sin demorar la decisión en la dueña. El aviso confirmado posterior al inicio registra ausencia sin un paso manual adicional, conserva el origen de la acción y no altera registros ya atendidos o completados. Esta regla sustituye el procesamiento manual antes propuesto para turnos individuales, no la regla de clases con abono. En clases con abono, separar la ocurrencia de la recurrencia permite liberar un lugar puntual sin modificar los horarios fijos.
@@ -156,7 +163,11 @@ El aviso explícito y confirmado posterior al inicio registra Ausente y sustituy
 - Borde: Marta prefiere la clase del jueves; se inscribe en ella solo si hay cupo, y su inscripción del martes permanece hasta que la cancele.
 - Borde: Marta avisa después del inicio; la dueña registra la ausencia si corresponde.
 
-**Discusión pendiente.** Definir el cambio de horario fijo del abono, sin reabrir la reprogramación individual, la cancelación con abono ni las reglas de clase suelta ya aprobadas.
+- Normal: Sofía pide pasar del martes 18:00 al miércoles 19:00; la dueña registra el cambio con vigencia desde la semana siguiente, hay cupo, se libera el martes desde esa fecha y el vencimiento del abono no cambia.
+- Borde: el miércoles 19:00 no tiene lugar; el cambio no se registra y Sofía conserva el martes 18:00.
+- Borde: Sofía había cancelado un martes anterior a la vigencia; esa cancelación y las asistencias previas se conservan.
+
+**Cierre.** D02 queda cerrada en este documento.
 
 ---
 
@@ -422,5 +433,6 @@ La implementación de los controles de concurrencia queda para diseño técnico;
 10. [x] D08: aprobadas reservas sin superposición por trabajadora, cupo máximo de clases y protección de la última vacante. La dueña registra atenciones sin turno aunque se superpongan; sin tramos de aplicación/espera ni nuevas capas de capacidad física.
 11. [x] D05: aprobadas clases con abono sin recordatorio ni confirmación, clase suelta con email 24 h antes sin pedir confirmación y suspensión con email inmediato a los anotados. También aprobados email de abono 3 días antes y al vencer si no renovó, sin mensajes diarios. Aprobada también la inscripción a clase suelta con menos de 24 h: único email inmediato con fecha y horario, sin confirmación ni recordatorio adicional.
 12. [x] D02: aprobada la clase suelta: cancelación desde el panel antes del inicio que libera el lugar; sin cuenta, la dueña registra la cancelación; desde el inicio, la dueña registra la ausencia; asistir a otra clase requiere nueva inscripción con cupo, sin traslado automático. Sigue pendiente el cambio de horario fijo del abono.
+13. [x] D02: aprobado el cambio de horario fijo del abono: lo registra la dueña, solo con cupo disponible y conservando los horarios actuales si no hay lugar; rige desde una fecha de vigencia sin modificar fechas anteriores y no altera vencimiento, día de referencia ni precio. D02 cerrada en este documento.
 
 Nada de este documento actualiza los RF vigentes hasta que el usuario acepte expresamente las decisiones correspondientes.
