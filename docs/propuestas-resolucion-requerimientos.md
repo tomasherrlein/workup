@@ -2,7 +2,9 @@
 
 ## Estado, alcance y línea de base
 
-**Estado:** documento de propuesta; las decisiones D01–D08 permanecen **Pendientes**.
+**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 está **Parcialmente aprobada para notificaciones de turnos y clases**. Las demás reglas de D02, los avisos de vencimiento de abono de D05, los detalles de ajustes de D03 y las decisiones D06–D08 permanecen **Pendientes**. D04 está **Aprobada con liberación manual de cupos**.
+
+**Contexto:** WorkUp es un caso ficticio. Las decisiones se acuerdan para el proyecto con criterios realistas y simples; la dueña es un rol del sistema, no una entrevistada real.
 
 **Alcance:** resolver coherentemente ocho ambigüedades observadas en los RF vigentes. No modifica los RF, no define una implementación técnica, no incorpora pasarela de pagos ni obliga a integrar SMS o WhatsApp.
 
@@ -14,96 +16,135 @@
 
 | ID | Tema | Recomendación resumida | Estado |
 |---|---|---|---|
-| D01 | Cliente, cuenta y vinculación | Separar ficha y cuenta; reclamar historial preexistente solo mediante vínculo confiable previo o verificación de identidad histórica por la dueña. | Pendiente |
-| D02 | Reprogramación y cancelación | Reprogramar solo turnos individuales; cancelar una ocurrencia de clase sin afectar el cupo fijo. | Pendiente |
-| D03 | Cobros y asistencia | Mantener eventos independientes, trazables, vinculados a la reserva o abono cuando exista, e importe acordado históricamente. | Pendiente |
-| D04 | Inscripción pendiente y cupos | Mantener una retención temporal y atómica hasta la primera clase; liberar al vencer o no pagar. | Pendiente |
-| D05 | Notificaciones | Aprobar una matriz explícita; correo como canal inicial propuesto y sin recordatorios recurrentes de abono. | Pendiente |
+| D01 | Acceso a un turno, cuenta opcional y vinculación | Sin cuenta obligatoria: la persona puede reservar o asistir con ayuda de la dueña; un enlace privado, reutilizable y acotado permite gestionar un único turno durante su vigencia aprobada. La cuenta y cualquier asociación histórica siguen siendo opcionales o pendientes según corresponda. | Aprobada para el enlace de turnos individuales |
+| D02 | Reprogramación y cancelación | Para un turno individual, el enlace permite cancelar directamente antes del inicio, sin plazo mínimo ni aprobación de la dueña; una notificación posterior no altera asistencia ni estados completados. En clases con abono se libera solo la fecha cancelada antes del inicio, conservando horarios fijos y sin recuperación ni devolución automáticas. Reprogramación y clases sueltas siguen pendientes. | Parcialmente aprobada |
+| D03 | Cobros y asistencia | Cobro y asistencia independientes; cada cobro identifica el concepto concreto; se respeta el precio acordado y el abono no se cobra por cada clase. | Núcleo aprobado; ajustes pendientes |
+| D04 | Inscripción pendiente y cupos | La inscripción pendiente ocupa los lugares fijos; el cobro activa el abono. Si no paga o no se presenta, la dueña anula la inscripción y libera los lugares, sin vencimiento automático al inicio. | Aprobada |
+| D05 | Notificaciones | Al reservar un turno individual se envía inmediatamente un email con sus detalles y el enlace privado; 24 horas antes se envía un recordatorio con ese mismo enlace, sujeto a las reglas aprobadas de confirmación y deduplicación. La dueña puede compartir manualmente el enlace vigente. Clases con abono sin recordatorios ni confirmación; clases sueltas con recordatorio por email 24 h antes; suspensión con email inmediato a los anotados. Avisos de vencimiento pendientes. | Parcialmente aprobada |
 | D06 | Vencimiento y renovación | Liberar el cupo fijo al vencer, conservar el historial y regenerar sin recrear cancelaciones ni suspensiones; la renovación tardía vuelve a validar vacante. | Pendiente |
-| D07 | Consecuencias financieras | Distinguir el derecho a reintegro o traslado de su ejecución manual y registrada. | Pendiente |
+| D07 | Consecuencias financieras | Mantener el registro trazable de cobros; las políticas de depósitos, cobro, reintegro, traslado y penalidades quedan pendientes y fuera de WorkUp, a cargo de la dueña. | Pendiente |
 | D08 | Capacidades y solapamientos | Validar una combinación de capacidad de servicio, trabajadora, puesto y negocio antes de reservar. | Pendiente |
 
 ---
 
-## D01 — Ficha de cliente, cuenta y vinculación segura
+## D01 — Acceso a un turno, cuenta opcional y vinculación histórica
 
-**Evidencia actual.** RF 1 crea una ficha con datos y credenciales; RF 3, RF 4 y RF 5 buscan por email y pueden dar de alta; RF 15 inicia sesión; RF 16 permite consultar reservas; RF 17 y RF 18 habilitan autogestión. Ningún RF determina si la ficha creada por la dueña y la cuenta creada por el cliente son el mismo objeto, ni cómo se vincula el historial previo. RF 1 exige unicidad de email, pero probar que una cuenta controla hoy un email o teléfono no prueba que controle la identidad histórica de una ficha: esos contactos pueden ser compartidos, reciclados o haber sido cargados erróneamente.
+**Estado:** **Aprobada para el enlace privado de turnos individuales**. La asociación histórica de cuentas y los detalles técnicos de implementación permanecen pendientes.
 
-**Recomendación propuesta.** Modelar dos conceptos relacionados, pero distintos:
+**Evidencia actual.** RF 1 incorpora contraseña al alta de cliente y controla la unicidad del email. RF 3 permite que el cliente reserve desde un enlace enviado por el negocio o que la dueña cargue el turno cuando la persona le escribe. RF 4 y RF 5 buscan al cliente por email y prevén darlo de alta si es la primera vez. RF 15–18 describen un panel con sesión iniciada y sus acciones. Los RF vigentes no precisan el alcance de un enlace ni separan expresamente ficha operativa, cuenta y asociación histórica.
 
-- **Cliente:** ficha operativa, creada por la dueña o durante una reserva, que concentra contactos, observaciones, turnos, anotaciones y movimientos.
-- **Cuenta de cliente:** credencial de acceso creada y controlada por el propio cliente. Una cuenta solo puede ver y operar la ficha a la que quedó vinculada.
+### Requisitos de negocio aceptados
 
-Una cuenta que reclama registros anteriores a su creación solo puede vincularse por una de estas vías: un vínculo de cuenta confiable establecido previamente (por ejemplo, una invitación ya aceptada para esa ficha) o una verificación de la dueña de la identidad histórica de quien reclama. La prueba de control actual de un email o teléfono puede iniciar una solicitud, pero nunca es suficiente por sí sola para adjudicar una ficha histórica. Antes de que una de esas vías sea aprobada, el sistema no revela datos, reservas, observaciones ni siquiera la existencia de la ficha candidata.
+- **No hay cuenta obligatoria para reservar ni para asistir.** La dueña puede registrar la ficha y reservar o inscribir a una persona sin contraseña ni cuenta. Para clientes mayores o de baja familiaridad tecnológica, la alternativa es llamar, escribir o concurrir al negocio para que la dueña los asista; el enlace no es requisito de asistencia.
+- Al reservar cada **turno individual**, se envía inmediatamente por email un **enlace privado** para esa única reserva o turno exacto, junto con los detalles del turno. El enlace ofrece una acción visible, **“Ver mi turno”**, que muestra su fecha y horario. La dueña puede copiar y compartir manualmente el enlace vigente por el canal que elija, por ejemplo WhatsApp; no se aprueba una integración automática ni el uso obligatorio de WhatsApp.
+- Para un **turno individual antes de su inicio**, la persona puede confirmar su intención de asistir o cancelarlo directamente desde el enlace, sin contraseña, plazo mínimo ni aprobación de la dueña. La confirmación no registra asistencia real y la falta de respuesta conserva la reserva; no genera una cancelación automática. La cancelación libera el horario. Estas reglas no se aplican a confirmaciones de clases recurrentes.
+- Desde el inicio del turno en adelante, el enlace solo permite **ver el turno y notificar** la situación. La dueña evalúa y registra una ausencia cuando corresponda; esa notificación no genera una ausencia automática ni sobrescribe un turno ya atendido o completado. No permite cancelar ni reprogramar retroactivamente.
+- El enlace vence 24 horas después del **inicio** del turno, no de su fin ni de su creación. Puede abrirse y reutilizarse varias veces durante esa vigencia: verlo no lo consume. Tras el vencimiento, la persona debe contactar al negocio. Si la dueña sospecha que fue comprometido o enviado al destinatario equivocado, puede revocarlo y emitir un reemplazo; el anterior deja de autorizar acceso y el reemplazo conserva la fecha de vencimiento ya acordada, sin extenderla silenciosamente.
+- El enlace no habilita reprogramación, no muestra historial, clases, abonos, observaciones ni otros datos sensibles, y no vincula una cuenta con fichas existentes. Un turno posterior se registra como una nueva reserva; nunca reprograma una ocurrencia pasada.
+- El panel de cliente autenticado existente y el autoregistro de clientes nuevos permanecen **opcionales**. Su uso no reemplaza las alternativas de atención por la dueña.
 
-La dueña puede crear fichas y reservas para personas sin cuenta. La vinculación posterior conserva ese historial únicamente después de la aprobación correspondiente. Un contacto compartido, reciclado o mal cargado nunca autoriza acceso a datos, reservas u observaciones de otra persona.
+La cancelación directa por enlace antes del inicio de un turno individual está aceptada y se detalla también en **D02**. La cancelación de clases con abono también está aprobada en D02, sin ampliar a clases el enlace individual. La reprogramación autenticada y las reglas de clases sueltas siguen pendientes. Las notificaciones de clases grupales se especifican por separado en **D05**, sin extenderles el enlace individual.
 
-**Rationale.** Preserva la operación asistida prevista por RF 3 y RF 4, habilita la autogestión confirmada y evita que un identificador de contacto se convierta en autorización para acceder a una identidad histórica.
+### Seguridad e implementación no aprobadas
 
-**Alternativas reales.**
+El enlace es un mecanismo de posesión: si se entrega al destinatario equivocado o se reenvía, quien lo posea puede usar las acciones acotadas aprobadas. La revocación por la dueña limita ese acceso desde el momento en que se aplica, pero no convierte al enlace en prueba de identidad.
 
-1. **Una sola entidad cliente-cuenta desde el alta.** Simplifica el modelo y puede usar una invitación para que el cliente establezca su propia contraseña; no exige que la dueña la conozca. Aun así, acopla la ficha operativa al ciclo de acceso y dificulta registrar a quien todavía no quiere cuenta.
-2. **Vinculación automática por email o teléfono coincidente.** Reduce pasos, pero expone fichas ante direcciones compartidas, números reasignados o errores de carga; no se recomienda.
+La entrega inmediata, vigencia, reutilización y revocación son reglas de negocio aprobadas. Quedan pendientes únicamente los mecanismos técnicos para generar, almacenar, validar, revocar y auditar el enlace y para enviar los emails; deben preservar las reglas aprobadas. No se aprueba una arquitectura, modelo de datos, API, proveedor de mensajería ni política de autenticación para este flujo.
 
-**Ejemplos de aceptación propuestos.**
+La recomendación previa de vincular automáticamente una ficha histórica al verificar un email queda **sustituida** por este enfoque; no es una política aceptada ni recomendada. La asociación de una cuenta futura con una ficha histórica sigue siendo una decisión separada y pendiente. En particular, esta decisión no aprueba de forma implícita ningún procedimiento manual de asociación.
 
-- Normal: la dueña crea la ficha de Ana, le envía una invitación y Ana la acepta; ese vínculo confiable le permite ver exclusivamente los dos turnos de su ficha.
-- Borde: Ana crea una cuenta nueva y demuestra que hoy controla el email cargado en una ficha anterior. Puede solicitar el vínculo, pero no ve esa ficha hasta que la dueña verifique su identidad histórica y lo apruebe.
-- Borde: dos clientes comparten el teléfono familiar; una de ellas crea cuenta. El sistema no le muestra la ficha de la otra ni fusiona historiales por esa coincidencia.
-- Borde: una cuenta solicita una ficha con email viejo al que no puede acceder. La solicitud no revela datos y queda pendiente de verificación de identidad histórica por la dueña.
+### Alcance para una futura actualización de RF (no normativa)
 
-**Subdecisiones pendientes para discusión posterior.**
+- **Actores:** dueña; persona sin cuenta; cliente autenticado opcional.
+- **Flujo aceptado:** la dueña registra la ficha y reserva o inscripción sin credenciales; al reservar cada turno individual el sistema envía inmediatamente por email sus detalles y el enlace “Ver mi turno”, que la dueña también puede copiar y compartir manualmente mientras esté vigente. La persona lo usa para consultar fecha y horario, declarar intención de asistir o, antes de su inicio, cancelarlo directamente. La falta de respuesta conserva la reserva y la confirmación no registra asistencia. Desde el inicio puede ver el turno y notificar; la dueña registra una ausencia solo si corresponde.
+- **Límites aceptados:** el enlace queda limitado a la reserva exacta, es reutilizable hasta 24 horas después de su inicio y no expone información adicional ni permite reprogramar o asociar cuentas. Una ocurrencia pasada no se reprograma: un turno posterior es una nueva reserva. La revocación por la dueña invalida el enlace anterior sin ampliar la vigencia acordada del reemplazo.
+- **Fuera de este alcance:** vinculación histórica de cuentas, reglas concretas de cancelación autenticada y reprogramación antes del inicio, y canales de cancelación o notificación para clases grupales; la regla de cancelación con abono se registra en D02.
 
-- Aprobar la separación entre ficha y cuenta sin convertir la prueba de control actual de contacto en prueba de identidad histórica.
-- Definir qué evidencia y qué procedimiento usa la dueña para verificar la identidad histórica, incluida la resolución de solicitudes sin contacto confiable previo.
-- Definir si la invitación de la dueña es el único modo inicial de establecer un vínculo confiable o si habrá otro flujo con la misma garantía.
+### Ejemplos de aceptación
+
+- Normal: Ana llama al negocio; la dueña registra su ficha y turno sin crear una cuenta. Ana puede asistir aunque no reciba ni use un enlace.
+- Normal: al reservar el turno individual de Bruno, el sistema le envía inmediatamente por email los detalles y un enlace. La dueña puede copiar ese mismo enlace vigente y compartirlo manualmente por WhatsApp si lo elige. Bruno elige “Ver mi turno”, ve fecha y horario, y confirma su intención de asistir sin contraseña; si no responde, su reserva se conserva.
+- Borde: Carla cancela su turno individual desde el enlace un minuto antes de su inicio. La cancelación es directa y libera el horario, sin aprobación de la dueña.
+- Borde: al iniciarse el turno, Carla puede notificar mediante el enlace. La dueña decide si corresponde registrar una ausencia; el aviso no sobrescribe una asistencia o un turno completado.
+- Borde: si Carla quiere otro horario después del inicio, se crea una reserva nueva; no se reprograma la ocurrencia pasada.
+- Borde: un enlace compartido manualmente permite solo consultar, declarar intención de asistir, cancelar antes del inicio o notificar desde el inicio para el turno exacto al que se limita; no permite ver el historial de la persona ni entrar a su panel.
+- Borde: el enlace de Carla se abre varias veces y sigue funcionando hasta 24 horas después del inicio de su turno. Después vence y debe contactar al negocio.
+- Borde: la dueña revoca un enlace comprometido y emite otro para el mismo turno. El enlace anterior deja de funcionar; el nuevo vence en la misma fecha y hora acordadas para el turno original.
+- Borde: Diego crea una cuenta opcional en el futuro. Esa creación no le da acceso automático a una ficha histórica aunque coincida un email; la asociación histórica requiere una decisión posterior separada.
+
+**Nota de implementación no normativa.** El stack informado es C# con ASP.NET MVC, sin Entity Framework; todavía no está confirmado si será ASP.NET Core o ASP.NET MVC clásico. La persistencia SQL podría resolverse con ADO.NET o, si se permite, Dapper. Para acceso pueden evaluarse stores personalizados de Identity o autenticación por cookies del framework con servicios de registro; no se elige arquitectura en esta propuesta. Las contraseñas deben usar un mecanismo de hash de contraseñas revisado y mantenido, nunca criptografía implementada a mano. Esta nota no prescribe tablas, API ni código.
+
+### Decisiones pendientes para discusión posterior
+
+- Definir la presentación y el tratamiento operativo de la notificación posterior al inicio, sin convertirla en una ausencia automática ni alterar registros atendidos o completados.
+- Definir, por separado, si habrá asociación de una cuenta con una ficha histórica y bajo qué criterio; no está aprobado ni el enlace ni un procedimiento manual para realizarla.
+- Confirmar el alcance y el flujo del autoregistro opcional de clientes nuevos, incluida la recuperación de acceso, sin volverlo requisito para reservar o asistir.
 
 ---
 
 ## D02 — Reprogramación individual, cancelación de ocurrencia y clase suelta
 
+**Estado:** **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**.
+
 **Evidencia actual.** RF 17 limita la reprogramación a un turno individual, con la misma trabajadora, y ordena cancelar una clase grupal para anotarse en otra con lugar. RF 18 libera solo esa semana cuando se cancela una clase fija. RF 4 distingue clases fijas de clase suelta, pero no explicita cómo operar desde el panel una clase suelta ya anotada ni cómo impedir que una cancelación modifique la recurrencia.
 
-**Recomendación propuesta.** Tratar toda participación fechada como una **ocurrencia** independiente de la regla recurrente:
+### Regla aceptada: turno individual por enlace
 
-- El turno individual puede reprogramarse al horario libre de la misma trabajadora, como indica RF 17.
-- Una clase fija o suelta solo puede cancelarse para esa fecha. La cancelación libera ese lugar y no borra ni altera la elección fija del abono.
-- Para ir a otra clase, el cliente realiza una nueva inscripción a una clase suelta con cupo; no existe “traslado” implícito de la ocurrencia cancelada.
-- La clase suelta se cancela igual que cualquier otra ocurrencia grupal y, si fue pagada, aplica D07.
+- Antes de su inicio, la persona puede cancelar directamente su turno individual desde el enlace privado, sin plazo mínimo ni aprobación de la dueña. La cancelación libera el horario.
+- Desde el inicio en adelante, el enlace permite notificar la situación. La dueña evalúa si registra una ausencia; la notificación no crea una ausencia automática ni sobrescribe una asistencia o un turno atendido o completado.
+- Un turno posterior se registra como una reserva nueva. Una ocurrencia pasada nunca se reprograma.
+- El enlace no habilita reprogramación. Esta decisión no aprueba ni infiere una ventana temporal para la reprogramación autenticada antes del inicio.
 
-Como **valor propuesto**, establecer un corte configurable de dos horas antes del inicio para cancelación o reprogramación autogestionada. Fuera del corte, la dueña puede registrar la acción y la consecuencia financiera se resuelve según D07.
+### Regla aceptada: cancelación de una clase con abono
 
-**Rationale.** Evita que una acción puntual destruya una reserva recurrente, conserva el control real de cupos y no crea recuperaciones de clases de abono, que RF 10, RF 12 y RF 18 excluyen.
+- El alumno puede cancelar hasta antes del inicio de la clase, sin anticipación mínima. Se libera únicamente su lugar en esa fecha.
+- Los días y horarios fijos del abono se conservan. Cambiarlos constituye una operación distinta, todavía pendiente de definir.
+- La cancelación no genera recuperación ni devolución automáticas.
+- Desde el inicio, la dueña registra la ausencia cuando corresponda; el aviso no modifica automáticamente la asistencia ni sobrescribe una asistencia registrada.
+- Esta decisión no extiende a clases el enlace privado de turnos individuales ni define un nuevo canal de acceso.
 
-**Alternativas reales.**
+### Reglas pendientes
 
-1. **Trasladar automáticamente una clase fija cancelada a otra clase.** Parece cómodo, pero cambia la reserva fija, puede exceder cupos y contradice la ausencia de recuperación.
-2. **Permitir cambiar de trabajadora al reprogramar un turno.** Aumenta opciones, pero contradice el límite expreso de RF 17 y la continuidad con la profesional elegida.
+- La reprogramación autenticada de turnos individuales, incluidas sus restricciones antes del inicio, sigue pendiente.
+- La cancelación de clases sueltas y el cambio de horario fijo del abono siguen pendientes.
+- El alta en una clase posterior y cualquier traslado entre clases siguen pendientes; no se aprueba una reprogramación por enlace.
 
-**Ejemplos de aceptación propuestos.**
+**Rationale.** La cancelación individual aprobada libera el horario sin demorar la decisión en la dueña. La separación posterior entre notificación y registro preserva la trazabilidad de asistencia y evita alterar registros ya atendidos o completados. En clases con abono, separar la ocurrencia de la recurrencia permite liberar un lugar puntual sin modificar los horarios fijos.
 
-- Normal: Sofía cancela el martes su clase fija del miércoles; se libera solo el cupo del miércoles y continúa anotada los martes y miércoles siguientes mientras su abono esté vigente.
-- Normal: Lucía reprograma su turno individual de las 15:00 a las 17:00 con la misma trabajadora; el horario de las 15:00 vuelve a ofrecerse.
-- Borde: Sofía intenta anotarse en otra clase tras cancelar; obtiene lugar solo si la nueva clase tiene cupo en ese momento.
-- Borde: una clase suelta pagada se cancela después del corte; se conserva la cancelación y se registra cualquier devolución manual conforme a D07.
+**Ejemplos de aceptación.**
 
-**Pregunta posterior.** ¿Se aprueba que las clases solo se cancelen por ocurrencia y que el panel aplique un corte configurable de dos horas como valor inicial propuesto?
+- Normal: Lucía cancela su turno individual desde el enlace a cualquier momento antes de las 15:00; el horario queda disponible sin intervención de la dueña.
+- Borde: a las 15:00 o después, Lucía notifica que no asistirá. La dueña puede registrar una ausencia si corresponde, pero la notificación no modifica automáticamente el registro.
+- Borde: Lucía ya figura como atendida; una notificación posterior no reemplaza ese estado por ausencia.
+- Borde: Lucía pide otro horario después de iniciado su turno; se crea una nueva reserva y no se reprograma la ocurrencia pasada.
 
-**Opciones.** A) Sí, con dos horas propuestas. B) Sí, pero sin corte inicial. C) Permitir traslado explícito entre clases, sujeto a cupo.
+- Normal: Sofía cancela la clase de su abono un minuto antes del inicio; se libera solo ese lugar y conserva los días y horarios de las semanas siguientes, sin recuperación ni devolución automáticas.
+- Borde: Sofía avisa después del inicio; la dueña registra la ausencia si corresponde, sin cambiar la recurrencia ni sobrescribir una asistencia previa.
+
+**Discusión pendiente.** Definir reprogramación autenticada, cambio de horario fijo y clases sueltas, sin reabrir la cancelación con abono ya aprobada.
 
 ---
 
 ## D03 — Independencia, vínculo e importe de cobros y asistencias
 
-**Evidencia actual.** RF 5 calcula y registra cobros; RF 10 registra asistencia; RF 11 describe el registro de una atención sin turno y su cobro, sin establecer que puedan registrarse en cualquier orden. La independencia y el orden flexible se proponen aquí, no son una regla expresa del RF vigente. RF 13 usa cobros para el resultado del período. Falta precisar el vínculo cuando existen pagos previos, pagos posteriores, diferencias de importe o correcciones de tarifa.
+**Estado:** **Núcleo aprobado; ajustes pendientes**.
 
-**Recomendación propuesta.** Mantener **asistencia** y **movimiento financiero** como eventos independientes, pero con vínculo obligatorio cuando ya existe la reserva, atención o abono que les da origen:
+**Reglas aceptadas en la conversación.**
+
+- Cobro y asistencia se registran por separado: se puede pagar antes o después de asistir. Ningún registro modifica automáticamente el otro.
+- Cada cobro identifica qué se paga y el turno, atención sin turno, clase suelta o abono concreto al que corresponde. No basta con un importe y el nombre del cliente.
+- El cobro de un abono corresponde a su período; no se duplica por cada clase cubierta.
+- Se respeta el precio acordado al reservar o contratar el abono. Las nuevas tarifas se aplican a acuerdos posteriores, no retroactivamente. Para una atención sin reserva, se conserva el importe acordado para esa atención.
+
+**Evidencia actual.** RF 5 calcula y registra cobros; RF 10 registra asistencia; RF 11 describe el registro de una atención sin turno y su cobro, sin establecer que puedan registrarse en cualquier orden. La independencia y el orden flexible se aprobaron en esta conversación, pero todavía no son una regla expresa del RF vigente. RF 13 usa cobros para el resultado del período. Falta precisar el vínculo cuando existen pagos previos, pagos posteriores, diferencias de importe o correcciones de tarifa.
+
+**Detalle aprobado y propuestas adicionales.** Los tres primeros puntos desarrollan el núcleo acordado; las políticas de ajustes y devoluciones de los dos últimos siguen pendientes:
 
 - La asistencia expresa si se prestó el servicio; el cobro expresa importe, fecha y concepto percibido. Ninguno cambia por sí solo el estado del otro.
-- Si existe una reserva, atención registrada o abono, cada asistencia y movimiento debe enlazarse a ese origen; un abono puede vincularse a varias ocurrencias fijas, sin duplicar cobros. El vínculo solo es opcional cuando no hubo una reserva previa y se registra un motivo claro, como una atención sin turno contemplada por RF 11.
+- Si existe una reserva, atención registrada o abono, cada asistencia y movimiento debe enlazarse a ese origen; un abono puede vincularse a varias ocurrencias fijas, sin duplicar cobros. Una atención sin reserva también debe identificarse en el cobro: no tener reserva previa no exime de indicar el concepto concreto.
 - El importe se captura al acordar la reserva, inscripción o abono; para una atención sin reserva, se captura al acordar esa atención. El pago usa ese importe acordado: un cambio posterior del tarifario no puede aumentarlo silenciosamente. El tarifario solo propone precios para nuevos acuerdos.
-- Cada movimiento conserva el importe efectivamente registrado. Todo ajuste posterior exige motivo y responsable, y se registra de modo trazable sin reescribir el movimiento original.
-- Una devolución se registra como movimiento manual asociado al cobro original; no se requiere una billetera, saldo interno ni una pasarela de pagos.
+- **Pendiente de aprobación:** conservar el importe efectivamente registrado y exigir motivo y responsable para ajustes posteriores, sin reescribir el movimiento original.
+- **Pendiente de aprobación:** registrar una devolución manual asociada al cobro original. No se aprueba aquí una billetera, saldo interno ni pasarela de pagos; el alcance de reintegros se resolverá junto con D07.
 
 **Rationale.** Amplía lo descrito en RF 5 y RF 11 con una independencia propuesta, conserva trazabilidad para RF 13 y permite que una clase suelta se cobre al llegar sin falsear la asistencia, el origen del cobro ni el precio que el cliente aceptó.
 
@@ -121,8 +162,7 @@ Como **valor propuesto**, establecer un corte configurable de dos horas antes de
 
 **Subdecisiones pendientes para discusión posterior.**
 
-- Ratificar que el vínculo es obligatorio cuando existe reserva, atención o abono, y qué motivos claros habilitan la excepción sin reserva previa.
-- Definir en qué acto se confirma el importe acordado para cada concepto y cómo se documentan descuentos o excepciones.
+- Definir cómo se documentan descuentos o excepciones, sin alterar la regla aprobada de respetar el precio pactado.
 - Definir la mecánica de un ajuste posterior sin alterar el movimiento original.
 
 ---
@@ -131,65 +171,86 @@ Como **valor propuesto**, establecer un corte configurable de dos horas antes de
 
 **Evidencia actual.** RF 4 exige verificar vacante permanente, registra la inscripción pendiente de pago y anota solo la primera clase fija; RF 5 incorpora a listas fijas al cobrar y anula la inscripción si no se paga al llegar a esa primera clase. Falta definir qué reserva la vacante antes del pago, cuándo expira y cómo se resuelve la concurrencia entre pago, vencimiento y otra inscripción.
 
-**Recomendación propuesta.** Crear una retención de cupo fijo en estado **pendiente de pago** para cada clase elegida. La retención consume capacidad fija desde la inscripción hasta el inicio de la primera ocurrencia elegida, que es el límite ya implícito en RF 5. Al registrar el pago antes de que venza, la retención se convierte atómicamente en abono vigente y reserva fija. Si llega el inicio sin pago, vence, se libera y la inscripción queda sin efecto.
+**Estado:** **Aprobada con liberación manual de cupos**.
 
-La comprobación de cupo y la creación, confirmación o vencimiento de la retención deben ejecutarse como una sola operación lógica: dos solicitudes concurrentes no pueden confirmar la misma vacante. Si un pago llega después de la liberación, no reactiva el cupo: debe volver a comprobar disponibilidad y, si no hay lugar, registrarse o revertirse manualmente según D07.
+**Flujo aprobado.**
 
-**Rationale.** Da significado operativo a “cupo permanente” de RF 4 sin reservar indefinidamente ni permitir sobreventa cuando dos personas actúan al mismo tiempo.
+1. El alumno elige días y horarios fijos con vacante.
+2. La inscripción queda **pendiente de pago** y los lugares elegidos ya cuentan como ocupados; no se ofrecen simultáneamente a otro alumno.
+3. El alumno paga al llegar a su primera clase.
+4. La dueña registra el cobro y activa el abono, conservando los lugares retenidos sin ocuparlos por duplicado.
+5. Si el alumno no paga o no se presenta, la dueña anula la inscripción pendiente y libera todos los lugares retenidos por ella.
 
-**Alternativas reales.**
+El comienzo de la primera clase **no vence ni libera automáticamente** la inscripción. Hasta que la dueña registre el cobro o anule el pendiente, los lugares siguen ocupados. Revisar y resolver esos pendientes es una responsabilidad operativa del rol dueña.
 
-1. **No retener cupo hasta cobrar.** Evita estados pendientes, pero la promesa de vacante fija puede desaparecer antes del primer pago.
-2. **Retención con plazo fijo corto, por ejemplo 15 minutos.** Reduce inmovilización, pero contradice el flujo de pago al llegar previsto en RF 4 y RF 5.
+**Justificación.** Evita que el sistema libere una vacante mientras el alumno está pagando y el cobro aún no fue registrado. Se elige una gestión manual sencilla en lugar del vencimiento automático propuesto anteriormente. La contrapartida es que un pendiente no revisado continúa ocupando cupo.
 
-**Ejemplos de aceptación propuestos.**
+**Ejemplos de aceptación.**
 
-- Normal: Paula se inscribe a dos clases fijas; sus dos vacantes quedan retenidas y se confirma el abono al pagar en su primera clase.
-- Borde: Paula no paga al inicio de esa primera clase; ambas retenciones vencen y sus vacantes quedan disponibles para otra inscripción.
-- Borde: dos alumnas intentan tomar la última vacante; solo una retención se confirma y la otra recibe “Cupo permanente no disponible”.
-- Borde: un pago se registra justo cuando vence la retención; el orden único de las operaciones decide el resultado y deja una traza sin duplicar cupo.
+- Normal: Paula elige dos clases fijas; sus lugares quedan ocupados por la inscripción pendiente. Al registrar el cobro de su primera clase se activa el abono sin duplicar la ocupación.
+- Borde: la clase comienza mientras se registra el cobro; el sistema no libera los lugares por el solo transcurso del tiempo.
+- Borde: Paula no se presenta; cuando la dueña anula la inscripción pendiente, ambos lugares quedan disponibles.
+- Borde: la dueña todavía no revisó un pendiente sin pago; los lugares siguen retenidos, no se liberan automáticamente.
 
-**Pregunta posterior.** ¿Se aprueba retener cada cupo fijo hasta el inicio de la primera clase y convertirlo atómicamente al registrar el pago?
-
-**Opciones.** A) Sí. B) Retener solo hasta un plazo corto. C) No retener hasta cobrar.
+Esta aprobación no define la política de renovación ni vencimiento de abonos activos de D06, ni incorpora pagos online. La concurrencia y la prevención de sobrecupos se detallarán al implementar, respetando que cada lugar solo pueda ocuparse una vez.
 
 ---
 
 ## D05 — Matriz de notificaciones y significado de cada mensaje
 
+**Estado:** **Parcialmente aprobada para notificaciones de turnos y clases**. Los avisos de vencimiento de abono permanecen pendientes.
+
 **Evidencia actual.** RF 6 envía recordatorio por email 24 horas antes para turnos y clases; RF 7 pide confirmar asistencia; RF 12 prepara, pero no envía, avisos de suspensión. La intención confirmada requiere que el cliente reciba avisos de cancelación de clase y vencimiento de abono, y que la confirmación de asistencia aplique solo a turnos individuales. También expresa preferencia por no recibir recordatorios de clases recurrentes de abono.
 
-**Recomendación propuesta.** Aprobar una matriz separando evento, destinatario, canal, momento y efecto. El email es el canal inicial **propuesto** porque RF 1 requiere email y RF 6 lo usa; no se asume aprobado ni se define proveedor.
+### Reglas de negocio aprobadas para turnos individuales
 
-| Evento | Destinatario | Canal y momento propuestos | Efecto |
+- Al reservar un turno individual, se envía **inmediatamente** un email con los detalles del turno y el enlace privado “Ver mi turno”.
+- Se envía un recordatorio por email **24 horas antes del inicio** con el **mismo enlace**. Si la reserva se realiza con menos de 24 horas de anticipación, se envía solo el email inicial, sin un recordatorio duplicado.
+- Si la reserva se realiza exactamente 24 horas antes del inicio, se envía un único email en vez de dos simultáneos. Ese email conserva el contenido aplicable del recordatorio: pide confirmación solo si aún no ocurrió. Es una **deduplicación** de emisiones, no un nuevo plazo ni un cambio de la regla de 24 horas.
+- El recordatorio pide confirmar la intención de asistir solo si la persona todavía no confirmó. Si ya confirmó, puede recibir el recordatorio como información, sin una nueva solicitud de confirmación.
+- Si el turno fue cancelado, no se envía recordatorio. La confirmación declara intención de asistir, no registra asistencia real; la falta de respuesta conserva la reserva y no la cancela automáticamente. No se aplica a clases recurrentes.
+- El enlace incluido en ambos emails es el mismo enlace vigente definido en D01: sirve para ese turno individual, es reutilizable hasta 24 horas después de su inicio y puede ser compartido manualmente por la dueña mientras esté vigente. No se aprueba integración automática ni uso obligatorio de WhatsApp.
+
+### Reglas de negocio aprobadas para clases
+
+- Las clases con abono no generan recordatorios recurrentes ni solicitudes de confirmación.
+- Las clases sueltas generan un recordatorio por email 24 horas antes, sin solicitar confirmación de asistencia.
+- Al suspender una clase, se envía inmediatamente un email a cada alumno anotado; el aviso no queda solo preparado para envío manual.
+- No se extiende a clases el enlace privado de turnos individuales. El tratamiento de inscripciones a clases sueltas realizadas con menos de 24 horas de anticipación queda pendiente; no se infiere un envío inicial nuevo.
+
+### Matriz de estado
+
+| Evento | Destinatario | Canal y momento | Estado y efecto |
 |---|---|---|---|
-| Recordatorio de turno individual | Cliente | Email; 24 h antes, valor RF 6 | Informa el turno. |
-| Solicitud de confirmación | Cliente de turno individual | Email; junto al recordatorio | Confirma o cancela la ocurrencia. |
-| Recordatorio de clase suelta | Cliente | Email; 24 h antes | Solo informa; no pide asistencia. |
-| Clase fija de abono | Cliente | No enviar recordatorio recurrente | Respeta la preferencia actual; queda pendiente de ratificación. |
-| Clase suspendida | Cada alumno anotado | Email inmediato tras suspender | Notifica la suspensión; RF 12 hoy solo deja el mensaje preparado. |
-| Vencimiento próximo de abono | Alumno | Email; 7 y 1 días antes, valores propuestos | Invita a renovar, sin mantener cupo tras vencer. |
-| Abono vencido | Alumno | Email el día del vencimiento | Comunica la liberación del cupo fijo. |
+| Email inicial “Ver mi turno” | Cliente de turno individual | Email inmediato al reservar, con detalles y enlace privado. | **Aprobado.** Da acceso privado y acotado a ese turno individual. |
+| Recordatorio de turno individual | Cliente de turno individual | Email 24 h antes del inicio, con el mismo enlace. No se envía si el turno fue cancelado; si se reservó con menos de 24 h, solo se emite el email inicial. | **Aprobado.** Informa el turno; la coincidencia exacta de 24 h se deduplica en un solo email con el contenido aplicable del recordatorio. |
+| Solicitud de confirmación | Cliente de turno individual aún no confirmado | En el recordatorio de 24 h. | **Aprobado.** Declara intención de asistir; no registra asistencia real. La falta de respuesta conserva la reserva. |
+| Recordatorio de clase suelta | Cliente | Email 24 h antes. | **Aprobado.** Informa, sin solicitar confirmación de asistencia. |
+| Clase fija de abono | Cliente | Sin recordatorio recurrente ni solicitud de confirmación. | **Aprobado.** No exige respuesta semanal del alumno. |
+| Clase suspendida | Cada alumno anotado | Email inmediato tras suspender. | **Aprobado.** Envía el aviso; amplía RF 12, que hoy solo deja el mensaje preparado. |
+| Vencimiento próximo de abono | Alumno | Email; 7 y 1 días antes, valores propuestos. | **Pendiente.** Invitaría a renovar, sin mantener cupo tras vencer. |
+| Abono vencido | Alumno | Email el día del vencimiento, valor propuesto. | **Pendiente.** Comunicaría la liberación del cupo fijo. |
 
-Un recordatorio no es una solicitud de asistencia; una solicitud de asistencia no es asistencia real; y una clase “suspendida” se diferencia de un mensaje “preparado” o “enviado”. Cada emisión debe dejar estado suficiente para evitar duplicados y permitir reintento controlado.
+Una clase “suspendida” se diferencia de un mensaje “preparado” o “enviado”. Para las reglas aprobadas, la implementación debe evitar duplicados y soportar reintentos controlados; la mecánica técnica para hacerlo permanece pendiente y no altera los momentos ni efectos de negocio definidos arriba.
 
-**Rationale.** Elimina la ambigüedad entre RF 6, RF 7 y RF 12, aplica la intención confirmada sin convertir una preferencia en regla aprobada y evita una arquitectura de mensajería fuera de alcance.
+**Rationale.** Elimina la ambigüedad entre RF 6 y RF 7 para turnos individuales, conserva el recordatorio de 24 horas sin duplicar envíos en los casos límite y evita una arquitectura de mensajería fuera de alcance. Las reglas de clases aprobadas evitan recordatorios repetitivos para abonos y comunican suspensiones sin depender del envío manual. Los avisos de vencimiento siguen pendientes.
 
-**Alternativas reales.**
+**Ejemplos de aceptación aprobados para turnos individuales.**
 
-1. **Enviar recordatorio a todas las clases fijas.** Aumenta cobertura, pero contradice la preferencia manifestada y genera ruido semanal.
-2. **Conservar solo mensajes preparados por la dueña.** Reduce automatización, pero no cumple la intención de que el cliente reciba avisos de suspensión y vencimiento.
+- Normal: al reservar un turno de Mario con 48 horas de anticipación, recibe inmediatamente un email con los detalles y el enlace. A las 24 horas del inicio recibe un recordatorio con el mismo enlace; como todavía no confirmó, el correo le solicita confirmar. Al confirmar, se actualiza su ocurrencia, no su asistencia.
+- Normal: Mario ya confirmó; puede recibir el recordatorio de 24 horas como información, sin otra solicitud de confirmación.
+- Borde: al reservar un turno con 12 horas de anticipación, Mario recibe solo el email inicial; no recibe un recordatorio adicional.
+- Borde: al reservar exactamente 24 horas antes, Mario recibe un único email. La deduplicación evita dos envíos simultáneos y no cambia el plazo de recordatorio.
+- Borde: si Mario cancela el turno antes de su inicio, no se le envía recordatorio.
 
-**Ejemplos de aceptación propuestos.**
+**Ejemplos de aceptación para clases.**
 
-- Normal: el día anterior, Mario recibe un único correo que recuerda y solicita confirmar su turno individual; al confirmar, se actualiza su ocurrencia, no su asistencia.
-- Normal: una clase fija se suspende; cada persona anotada recibe un aviso enviado y la grilla semanal permanece intacta.
-- Borde: un alumno con abono no recibe recordatorio semanal, pero sí los avisos de proximidad y vencimiento de su abono.
-- Borde: un reintento técnico no manda dos correos de suspensión al mismo alumno para la misma clase.
+- Normal: una clase se suspende; cada alumno anotado recibe inmediatamente un aviso por email.
+- Normal: un alumno con abono no recibe recordatorios ni pedidos de confirmación para sus clases recurrentes.
+- Normal: una alumna anotada con anticipación en una clase suelta recibe un email 24 horas antes, sin solicitud de confirmación.
+- Borde: un reintento técnico no debe duplicar el aviso de suspensión para el mismo alumno y clase.
 
-**Pregunta posterior.** ¿Se aprueba esta matriz, con email como canal inicial y sin recordatorios recurrentes para clases fijas?
-
-**Opciones.** A) Sí, tal cual. B) Sí, pero incluir recordatorio de clase fija. C) Mantener avisos de suspensión solo preparados para envío manual.
+**Discusión pendiente.** Definir los avisos de proximidad y vencimiento de abono junto con D06, y el tratamiento de inscripciones tardías a clases sueltas. No quedan pendientes las tres reglas de clases aprobadas.
 
 ---
 
@@ -203,7 +264,7 @@ La renovación anticipada empieza al vencimiento existente, no en la fecha del n
 
 Como **valores propuestos**, enviar avisos a 7 y 1 días y el mismo día del vencimiento; cualquier “gracia” posterior solo puede facilitar el pago administrativo, nunca conservar cupo ni generar clases sin abono vigente. La generación semanal debe ser idempotente: al repetirse, conserva las cancelaciones explícitas de clientes y las clases suspendidas, nunca las recrea como anotaciones activas ni las transforma en ausencias. También conserva los demás registros históricos y genera solo las ocurrencias futuras que correspondan al estado vigente.
 
-**Rationale.** Hace compatibles RF 5 y RF 19 con D04: la retención protege una inscripción inicial hasta su primera clase, mientras que un abono vencido libera lugares futuros y una renovación tardía compite de nuevo por disponibilidad, sin perder la traza de lo ya sucedido.
+**Rationale.** Hace compatibles RF 5 y RF 19 con D04: la retención inicial permanece hasta que la dueña registre el cobro o anule la inscripción según D04; la propuesta de D06, todavía pendiente, establece que un abono vencido libera lugares futuros y una renovación tardía compite de nuevo por disponibilidad, sin perder la traza de lo ya sucedido.
 
 **Alternativas reales.**
 
@@ -229,39 +290,27 @@ Como **valores propuestos**, enviar avisos a 7 y 1 días y el mismo día del ven
 
 ## D07 — Cancelaciones, pagos, reintegros y ausencias
 
+**Estado:** **Pendiente**.
+
 **Evidencia actual.** RF 10 indica que una falta con abono pierde la clase; RF 12 establece que una clase suspendida no se recupera ni devuelve dinero y que la clase suelta se paga al llegar; RF 17 y RF 18 liberan turnos o lugares, pero no detallan consecuencias de una atención o clase suelta ya pagada. RF 5 registra pagos, sin política de reintegro.
 
-**Recomendación propuesta.** Separar el estado de la ocurrencia, el **derecho** financiero que nace de una cancelación y la **ejecución manual** de un reintegro o traslado. La propuesta de política es:
+**Alcance pendiente.** La cancelación directa de un turno individual antes de su inicio, aprobada en D02, libera el horario pero **no decide** reintegros, traslados, penalidades ni cobros. No hay un corte de dos horas aprobado o propuesto para esa cancelación individual.
 
-- **Cancelación o reprogramación oportuna del cliente:** dentro del corte de dos horas propuesto en D02, una reserva ya cobrada tiene derecho a reintegro total. El reintegro se ejecuta manualmente y queda registrado, no se acredita automáticamente.
-- **Cancelación tardía o no-show del cliente:** no tiene derecho a reintegro. Una excepción exige motivo, responsable y ejecución manual registrada.
-- **Cancelación por el negocio:** una reserva ya cobrada tiene derecho a reintegro total o a un traslado que el cliente acepte expresamente. La alternativa elegida se ejecuta y registra manualmente. Para una clase suelta suspendida antes de su inicio no hay cobro que devolver, porque RF 12 indica que se paga al llegar.
-- **Abono:** RF 10 y RF 12 ya excluyen recuperación o devolución ante falta y ante suspensión de una clase fija. Se propone mantener esas exclusiones, pero su ratificación como política de este documento permanece pendiente.
-- **Traslado de un pago:** no crea saldo general ni billetera. Es una relación explícita entre el cobro original y la nueva reserva o concepto, por el importe acordado.
+Las políticas de depósitos, cobro, reintegro, traslado y aplicación de penalidades quedan fuera de alcance de WorkUp y son gestionadas por la dueña fuera del sistema. Esto no elimina el registro de cobros ya previsto por los RF: cuando la dueña registre un cobro u otro movimiento admitido, conserva la trazabilidad requerida por D03 y RF 13. No se aprueba por esta propuesta una política financiera nueva ni un mecanismo de ejecución automática.
 
-El corte de D02 determina si la cancelación del cliente es oportuna; no ejecuta por sí mismo un reintegro. Todo reintegro o traslado aceptado afecta el resultado de RF 13 como movimiento negativo o de reversión claramente relacionado.
+**Rationale.** Separa la disponibilidad del turno de una consecuencia financiera aún no decidida y conserva el registro histórico de cobros sin convertir WorkUp en el gestor de la política o su ejecución.
 
-**Rationale.** Evita confundir el derecho del cliente con el paso operativo de devolver el dinero, conserva trazabilidad y no permite que una cancelación borre o falsifique movimientos financieros. También respeta las exclusiones actuales de los abonos mientras se las lleva a ratificación explícita.
+**Ejemplos de alcance.**
 
-**Alternativas reales.**
-
-1. **Crédito automático para toda cancelación.** Es cómodo, pero crea una billetera y reglas de vencimiento, consumo y reporte fuera de alcance.
-2. **Borrar el cobro cuando se cancela.** Es simple en apariencia, pero destruye auditoría e impide explicar el resultado del período.
-
-**Ejemplos de aceptación propuestos.**
-
-- Normal: una clienta cancela un turno pagado con más de dos horas de anticipación; el turno se libera, nace el derecho al reintegro total y la dueña registra manualmente el reintegro vinculado al cobro.
-- Normal: el negocio cancela un turno ya cobrado; la clienta acepta trasladarlo a otra reserva y la dueña registra ese traslado. Si no acepta, se ejecuta el reintegro total manual.
-- Borde: una alumna cancela una clase suelta pagada después del corte; el lugar se libera, pero no hay reintegro salvo excepción manual motivada.
-- Borde: se suspende una clase fija de abono; la ocurrencia queda suspendida, no se marca a ningún alumno como ausente y no se crea reintegro ni crédito mientras siga vigente la exclusión de RF 12.
-- Borde: una clienta no se presenta a un turno pagado; queda ausente y no tiene reintegro, salvo una excepción manual motivada.
+- Normal: una clienta cancela directamente un turno individual antes de su inicio; el horario se libera y la decisión financiera, si existiera, queda a cargo de la dueña fuera de WorkUp.
+- Borde: una notificación posterior al inicio puede llevar a que la dueña registre una ausencia; no determina por sí sola un cobro, reintegro, penalidad ni cambio de asistencia.
+- Borde: se suspende una clase fija de abono; la ocurrencia queda suspendida y no se marca a ningún alumno como ausente. Las consecuencias financieras continúan sujetas a las reglas vigentes y a la decisión pendiente.
 
 **Subdecisiones pendientes para discusión posterior.**
 
-- Ratificar la política de derecho a reintegro: total para cancelación oportuna del cliente; sin reintegro para cancelación tardía o no-show, salvo excepción motivada.
-- Ratificar que una cancelación del negocio habilita reintegro total o traslado expresamente aceptado por el cliente.
+- Definir, fuera de WorkUp, si una cancelación, ausencia o suspensión genera reintegro, traslado, depósito, cobro o penalidad y bajo qué criterio.
 - Ratificar o modificar las exclusiones de recuperación y devolución de abonos ya previstas en RF 10 y RF 12.
-- Definir el procedimiento y responsables para ejecutar manualmente reintegros, excepciones y traslados después de que se determine el derecho.
+- Definir qué movimientos financieros ya admitidos debe registrar WorkUp para preservar los cobros originales y su trazabilidad, sin ejecutar la política financiera.
 
 ---
 
@@ -300,13 +349,16 @@ Una reserva del cliente o cargada por la dueña aplica estas validaciones de for
 
 ## Checklist de discusión ordenado
 
-1. [ ] D01: validar la separación ficha–cuenta y las vías seguras para reclamar identidad histórica, sin usar solo el control actual de un contacto.
-2. [ ] D04: decidir primero la retención pendiente, porque condiciona cupos y renovación.
-3. [ ] D06: acordar inicio de renovación anticipada y tardía, revalidación de capacidad y semántica de los límites mensuales, sin gracia de capacidad.
-4. [ ] D02: confirmar qué acciones puede hacer el cliente sobre cada ocurrencia y el corte propuesto.
-5. [ ] D07: definir el derecho a reintegro o traslado y, por separado, su ejecución manual registrada.
-6. [ ] D03: confirmar vínculos obligatorios cuando existe reserva o abono, importe acordado, ajustes y reintegros.
-7. [ ] D08: validar las restricciones de capacidad que se aplican a reservas y atenciones sin turno.
-8. [ ] D05: cerrar la matriz de notificaciones con los demás estados ya definidos.
+1. [x] D01: se aprobó que no haya cuenta obligatoria para reservar o asistir, con atención alternativa por la dueña y enlace privado de “Ver mi turno” enviado inmediatamente por email al reservar cada turno individual. El enlace es reutilizable hasta 24 horas después del inicio, puede revocarse y reemplazarse sin extender silenciosamente esa vigencia; la dueña puede compartir manualmente el enlace vigente, sin integración automática ni uso obligatorio de WhatsApp.
+2. [x] D02: se aprobó la cancelación directa por enlace de un turno individual antes de su inicio, sin plazo mínimo ni aprobación de la dueña; después solo permite notificar y no altera automáticamente asistencia ni turnos atendidos o completados.
+3. [x] D05: para turnos individuales, se aprobó un recordatorio por email 24 horas antes con el mismo enlace; las reservas con menos de 24 horas reciben solo el email inicial y la coincidencia exacta se deduplica. La confirmación declara intención de asistir, solo se solicita si aún no ocurrió y la falta de respuesta conserva la reserva; no se aplica a clases recurrentes.
+4. [ ] D01: definir la presentación y el tratamiento operativo de la notificación posterior al inicio, la asociación histórica de cuentas y el flujo de autoregistro opcional. La mecánica técnica de enlaces y emails queda pendiente sin reabrir sus reglas de negocio aprobadas.
+5. [x] D02: cancelar una clase con abono antes del inicio libera solo esa fecha, conserva horarios fijos y no genera recuperación ni devolución automáticas; desde el inicio la dueña registra ausencia cuando corresponde. Siguen pendientes reprogramación autenticada, cambio de horario fijo y clases sueltas.
+6. [x] D04: inscripción pendiente ocupa lugares fijos, cobro registrado activa el abono y anulación manual por falta de pago o inasistencia libera los lugares. Sin vencimiento automático al inicio de la primera clase.
+7. [ ] D06: acordar inicio de renovación anticipada y tardía, revalidación de capacidad y semántica de los límites mensuales, sin gracia de capacidad.
+8. [ ] D07: definir fuera de WorkUp las consecuencias financieras y conservar en WorkUp el registro trazable de cobros ya previsto.
+9. [x] D03: aprobados cobro y asistencia independientes, concepto y referencia concretos, cobro por abono sin duplicación por clase y respeto del precio pactado. Ajustes, descuentos y reintegros continúan pendientes.
+10. [ ] D08: validar las restricciones de capacidad que se aplican a reservas y atenciones sin turno.
+11. [x] D05: aprobadas clases con abono sin recordatorio ni confirmación, clase suelta con email 24 h antes sin pedir confirmación y suspensión con email inmediato a los anotados. Siguen pendientes avisos de vencimiento e inscripciones tardías a clases sueltas.
 
 Nada de este documento actualiza los RF vigentes hasta que el usuario acepte expresamente las decisiones correspondientes.
