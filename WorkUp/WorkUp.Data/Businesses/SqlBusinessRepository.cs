@@ -1,8 +1,8 @@
+using WorkUp.Domain.Entities;
 using Microsoft.Data.SqlClient;
-using WorkUp.Business.Businesses;
+using WorkUp.BusinessLogic.Businesses;
 // The entity is aliased: this file's namespace nests under WorkUp.*, and the bare name "Business" resolves to the
-// WorkUp.Business project's own root namespace rather than the entity type (CS0118).
-using BusinessEntity = WorkUp.Domain.Entities.Business;
+// WorkUp.BusinessLogic project's own root namespace rather than the entity type (CS0118).
 
 namespace WorkUp.Data.Businesses;
 
@@ -13,10 +13,10 @@ public sealed class SqlBusinessRepository(DbSession session) : SqlRepositoryBase
         StockReviewEveryDays, CreatedAt
         """;
 
-    public Task<BusinessEntity?> GetByIdAsync(int id, CancellationToken ct = default) =>
+    public Task<Business?> GetByIdAsync(int id, CancellationToken ct = default) =>
         QuerySingleOrDefaultAsync($"SELECT {Columns} FROM Businesses WHERE Id = @id", Map, p => p.AddValue("@id", id), ct);
 
-    public Task<BusinessEntity?> GetBySlugAsync(string slug, CancellationToken ct = default) =>
+    public Task<Business?> GetBySlugAsync(string slug, CancellationToken ct = default) =>
         QuerySingleOrDefaultAsync($"SELECT {Columns} FROM Businesses WHERE Slug = @slug", Map, p => p.AddValue("@slug", slug), ct);
 
     public async Task<bool> SlugExistsAsync(string slug, int? excludingId = null, CancellationToken ct = default) =>
@@ -25,7 +25,7 @@ public sealed class SqlBusinessRepository(DbSession session) : SqlRepositoryBase
             p => p.AddValue("@slug", slug).AddValue("@excludingId", excludingId),
             ct) > 0;
 
-    public Task<int> InsertAsync(BusinessEntity business, CancellationToken ct = default) =>
+    public Task<int> InsertAsync(Business business, CancellationToken ct = default) =>
         InsertAsync(
             """
             INSERT INTO Businesses (Name, Slug, ContactPhone, NotificationEmail, AllowsWalkIns, ReminderLeadHours,
@@ -46,7 +46,7 @@ public sealed class SqlBusinessRepository(DbSession session) : SqlRepositoryBase
                 .AddValue("@createdAt", business.CreatedAt),
             ct);
 
-    public Task UpdateAsync(BusinessEntity business, CancellationToken ct = default) =>
+    public Task UpdateAsync(Business business, CancellationToken ct = default) =>
         ExecuteAsync(
             """
             UPDATE Businesses
@@ -67,7 +67,7 @@ public sealed class SqlBusinessRepository(DbSession session) : SqlRepositoryBase
                 .AddValue("@stockReviewEveryDays", business.StockReviewEveryDays),
             ct);
 
-    private static BusinessEntity Map(SqlDataReader reader) => new()
+    private static Business Map(SqlDataReader reader) => new()
     {
         Id = reader.Get<int>("Id"),
         Name = reader.Get<string>("Name"),

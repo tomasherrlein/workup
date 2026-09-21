@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\WorkUp.Business\WorkUp.Business.csproj" />
+    <ProjectReference Include="..\WorkUp.BusinessLogic\WorkUp.BusinessLogic.csproj" />
     <ProjectReference Include="..\WorkUp.Domain\WorkUp.Domain.csproj" />
   </ItemGroup>
 

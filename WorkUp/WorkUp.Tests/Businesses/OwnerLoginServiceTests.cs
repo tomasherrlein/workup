@@ -1,8 +1,7 @@
-using WorkUp.Business.Businesses;
+using WorkUp.BusinessLogic.Businesses;
 using WorkUp.Domain.Entities;
 using WorkUp.Tests.Fakes;
 // See IBusinessRepository.cs for why the entity is aliased instead of imported by its bare name.
-using BusinessEntity = WorkUp.Domain.Entities.Business;
 
 namespace WorkUp.Tests.Businesses;
 
@@ -21,7 +20,7 @@ public class OwnerLoginServiceTests
 
     private async Task SeedOwnerAsync()
     {
-        var business = new BusinessEntity { Name = "Estudio de Lucía", Slug = "estudio-lucia", ContactPhone = "111", CreatedAt = DateTime.UtcNow };
+        var business = new Business { Name = "Estudio de Lucía", Slug = "estudio-lucia", ContactPhone = "111", CreatedAt = DateTime.UtcNow };
         await _businesses.InsertAsync(business);
         await _ownerAccounts.InsertAsync(new OwnerAccount
         {

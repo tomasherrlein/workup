@@ -1,4 +1,4 @@
-namespace WorkUp.Business.Abstractions;
+namespace WorkUp.BusinessLogic.Abstractions;
 
 /// <summary>
 /// Current time in the business time zone (plan assumption 12). Every rule that depends on "now" uses this port,

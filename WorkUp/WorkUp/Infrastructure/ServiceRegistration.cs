@@ -1,5 +1,5 @@
-using WorkUp.Business.Abstractions;
-using WorkUp.Business.Businesses;
+using WorkUp.BusinessLogic.Abstractions;
+using WorkUp.BusinessLogic.Businesses;
 using WorkUp.Data;
 using WorkUp.Data.Businesses;
 

@@ -1,4 +1,4 @@
-namespace WorkUp.Business.Common;
+namespace WorkUp.BusinessLogic.Common;
 
 /// <summary>
 /// Outcome of a business operation. Rule violations are expected outcomes, not exceptions: services return a failed

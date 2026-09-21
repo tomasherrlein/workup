@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 
-namespace WorkUp.Business.Security;
+namespace WorkUp.BusinessLogic.Security;
 
 /// <summary>A random URL-safe token and the SHA-256 hash stored to look it up.</summary>
 public readonly record struct TokenPair(string Token, byte[] Hash);

@@ -1,7 +1,7 @@
-using WorkUp.Business.Businesses;
+using WorkUp.Domain.Entities;
+using WorkUp.BusinessLogic.Businesses;
 using WorkUp.Tests.Fakes;
 // See IBusinessRepository.cs for why the entity is aliased instead of imported by its bare name.
-using BusinessEntity = WorkUp.Domain.Entities.Business;
 
 namespace WorkUp.Tests.Businesses;
 
@@ -19,7 +19,7 @@ public class BusinessSettingsServiceTests
 
     private async Task<int> SeedBusinessAsync(string slug = "peluqueria-de-marina")
     {
-        var business = new BusinessEntity { Name = "Peluquería de Marina", Slug = slug, ContactPhone = "111", CreatedAt = DateTime.UtcNow };
+        var business = new Business { Name = "Peluquería de Marina", Slug = slug, ContactPhone = "111", CreatedAt = DateTime.UtcNow };
         await _businesses.InsertAsync(business);
         _businessId = business.Id;
         return business.Id;
@@ -65,7 +65,7 @@ public class BusinessSettingsServiceTests
     public async Task Fails_when_the_new_slug_belongs_to_another_business()
     {
         await SeedBusinessAsync("peluqueria-de-marina");
-        var other = new BusinessEntity { Name = "Estudio de Lucía", Slug = "estudio-lucia", ContactPhone = "222", CreatedAt = DateTime.UtcNow };
+        var other = new Business { Name = "Estudio de Lucía", Slug = "estudio-lucia", ContactPhone = "222", CreatedAt = DateTime.UtcNow };
         await _businesses.InsertAsync(other);
 
         var result = await _service.UpdateAsync(_businessId, ValidRequest("estudio-lucia"));

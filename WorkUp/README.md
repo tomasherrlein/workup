@@ -17,18 +17,18 @@ dotnet run --project WorkUp/WorkUp --launch-profile https
 ## Estructura
 
 ```
-WorkUp.Domain     Entidades, enums y reglas puras. Sin dependencias ni IO.
-WorkUp.Business   Servicios de negocio por módulo, interfaces de repositorio y puertos (IClock, IUnitOfWork...).
-WorkUp.Data       ADO.NET: DbSession, repositorios, migrador y scripts SQL.
-WorkUp            MVC: controladores, view models, vistas, autenticación, tareas programadas, composición.
-WorkUp.Tests      xUnit sobre dominio y negocio, con repositorios falsos en memoria.
+WorkUp.Domain         Entidades, enums y reglas puras. Sin dependencias ni IO.
+WorkUp.BusinessLogic  Servicios de negocio por módulo, interfaces de repositorio y puertos (IClock, IUnitOfWork...).
+WorkUp.Data           ADO.NET: DbSession, repositorios, migrador y scripts SQL.
+WorkUp                MVC: controladores, view models, vistas, autenticación, tareas programadas, composición.
+WorkUp.Tests          xUnit sobre dominio y negocio, con repositorios falsos en memoria.
 ```
 
-Dependencias permitidas: `WorkUp → Business, Data, Domain` · `Data → Business, Domain` · `Business → Domain` · `Tests → Business, Domain`. Negocio no conoce SQL ni HTTP; la web no escribe SQL.
+Dependencias permitidas: `WorkUp → BusinessLogic, Data, Domain` · `Data → BusinessLogic, Domain` · `BusinessLogic → Domain` · `Tests → BusinessLogic, Domain`. La capa de negocio se llama `BusinessLogic` y no `Business` para no chocar con la entidad `Business` (el negocio). Negocio no conoce SQL ni HTTP; la web no escribe SQL.
 
 ### Módulos
 
-Cada módulo usa el mismo nombre de carpeta en `Business`, `Data`, `WorkUp/ViewModels` y `WorkUp.Tests`.
+Cada módulo usa el mismo nombre de carpeta en `BusinessLogic`, `Data`, `WorkUp/ViewModels` y `WorkUp.Tests`.
 
 | Módulo | Contenido | Tareas |
 |---|---|---|
@@ -65,7 +65,7 @@ Rutas públicas con atributos: `/r/{slug}` reserva pública · `/t/{token}` enla
 - Nada de fechas del sistema: toda regla que dependa de "ahora" recibe la fecha como parámetro.
 - Los valores de los enums se guardan como `TINYINT`: nunca renumeres un miembro existente.
 
-### Negocio (`WorkUp.Business/<Módulo>`)
+### Negocio (`WorkUp.BusinessLogic/<Módulo>`)
 
 - Un servicio por módulo o caso de uso grande (`BookingService`, `AvailabilityService`), con interfaz de repositorio al lado (`IAppointmentRepository`).
 - Los métodos públicos reciben primero `businessId` y devuelven `Result` o `Result<T>`. Una regla incumplida es un resultado fallido con mensaje en español (`Result.Failure("slot_taken", "Ese horario se ocupó recién. Elegí otro.")`), no una excepción. Las excepciones quedan para errores de programación o de infraestructura.
@@ -100,7 +100,7 @@ Rutas públicas con atributos: `/r/{slug}` reserva pública · `/t/{token}` enla
 
 ### Vistas y diseño
 
-- Sistema visual: `DESIGN.md` (paleta verde, rama `design/paleta-verde`) implementado en `wwwroot/css/workup.css`. Sin Bootstrap, sin estilos en línea, sin colores fuera de los tokens.
+- Sistema visual: `DESIGN.md` (paleta verde) implementado en `wwwroot/css/workup.css`. Sin Bootstrap, sin estilos en línea, sin colores fuera de los tokens.
 - Listas como filas (`.rows` / `.row`), no tarjetas. Un solo `.btn-primary` por pantalla.
 - Estados con `<partial name="_StatusTag" model="StatusTag.For(booking.Status)" />`: siempre palabra más ícono.
 - Íconos con `@Icons.Svg("calendar")`, siempre junto a un texto. Si falta uno, se agrega en `Infrastructure/Icons.cs`.

@@ -1,5 +1,5 @@
 using Microsoft.Data.SqlClient;
-using WorkUp.Business.Businesses;
+using WorkUp.BusinessLogic.Businesses;
 using WorkUp.Domain.Entities;
 
 namespace WorkUp.Data.Businesses;

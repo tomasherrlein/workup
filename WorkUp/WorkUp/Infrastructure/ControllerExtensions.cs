@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
-using WorkUp.Business.Common;
+using WorkUp.BusinessLogic.Common;
 
 namespace WorkUp.Infrastructure;
 

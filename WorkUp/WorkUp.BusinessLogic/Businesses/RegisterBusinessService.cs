@@ -1,11 +1,10 @@
-using WorkUp.Business.Abstractions;
-using WorkUp.Business.Common;
+using WorkUp.BusinessLogic.Abstractions;
+using WorkUp.BusinessLogic.Common;
 using WorkUp.Domain.Entities;
 using WorkUp.Domain.Rules;
 // See IBusinessRepository.cs for why the entity is aliased instead of imported by its bare name.
-using BusinessEntity = WorkUp.Domain.Entities.Business;
 
-namespace WorkUp.Business.Businesses;
+namespace WorkUp.BusinessLogic.Businesses;
 
 public sealed record RegisterBusinessRequest(
     string Name,
@@ -57,7 +56,7 @@ public sealed class RegisterBusinessService(
         var notificationEmail = string.IsNullOrWhiteSpace(request.NotificationEmail) ? null : Text.NormalizeEmail(request.NotificationEmail);
         var now = clock.Now;
 
-        var business = new BusinessEntity
+        var business = new Business
         {
             Name = name,
             Slug = slug,

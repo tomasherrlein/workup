@@ -1,4 +1,4 @@
-using WorkUp.Business.Businesses;
+using WorkUp.BusinessLogic.Businesses;
 using WorkUp.Domain.Entities;
 
 namespace WorkUp.Tests.Fakes;

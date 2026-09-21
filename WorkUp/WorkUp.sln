@@ -5,7 +5,7 @@ VisualStudioVersion = 17.14.36429.23
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WorkUp.Domain", "WorkUp.Domain\WorkUp.Domain.csproj", "{0EFFB042-5D9F-4469-B2FD-AAB22B37E463}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WorkUp.Business", "WorkUp.Business\WorkUp.Business.csproj", "{EF4156B9-1A07-4917-9D57-C8F5370E8589}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WorkUp.BusinessLogic", "WorkUp.BusinessLogic\WorkUp.BusinessLogic.csproj", "{EF4156B9-1A07-4917-9D57-C8F5370E8589}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WorkUp.Tests", "WorkUp.Tests\WorkUp.Tests.csproj", "{48E955EF-629F-4671-8459-A65CFE296942}"
 EndProject

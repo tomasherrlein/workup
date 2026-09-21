@@ -1,6 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
-using WorkUp.Business.Businesses;
+using WorkUp.BusinessLogic.Businesses;
 
 namespace WorkUp.Infrastructure.Auth;
 

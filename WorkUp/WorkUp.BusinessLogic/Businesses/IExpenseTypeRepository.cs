@@ -1,6 +1,6 @@
 using WorkUp.Domain.Entities;
 
-namespace WorkUp.Business.Businesses;
+namespace WorkUp.BusinessLogic.Businesses;
 
 public interface IExpenseTypeRepository
 {

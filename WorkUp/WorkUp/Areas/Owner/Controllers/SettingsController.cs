@@ -1,5 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
-using WorkUp.Business.Businesses;
+using WorkUp.BusinessLogic.Businesses;
 using WorkUp.Infrastructure;
 using WorkUp.Infrastructure.Auth;
 using WorkUp.ViewModels.Businesses;

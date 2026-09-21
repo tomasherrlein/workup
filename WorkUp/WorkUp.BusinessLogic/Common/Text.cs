@@ -1,4 +1,4 @@
-namespace WorkUp.Business.Common;
+namespace WorkUp.BusinessLogic.Common;
 
 public static class Text
 {

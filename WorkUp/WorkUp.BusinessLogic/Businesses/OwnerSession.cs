@@ -1,4 +1,4 @@
-namespace WorkUp.Business.Businesses;
+namespace WorkUp.BusinessLogic.Businesses;
 
 /// <summary>
 /// Identifies the owner and her business right after a successful registration or login. The web layer turns this

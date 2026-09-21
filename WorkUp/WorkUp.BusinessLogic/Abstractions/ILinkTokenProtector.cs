@@ -1,4 +1,4 @@
-namespace WorkUp.Business.Abstractions;
+namespace WorkUp.BusinessLogic.Abstractions;
 
 /// <summary>
 /// Reversible protection for private link tokens, so the owner can copy the current "Ver mi turno" link again

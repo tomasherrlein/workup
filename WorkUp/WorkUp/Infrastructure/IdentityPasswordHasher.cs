@@ -1,5 +1,5 @@
 using Microsoft.AspNetCore.Identity;
-using WorkUp.Business.Abstractions;
+using WorkUp.BusinessLogic.Abstractions;
 
 namespace WorkUp.Infrastructure;
 

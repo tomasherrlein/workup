@@ -25,13 +25,13 @@ MVC en capas, con inversión de dependencias entre negocio y datos para poder pr
 ```
 WorkUp/WorkUp.sln
 ├── WorkUp.Domain     Entidades, enums y reglas puras (sin dependencias)
-├── WorkUp.Business   Servicios de negocio (casos de uso), interfaces de repositorio y puertos (IClock, IUnitOfWork, IPasswordHasher)
+├── WorkUp.BusinessLogic  Servicios de negocio (casos de uso), interfaces de repositorio y puertos (IClock, IUnitOfWork, IPasswordHasher)
 ├── WorkUp.Data       ADO.NET: sesión de base de datos, repositorios, migrador y scripts SQL
 ├── WorkUp            Presentación MVC: controladores, view models, vistas, autenticación, tareas programadas
 └── WorkUp.Tests      xUnit: dominio y negocio
 ```
 
-**Dependencias:** `Web → Business, Data, Domain` · `Data → Business, Domain` · `Business → Domain` · `Tests → Business, Domain`. La web solo usa `Data` para registrar dependencias en `Program.cs`.
+**Dependencias:** `Web → BusinessLogic, Data, Domain` · `Data → BusinessLogic, Domain` · `BusinessLogic → Domain` · `Tests → BusinessLogic, Domain`. La web solo usa `Data` para registrar dependencias en `Program.cs`.
 
 **Stack:** ASP.NET Core MVC sobre .NET 9 · SQL Server (LocalDB o Express) · ADO.NET con `Microsoft.Data.SqlClient`, sin Entity Framework · autenticación por cookies con dos esquemas (dueña y cliente) · hash de contraseñas con `PasswordHasher<T>` de `Microsoft.Extensions.Identity.Core` · tareas programadas con `BackgroundService` · xUnit.
 

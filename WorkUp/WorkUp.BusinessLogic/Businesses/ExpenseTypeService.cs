@@ -1,7 +1,7 @@
-using WorkUp.Business.Common;
+using WorkUp.BusinessLogic.Common;
 using WorkUp.Domain.Entities;
 
-namespace WorkUp.Business.Businesses;
+namespace WorkUp.BusinessLogic.Businesses;
 
 /// <summary>Expense type catalogue of a business (RF-01, RF-13). Never deleted, only archived.</summary>
 public sealed class ExpenseTypeService(IExpenseTypeRepository expenseTypes)

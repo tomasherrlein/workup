@@ -1,7 +1,7 @@
-using WorkUp.Business.Abstractions;
-using WorkUp.Business.Common;
+using WorkUp.BusinessLogic.Abstractions;
+using WorkUp.BusinessLogic.Common;
 
-namespace WorkUp.Business.Businesses;
+namespace WorkUp.BusinessLogic.Businesses;
 
 /// <summary>Owner sign-in with a non-enumerating error, so a wrong username never reveals whether it exists.</summary>
 public sealed class OwnerLoginService(

@@ -1,6 +1,6 @@
 using System.Data;
 using Microsoft.Data.SqlClient;
-using WorkUp.Business.Abstractions;
+using WorkUp.BusinessLogic.Abstractions;
 
 namespace WorkUp.Data;
 

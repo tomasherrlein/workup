@@ -1,6 +1,6 @@
 using System.Data;
 
-namespace WorkUp.Business.Abstractions;
+namespace WorkUp.BusinessLogic.Abstractions;
 
 /// <summary>
 /// Scoped per request. Repositories share its connection and current transaction, so a service can make several
