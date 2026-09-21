@@ -17,7 +17,7 @@
 | ID | Tema | Recomendación resumida | Estado |
 |---|---|---|---|
 | D01 | Acceso a un turno, cuenta opcional y vinculación | Sin cuenta obligatoria: la persona puede reservar o asistir con ayuda de la dueña; un enlace privado, reutilizable y acotado permite gestionar un único turno durante su vigencia aprobada. Cuenta opcional con registro autónomo, invitación de vinculación de 48 h y recuperación de 30 min; sin fusiones automáticas. | Enlace y flujos de cuenta aprobados |
-| D02 | Reprogramación y cancelación | Para un turno individual, el enlace permite cancelar directamente antes del inicio, sin plazo mínimo ni aprobación de la dueña; una notificación posterior no altera asistencia ni estados completados. En clases con abono se libera solo la fecha cancelada antes del inicio, conservando horarios fijos y sin recuperación ni devolución automáticas. Reprogramación y clases sueltas siguen pendientes. | Parcialmente aprobada |
+| D02 | Reprogramación y cancelación | Para un turno individual, el enlace permite cancelar directamente antes del inicio, sin plazo mínimo ni aprobación de la dueña; confirmar “No voy a asistir” desde el inicio marca Ausente, sin sobrescribir una asistencia ni un estado completado. En clases con abono se libera solo la fecha cancelada antes del inicio, conservando horarios fijos y sin recuperación ni devolución automáticas. Reprogramación y clases sueltas siguen pendientes. | Parcialmente aprobada |
 | D03 | Cobros y asistencia | Cobro y asistencia independientes; cada cobro identifica el concepto concreto; se respeta el precio acordado y el abono no se cobra por cada clase. | Núcleo aprobado; ajustes pendientes |
 | D04 | Inscripción pendiente y cupos | La inscripción pendiente ocupa los lugares fijos; el cobro activa el abono. Si no paga o no se presenta, la dueña anula la inscripción y libera los lugares, sin vencimiento automático al inicio. | Aprobada |
 | D05 | Notificaciones | Al reservar un turno individual se envía inmediatamente un email con sus detalles y el enlace privado; 24 horas antes se envía un recordatorio con ese mismo enlace, sujeto a las reglas aprobadas de confirmación y deduplicación. La dueña puede compartir manualmente el enlace vigente. Clases con abono sin recordatorios ni confirmación; clases sueltas con recordatorio por email 24 h antes; suspensión con email inmediato a los anotados. Abonos: email 3 días antes y al vencer si no renovó, sin insistencia diaria ni liberación automática. | Reglas aprobadas |
@@ -29,7 +29,7 @@
 
 ## D01 — Acceso a un turno, cuenta opcional y vinculación histórica
 
-**Estado:** **Aprobada para el enlace privado individual y los flujos de cuenta opcional**. Quedan pendientes el detalle operativo del aviso posterior al inicio y la implementación técnica.
+**Estado:** **Aprobada para el enlace privado individual y los flujos de cuenta opcional**. El aviso confirmado posterior al inicio marca Ausente según las reglas siguientes; la implementación técnica queda pendiente.
 
 **Evidencia actual.** RF 1 incorpora contraseña al alta de cliente y controla la unicidad del email. RF 3 permite que el cliente reserve desde un enlace enviado por el negocio o que la dueña cargue el turno cuando la persona le escribe. RF 4 y RF 5 buscan al cliente por email y prevén darlo de alta si es la primera vez. RF 15–18 describen un panel con sesión iniciada y sus acciones. Los RF vigentes no precisan el alcance de un enlace ni separan expresamente ficha operativa, cuenta y asociación histórica.
 
@@ -38,7 +38,7 @@
 - **No hay cuenta obligatoria para reservar ni para asistir.** La dueña puede registrar la ficha y reservar o inscribir a una persona sin contraseña ni cuenta. Para clientes mayores o de baja familiaridad tecnológica, la alternativa es llamar, escribir o concurrir al negocio para que la dueña los asista; el enlace no es requisito de asistencia.
 - Al reservar cada **turno individual**, se envía inmediatamente por email un **enlace privado** para esa única reserva o turno exacto, junto con los detalles del turno. El enlace ofrece una acción visible, **“Ver mi turno”**, que muestra su fecha y horario. La dueña puede copiar y compartir manualmente el enlace vigente por el canal que elija, por ejemplo WhatsApp; no se aprueba una integración automática ni el uso obligatorio de WhatsApp.
 - Para un **turno individual antes de su inicio**, la persona puede confirmar su intención de asistir o cancelarlo directamente desde el enlace, sin contraseña, plazo mínimo ni aprobación de la dueña. La confirmación no registra asistencia real y la falta de respuesta conserva la reserva; no genera una cancelación automática. La cancelación libera el horario. Estas reglas no se aplican a confirmaciones de clases recurrentes.
-- Desde el inicio del turno en adelante, el enlace solo permite **ver el turno y notificar** la situación. La dueña evalúa y registra una ausencia cuando corresponda; esa notificación no genera una ausencia automática ni sobrescribe un turno ya atendido o completado. No permite cancelar ni reprogramar retroactivamente.
+- Desde el inicio del turno en adelante, confirmar **“No voy a asistir”** desde el enlace registra directamente **Ausente**, dejando constancia de que lo informó el cliente. No marca Cancelado ni permite cancelar o reprogramar retroactivamente. No sobrescribe una asistencia ni un turno atendido o completado. La dueña sigue registrando las ausencias de quienes no avisaron; el silencio no genera ausencia automática.
 - El enlace vence 24 horas después del **inicio** del turno, no de su fin ni de su creación. Puede abrirse y reutilizarse varias veces durante esa vigencia: verlo no lo consume. Tras el vencimiento, la persona debe contactar al negocio. Si la dueña sospecha que fue comprometido o enviado al destinatario equivocado, puede revocarlo y emitir un reemplazo; el anterior deja de autorizar acceso y el reemplazo conserva la fecha de vencimiento ya acordada, sin extenderla silenciosamente.
 - El enlace no habilita reprogramación, no muestra historial, clases, abonos, observaciones ni otros datos sensibles, y no vincula una cuenta con fichas existentes. Un turno posterior se registra como una nueva reserva; nunca reprograma una ocurrencia pasada.
 - El panel de cliente autenticado existente y el autoregistro de clientes nuevos permanecen **opcionales**. Su uso no reemplaza las alternativas de atención por la dueña.
@@ -68,7 +68,7 @@ Estos mecanismos de acceso no sustituyen la atención sin cuenta ni convierten e
 ### Alcance para una futura actualización de RF (no normativa)
 
 - **Actores:** dueña; persona sin cuenta; cliente autenticado opcional.
-- **Flujo aceptado:** la dueña registra la ficha y reserva o inscripción sin credenciales; al reservar cada turno individual el sistema envía inmediatamente por email sus detalles y el enlace “Ver mi turno”, que la dueña también puede copiar y compartir manualmente mientras esté vigente. La persona lo usa para consultar fecha y horario, declarar intención de asistir o, antes de su inicio, cancelarlo directamente. La falta de respuesta conserva la reserva y la confirmación no registra asistencia. Desde el inicio puede ver el turno y notificar; la dueña registra una ausencia solo si corresponde.
+- **Flujo aceptado:** la dueña registra la ficha y reserva o inscripción sin credenciales; al reservar cada turno individual el sistema envía inmediatamente por email sus detalles y el enlace “Ver mi turno”, que la dueña también puede copiar y compartir manualmente mientras esté vigente. La persona lo usa para consultar fecha y horario, declarar intención de asistir o, antes de su inicio, cancelarlo directamente. La falta de respuesta conserva la reserva y la confirmación no registra asistencia. Desde el inicio puede ver el turno y confirmar “No voy a asistir” para registrar Ausente con origen en el aviso del cliente, sin sobrescribir una asistencia ni un turno completado.
 - **Límites aceptados:** el enlace queda limitado a la reserva exacta, es reutilizable hasta 24 horas después de su inicio y no expone información adicional ni permite reprogramar o asociar cuentas. Una ocurrencia pasada no se reprograma: un turno posterior es una nueva reserva. La revocación por la dueña invalida el enlace anterior sin ampliar la vigencia acordada del reemplazo.
 - **Fuera del alcance del enlace de turno:** vinculación histórica de cuentas (resuelta por invitación separada), reglas concretas de cancelación autenticada y reprogramación antes del inicio, y canales de cancelación o notificación para clases grupales; la regla de cancelación con abono se registra en D02.
 
@@ -77,9 +77,9 @@ Estos mecanismos de acceso no sustituyen la atención sin cuenta ni convierten e
 - Normal: Ana llama al negocio; la dueña registra su ficha y turno sin crear una cuenta. Ana puede asistir aunque no reciba ni use un enlace.
 - Normal: al reservar el turno individual de Bruno, el sistema le envía inmediatamente por email los detalles y un enlace. La dueña puede copiar ese mismo enlace vigente y compartirlo manualmente por WhatsApp si lo elige. Bruno elige “Ver mi turno”, ve fecha y horario, y confirma su intención de asistir sin contraseña; si no responde, su reserva se conserva.
 - Borde: Carla cancela su turno individual desde el enlace un minuto antes de su inicio. La cancelación es directa y libera el horario, sin aprobación de la dueña.
-- Borde: al iniciarse el turno, Carla puede notificar mediante el enlace. La dueña decide si corresponde registrar una ausencia; el aviso no sobrescribe una asistencia o un turno completado.
+- Borde: al iniciarse el turno, Carla confirma “No voy a asistir” mediante el enlace. Se registra Ausente y que lo informó el cliente, sin intervención de la dueña. Si ya figura atendida o el turno está completado, el enlace no cambia ese estado.
 - Borde: si Carla quiere otro horario después del inicio, se crea una reserva nueva; no se reprograma la ocurrencia pasada.
-- Borde: un enlace compartido manualmente permite solo consultar, declarar intención de asistir, cancelar antes del inicio o notificar desde el inicio para el turno exacto al que se limita; no permite ver el historial de la persona ni entrar a su panel.
+- Borde: un enlace compartido manualmente permite solo consultar, declarar intención de asistir, cancelar antes del inicio o confirmar su inasistencia desde el inicio para el turno exacto al que se limita; no permite ver el historial de la persona ni entrar a su panel.
 - Borde: el enlace de Carla se abre varias veces y sigue funcionando hasta 24 horas después del inicio de su turno. Después vence y debe contactar al negocio.
 - Borde: la dueña revoca un enlace comprometido y emite otro para el mismo turno. El enlace anterior deja de funcionar; el nuevo vence en la misma fecha y hora acordadas para el turno original.
 - Normal: Ana ya tiene una ficha sin cuenta. La dueña confirma su contacto y le envía una invitación; Ana crea su cuenta desde ella y confirma la vinculación sin crear otra ficha, aunque utilice otro email.
@@ -89,10 +89,9 @@ Estos mecanismos de acceso no sustituyen la atención sin cuenta ni convierten e
 
 **Nota de implementación no normativa.** El stack informado es C# con ASP.NET MVC, sin Entity Framework; todavía no está confirmado si será ASP.NET Core o ASP.NET MVC clásico. La persistencia SQL podría resolverse con ADO.NET o, si se permite, Dapper. Para acceso pueden evaluarse stores personalizados de Identity o autenticación por cookies del framework con servicios de registro; no se elige arquitectura en esta propuesta. Las contraseñas deben usar un mecanismo de hash de contraseñas revisado y mantenido, nunca criptografía implementada a mano. Esta nota no prescribe tablas, API ni código.
 
-### Decisiones pendientes para discusión posterior
+### Cierre del bloque
 
-- Definir la presentación y el tratamiento operativo de la notificación posterior al inicio, sin convertirla en una ausencia automática ni alterar registros atendidos o completados.
-Los flujos de cuenta e invitación anteriores ya están aprobados. La revisión asistida de conflictos no implica que esta versión permita fusionar fichas o transferir automáticamente cuentas.
+El aviso explícito y confirmado posterior al inicio registra Ausente y sustituye la propuesta anterior de procesamiento manual por la dueña. Los flujos de cuenta e invitación anteriores ya están aprobados. La revisión asistida de conflictos no implica que esta versión permita fusionar fichas o transferir automáticamente cuentas.
 
 ---
 
@@ -105,7 +104,7 @@ Los flujos de cuenta e invitación anteriores ya están aprobados. La revisión 
 ### Regla aceptada: turno individual por enlace
 
 - Antes de su inicio, la persona puede cancelar directamente su turno individual desde el enlace privado, sin plazo mínimo ni aprobación de la dueña. La cancelación libera el horario.
-- Desde el inicio en adelante, el enlace permite notificar la situación. La dueña evalúa si registra una ausencia; la notificación no crea una ausencia automática ni sobrescribe una asistencia o un turno atendido o completado.
+- Desde el inicio en adelante, confirmar “No voy a asistir” desde el enlace registra Ausente con constancia de que lo informó el cliente. No requiere procesamiento de la dueña, no genera Cancelado ni sobrescribe una asistencia o un turno atendido o completado. La dueña registra las ausencias de quienes no avisaron.
 - Un turno posterior se registra como una reserva nueva. Una ocurrencia pasada nunca se reprograma.
 - El enlace no habilita reprogramación. Esta decisión no aprueba ni infiere una ventana temporal para la reprogramación autenticada antes del inicio.
 
@@ -123,12 +122,12 @@ Los flujos de cuenta e invitación anteriores ya están aprobados. La revisión 
 - La cancelación de clases sueltas y el cambio de horario fijo del abono siguen pendientes.
 - El alta en una clase posterior y cualquier traslado entre clases siguen pendientes; no se aprueba una reprogramación por enlace.
 
-**Rationale.** La cancelación individual aprobada libera el horario sin demorar la decisión en la dueña. La separación posterior entre notificación y registro preserva la trazabilidad de asistencia y evita alterar registros ya atendidos o completados. En clases con abono, separar la ocurrencia de la recurrencia permite liberar un lugar puntual sin modificar los horarios fijos.
+**Rationale.** La cancelación individual aprobada libera el horario sin demorar la decisión en la dueña. El aviso confirmado posterior al inicio registra ausencia sin un paso manual adicional, conserva el origen de la acción y no altera registros ya atendidos o completados. Esta regla sustituye el procesamiento manual antes propuesto para turnos individuales, no la regla de clases con abono. En clases con abono, separar la ocurrencia de la recurrencia permite liberar un lugar puntual sin modificar los horarios fijos.
 
 **Ejemplos de aceptación.**
 
 - Normal: Lucía cancela su turno individual desde el enlace a cualquier momento antes de las 15:00; el horario queda disponible sin intervención de la dueña.
-- Borde: a las 15:00 o después, Lucía notifica que no asistirá. La dueña puede registrar una ausencia si corresponde, pero la notificación no modifica automáticamente el registro.
+- Borde: a las 15:00 o después, Lucía confirma que no asistirá. El turno pasa a Ausente con constancia del aviso del cliente, sin intervención de la dueña.
 - Borde: Lucía ya figura como atendida; una notificación posterior no reemplaza ese estado por ausencia.
 - Borde: Lucía pide otro horario después de iniciado su turno; se crea una nueva reserva y no se reprograma la ocurrencia pasada.
 
@@ -351,7 +350,7 @@ Las políticas de depósitos, cobro, reintegro, traslado y aplicación de penali
 **Ejemplos de alcance.**
 
 - Normal: una clienta cancela directamente un turno individual antes de su inicio; el horario se libera y la decisión financiera, si existiera, queda a cargo de la dueña fuera de WorkUp.
-- Borde: una notificación posterior al inicio puede llevar a que la dueña registre una ausencia; no determina por sí sola un cobro, reintegro, penalidad ni cambio de asistencia.
+- Borde: el cliente confirma desde el enlace que no asistirá a un turno ya iniciado; se registra Ausente según D01/D02, pero no se genera un cobro, reintegro ni penalidad por esa acción.
 - Borde: se suspende una clase fija de abono; la ocurrencia queda suspendida y no se marca a ningún alumno como ausente. No se ejecuta automáticamente una devolución ni se borra el cobro del abono; los acuerdos económicos se gestionan fuera de WorkUp.
 
 **Límites del acuerdo.** No se incorpora una política económica externa concreta ni un módulo de reintegros. Esta decisión no aprueba las propuestas pendientes de ajustes y correcciones de cobros de D03. Las reglas de cancelación por ocurrencia y conservación del abono de D02 permanecen vigentes en este documento.
@@ -390,9 +389,9 @@ La implementación de los controles de concurrencia queda para diseño técnico;
 ## Checklist de discusión ordenado
 
 1. [x] D01: se aprobó que no haya cuenta obligatoria para reservar o asistir, con atención alternativa por la dueña y enlace privado de “Ver mi turno” enviado inmediatamente por email al reservar cada turno individual. El enlace es reutilizable hasta 24 horas después del inicio, puede revocarse y reemplazarse sin extender silenciosamente esa vigencia; la dueña puede compartir manualmente el enlace vigente, sin integración automática ni uso obligatorio de WhatsApp.
-2. [x] D02: se aprobó la cancelación directa por enlace de un turno individual antes de su inicio, sin plazo mínimo ni aprobación de la dueña; después solo permite notificar y no altera automáticamente asistencia ni turnos atendidos o completados.
+2. [x] D02: se aprobó la cancelación directa por enlace de un turno individual antes de su inicio, sin plazo mínimo ni aprobación de la dueña; desde el inicio, confirmar “No voy a asistir” registra Ausente con origen en el cliente, sin sobrescribir una asistencia ni estados atendidos o completados.
 3. [x] D05: para turnos individuales, se aprobó un recordatorio por email 24 horas antes con el mismo enlace; las reservas con menos de 24 horas reciben solo el email inicial y la coincidencia exacta se deduplica. La confirmación declara intención de asistir, solo se solicita si aún no ocurrió y la falta de respuesta conserva la reserva; no se aplica a clases recurrentes.
-4. [ ] D01: queda definir la presentación y el tratamiento operativo del aviso posterior al inicio. Ya aprobados registro autónomo, invitación de ficha por 48 h de un solo uso/revocable, recuperación por email de 30 min y bloqueo de vínculos conflictivos sin herramienta de fusión. La mecánica técnica queda para implementación.
+4. [x] D01: aprobado aviso confirmado posterior al inicio que registra Ausente, sin sobrescribir asistencia ni estados completados. Aprobados registro autónomo, invitación de ficha por 48 h de un solo uso/revocable, recuperación por email de 30 min y bloqueo de vínculos conflictivos sin herramienta de fusión. La mecánica técnica queda para implementación.
 5. [x] D02: cancelar una clase con abono antes del inicio libera solo esa fecha, conserva horarios fijos y no genera recuperación ni devolución automáticas; desde el inicio la dueña registra ausencia cuando corresponde. Siguen pendientes reprogramación autenticada, cambio de horario fijo y clases sueltas.
 6. [x] D04: inscripción pendiente ocupa lugares fijos, cobro registrado activa el abono y anulación manual por falta de pago o inasistencia libera los lugares. Sin vencimiento automático al inicio de la primera clase.
 7. [x] D06: aprobado mes desde alta, ajuste al último día si no existe fecha equivalente, renovación anticipada desde vencimiento y tardía desde pago, conservación manual del lugar sin asistencia hasta renovar. Aprobado que el vencimiento sea el primer día sin cobertura, sin depender de la hora de pago. Aprobado conservar el día de referencia al renovar sin interrupción y reiniciarlo con el día de pago al renovar tarde. Aprobado el regreso tras baja mediante nueva inscripción sujeta a cupo, conservando cliente, cuenta e historial. Aprobadas las listas semanales con “Pendiente de renovación”, sin asistencia hasta renovar ni duplicación o pérdida de cancelaciones y suspensiones al regenerar. D06 cerrada en este documento.
