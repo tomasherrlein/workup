@@ -89,6 +89,8 @@ Decisiones tomadas para poder construir donde el SRS no alcanza o se contradice.
 - **Commits:** al menos un commit por tarea en `feat/workup-mvp`, con pruebas y documentación incluidas, mensaje Conventional Commit en español como el resto del repositorio. El hash se anota en la tarea.
 - **Tamaño:** unas 400 líneas por tarea es una referencia de planificación, no un límite.
 - **Entrega:** estrategia `ask-on-risk` con encadenamiento `feature-branch-chain` (decisión del usuario, 2026-09-21): cada porción revisable es un PR contra `feat/workup-mvp`; al final `feat/workup-mvp` entra a `main` en un solo merge. `main` conserva solo documentación aprobada mientras el MVP se prueba. Los límites de cada PR (qué commits contiene) se anotan en la sección 6.
+  - Mecánica: `feat/workup-mvp` es la rama integradora (PR borrador a `main`, sin merge hasta cerrar la cadena) y ya contiene T00. Cada tarea trabaja en una rama hija `feat/workup-mvp-NN-<tema>` creada desde la rama de la tarea anterior; su PR apunta a esa rama madre (la primera, a `feat/workup-mvp`). Push y apertura de PRs quedan a decisión del usuario.
+- **Base de datos:** SQL Server confirmado por el usuario (2026-09-21), frente a MySQL. Todo el equipo usa Windows y los hostings gratuitos de .NET (MonsterASP.NET, Somee) incluyen SQL Server en el mismo lugar; Azure SQL tiene un plan gratuito sin vencimiento. Opciones para T28.
 - **Revisión RDD:** desactivada (`gentle-ai review mode status`: off por defecto). No se inicia.
 
 ---
