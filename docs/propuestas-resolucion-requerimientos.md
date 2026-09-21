@@ -2,7 +2,7 @@
 
 ## Estado, alcance y línea de base
 
-**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02 y los detalles de ajustes de D03 permanecen **Pendientes**. D08 está **Aprobada con disponibilidad simple y registro sin turno no bloqueante**. D07 está **Aprobada para consecuencias económicas externas y conservación de cobros**. D06 está **Aprobada**, incluido el ciclo de abono, la resolución manual del vencimiento y las listas semanales. D04 está **Aprobada con liberación manual de cupos**.
+**Estado:** documento de propuesta; D01 tiene **Aprobados el enlace individual y los flujos de cuenta opcional** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02 y los detalles de ajustes de D03 permanecen **Pendientes**. D08 está **Aprobada con disponibilidad simple y registro sin turno no bloqueante**. D07 está **Aprobada para consecuencias económicas externas y conservación de cobros**. D06 está **Aprobada**, incluido el ciclo de abono, la resolución manual del vencimiento y las listas semanales. D04 está **Aprobada con liberación manual de cupos**.
 
 **Contexto:** WorkUp es un caso ficticio. Las decisiones se acuerdan para el proyecto con criterios realistas y simples; la dueña es un rol del sistema, no una entrevistada real.
 
@@ -16,7 +16,7 @@
 
 | ID | Tema | Recomendación resumida | Estado |
 |---|---|---|---|
-| D01 | Acceso a un turno, cuenta opcional y vinculación | Sin cuenta obligatoria: la persona puede reservar o asistir con ayuda de la dueña; un enlace privado, reutilizable y acotado permite gestionar un único turno durante su vigencia aprobada. La cuenta y cualquier asociación histórica siguen siendo opcionales o pendientes según corresponda. | Aprobada para el enlace de turnos individuales |
+| D01 | Acceso a un turno, cuenta opcional y vinculación | Sin cuenta obligatoria: la persona puede reservar o asistir con ayuda de la dueña; un enlace privado, reutilizable y acotado permite gestionar un único turno durante su vigencia aprobada. Cuenta opcional con registro autónomo, invitación de vinculación de 48 h y recuperación de 30 min; sin fusiones automáticas. | Enlace y flujos de cuenta aprobados |
 | D02 | Reprogramación y cancelación | Para un turno individual, el enlace permite cancelar directamente antes del inicio, sin plazo mínimo ni aprobación de la dueña; una notificación posterior no altera asistencia ni estados completados. En clases con abono se libera solo la fecha cancelada antes del inicio, conservando horarios fijos y sin recuperación ni devolución automáticas. Reprogramación y clases sueltas siguen pendientes. | Parcialmente aprobada |
 | D03 | Cobros y asistencia | Cobro y asistencia independientes; cada cobro identifica el concepto concreto; se respeta el precio acordado y el abono no se cobra por cada clase. | Núcleo aprobado; ajustes pendientes |
 | D04 | Inscripción pendiente y cupos | La inscripción pendiente ocupa los lugares fijos; el cobro activa el abono. Si no paga o no se presenta, la dueña anula la inscripción y libera los lugares, sin vencimiento automático al inicio. | Aprobada |
@@ -29,7 +29,7 @@
 
 ## D01 — Acceso a un turno, cuenta opcional y vinculación histórica
 
-**Estado:** **Aprobada para el enlace privado de turnos individuales**. La asociación histórica de cuentas y los detalles técnicos de implementación permanecen pendientes.
+**Estado:** **Aprobada para el enlace privado individual y los flujos de cuenta opcional**. Quedan pendientes el detalle operativo del aviso posterior al inicio y la implementación técnica.
 
 **Evidencia actual.** RF 1 incorpora contraseña al alta de cliente y controla la unicidad del email. RF 3 permite que el cliente reserve desde un enlace enviado por el negocio o que la dueña cargue el turno cuando la persona le escribe. RF 4 y RF 5 buscan al cliente por email y prevén darlo de alta si es la primera vez. RF 15–18 describen un panel con sesión iniciada y sus acciones. Los RF vigentes no precisan el alcance de un enlace ni separan expresamente ficha operativa, cuenta y asociación histórica.
 
@@ -51,14 +51,26 @@ El enlace es un mecanismo de posesión: si se entrega al destinatario equivocado
 
 La entrega inmediata, vigencia, reutilización y revocación son reglas de negocio aprobadas. Quedan pendientes únicamente los mecanismos técnicos para generar, almacenar, validar, revocar y auditar el enlace y para enviar los emails; deben preservar las reglas aprobadas. No se aprueba una arquitectura, modelo de datos, API, proveedor de mensajería ni política de autenticación para este flujo.
 
-La recomendación previa de vincular automáticamente una ficha histórica al verificar un email queda **sustituida** por este enfoque; no es una política aceptada ni recomendada. La asociación de una cuenta futura con una ficha histórica sigue siendo una decisión separada y pendiente. En particular, esta decisión no aprueba de forma implícita ningún procedimiento manual de asociación.
+La recomendación previa de vincular automáticamente una ficha histórica al verificar un email queda **descartada**. La vinculación requiere el flujo de invitación específico siguiente, distinto del enlace de un turno.
+
+### Flujos aprobados de cuenta opcional
+
+- **Cliente nuevo:** se registra, verifica su email y establece su contraseña. Obtiene una cuenta y ficha de cliente para gestionar sus propias reservas.
+- **Cliente con ficha previa:** la dueña abre esa ficha, confirma con la persona dónde enviar la invitación y genera un enlace asociado específicamente a ella. El destinatario crea su cuenta o inicia sesión y confirma la vinculación antes de acceder a sus reservas. Crear la cuenta desde esa invitación no crea otra ficha.
+- La invitación identifica la ficha y permite usar un email distinto del que estaba registrado. No se vincula por coincidencia de nombre o correo ni se fusionan fichas automáticamente. El acceso de cliente no incluye observaciones o notas internas.
+- **Invitación:** válida por 48 horas, de un solo uso y revocable por la dueña. Emitir una nueva invalida la anterior; su vencimiento o revocación no afecta las reservas. Confirmar el contacto reduce el riesgo de entrega errónea, pero no lo elimina.
+- **Conflicto de vinculación:** si la cuenta ya está vinculada a otra ficha, la invitación no cambia esa vinculación ni revela el historial de la ficha invitada. Se indica contactar al negocio para revisión por la dueña. No se incorpora una herramienta de fusión de historiales ni se autoriza una transferencia automática de acceso.
+- **Recuperación de contraseña:** el cliente solicita un enlace a su email verificado, válido por 30 minutos y de un solo uso, para establecer una nueva contraseña. La dueña no ve ni asigna contraseñas.
+- **Pérdida de acceso al email:** se deriva a atención asistida, sin transferir automáticamente la cuenta a otro correo. Esta versión no incorpora un procedimiento automático de cambio de titularidad.
+
+Estos mecanismos de acceso no sustituyen la atención sin cuenta ni convierten el enlace “Ver mi turno” en una invitación para acceder al historial.
 
 ### Alcance para una futura actualización de RF (no normativa)
 
 - **Actores:** dueña; persona sin cuenta; cliente autenticado opcional.
 - **Flujo aceptado:** la dueña registra la ficha y reserva o inscripción sin credenciales; al reservar cada turno individual el sistema envía inmediatamente por email sus detalles y el enlace “Ver mi turno”, que la dueña también puede copiar y compartir manualmente mientras esté vigente. La persona lo usa para consultar fecha y horario, declarar intención de asistir o, antes de su inicio, cancelarlo directamente. La falta de respuesta conserva la reserva y la confirmación no registra asistencia. Desde el inicio puede ver el turno y notificar; la dueña registra una ausencia solo si corresponde.
 - **Límites aceptados:** el enlace queda limitado a la reserva exacta, es reutilizable hasta 24 horas después de su inicio y no expone información adicional ni permite reprogramar o asociar cuentas. Una ocurrencia pasada no se reprograma: un turno posterior es una nueva reserva. La revocación por la dueña invalida el enlace anterior sin ampliar la vigencia acordada del reemplazo.
-- **Fuera de este alcance:** vinculación histórica de cuentas, reglas concretas de cancelación autenticada y reprogramación antes del inicio, y canales de cancelación o notificación para clases grupales; la regla de cancelación con abono se registra en D02.
+- **Fuera del alcance del enlace de turno:** vinculación histórica de cuentas (resuelta por invitación separada), reglas concretas de cancelación autenticada y reprogramación antes del inicio, y canales de cancelación o notificación para clases grupales; la regla de cancelación con abono se registra en D02.
 
 ### Ejemplos de aceptación
 
@@ -70,15 +82,17 @@ La recomendación previa de vincular automáticamente una ficha histórica al ve
 - Borde: un enlace compartido manualmente permite solo consultar, declarar intención de asistir, cancelar antes del inicio o notificar desde el inicio para el turno exacto al que se limita; no permite ver el historial de la persona ni entrar a su panel.
 - Borde: el enlace de Carla se abre varias veces y sigue funcionando hasta 24 horas después del inicio de su turno. Después vence y debe contactar al negocio.
 - Borde: la dueña revoca un enlace comprometido y emite otro para el mismo turno. El enlace anterior deja de funcionar; el nuevo vence en la misma fecha y hora acordadas para el turno original.
-- Borde: Diego crea una cuenta opcional en el futuro. Esa creación no le da acceso automático a una ficha histórica aunque coincida un email; la asociación histórica requiere una decisión posterior separada.
+- Normal: Ana ya tiene una ficha sin cuenta. La dueña confirma su contacto y le envía una invitación; Ana crea su cuenta desde ella y confirma la vinculación sin crear otra ficha, aunque utilice otro email.
+- Borde: Diego crea una cuenta por su cuenta y queda vinculado a una ficha nueva. Si intenta aceptar una invitación a otra ficha histórica, el sistema no mezcla historiales ni cambia la vinculación: indica contactar al negocio.
+- Borde: una invitación venció o fue reemplazada; no permite vincular, pero las reservas existentes permanecen intactas.
+- Borde: un enlace de recuperación ya utilizado o con más de 30 minutos no permite cambiar la contraseña.
 
 **Nota de implementación no normativa.** El stack informado es C# con ASP.NET MVC, sin Entity Framework; todavía no está confirmado si será ASP.NET Core o ASP.NET MVC clásico. La persistencia SQL podría resolverse con ADO.NET o, si se permite, Dapper. Para acceso pueden evaluarse stores personalizados de Identity o autenticación por cookies del framework con servicios de registro; no se elige arquitectura en esta propuesta. Las contraseñas deben usar un mecanismo de hash de contraseñas revisado y mantenido, nunca criptografía implementada a mano. Esta nota no prescribe tablas, API ni código.
 
 ### Decisiones pendientes para discusión posterior
 
 - Definir la presentación y el tratamiento operativo de la notificación posterior al inicio, sin convertirla en una ausencia automática ni alterar registros atendidos o completados.
-- Definir, por separado, si habrá asociación de una cuenta con una ficha histórica y bajo qué criterio; no está aprobado ni el enlace ni un procedimiento manual para realizarla.
-- Confirmar el alcance y el flujo del autoregistro opcional de clientes nuevos, incluida la recuperación de acceso, sin volverlo requisito para reservar o asistir.
+Los flujos de cuenta e invitación anteriores ya están aprobados. La revisión asistida de conflictos no implica que esta versión permita fusionar fichas o transferir automáticamente cuentas.
 
 ---
 
@@ -378,7 +392,7 @@ La implementación de los controles de concurrencia queda para diseño técnico;
 1. [x] D01: se aprobó que no haya cuenta obligatoria para reservar o asistir, con atención alternativa por la dueña y enlace privado de “Ver mi turno” enviado inmediatamente por email al reservar cada turno individual. El enlace es reutilizable hasta 24 horas después del inicio, puede revocarse y reemplazarse sin extender silenciosamente esa vigencia; la dueña puede compartir manualmente el enlace vigente, sin integración automática ni uso obligatorio de WhatsApp.
 2. [x] D02: se aprobó la cancelación directa por enlace de un turno individual antes de su inicio, sin plazo mínimo ni aprobación de la dueña; después solo permite notificar y no altera automáticamente asistencia ni turnos atendidos o completados.
 3. [x] D05: para turnos individuales, se aprobó un recordatorio por email 24 horas antes con el mismo enlace; las reservas con menos de 24 horas reciben solo el email inicial y la coincidencia exacta se deduplica. La confirmación declara intención de asistir, solo se solicita si aún no ocurrió y la falta de respuesta conserva la reserva; no se aplica a clases recurrentes.
-4. [ ] D01: definir la presentación y el tratamiento operativo de la notificación posterior al inicio, la asociación histórica de cuentas y el flujo de autoregistro opcional. La mecánica técnica de enlaces y emails queda pendiente sin reabrir sus reglas de negocio aprobadas.
+4. [ ] D01: queda definir la presentación y el tratamiento operativo del aviso posterior al inicio. Ya aprobados registro autónomo, invitación de ficha por 48 h de un solo uso/revocable, recuperación por email de 30 min y bloqueo de vínculos conflictivos sin herramienta de fusión. La mecánica técnica queda para implementación.
 5. [x] D02: cancelar una clase con abono antes del inicio libera solo esa fecha, conserva horarios fijos y no genera recuperación ni devolución automáticas; desde el inicio la dueña registra ausencia cuando corresponde. Siguen pendientes reprogramación autenticada, cambio de horario fijo y clases sueltas.
 6. [x] D04: inscripción pendiente ocupa lugares fijos, cobro registrado activa el abono y anulación manual por falta de pago o inasistencia libera los lugares. Sin vencimiento automático al inicio de la primera clase.
 7. [x] D06: aprobado mes desde alta, ajuste al último día si no existe fecha equivalente, renovación anticipada desde vencimiento y tardía desde pago, conservación manual del lugar sin asistencia hasta renovar. Aprobado que el vencimiento sea el primer día sin cobertura, sin depender de la hora de pago. Aprobado conservar el día de referencia al renovar sin interrupción y reiniciarlo con el día de pago al renovar tarde. Aprobado el regreso tras baja mediante nueva inscripción sujeta a cupo, conservando cliente, cuenta e historial. Aprobadas las listas semanales con “Pendiente de renovación”, sin asistencia hasta renovar ni duplicación o pérdida de cancelaciones y suspensiones al regenerar. D06 cerrada en este documento.
