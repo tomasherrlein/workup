@@ -2,7 +2,7 @@
 
 ## Estado, alcance y línea de base
 
-**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02, los detalles de ajustes de D03 y las decisiones D07–D08 permanecen **Pendientes**. D06 está **Aprobada**, incluido el ciclo de abono, la resolución manual del vencimiento y las listas semanales. D04 está **Aprobada con liberación manual de cupos**.
+**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02, los detalles de ajustes de D03 y la decisión D08 permanecen **Pendientes**. D07 está **Aprobada para consecuencias económicas externas y conservación de cobros**. D06 está **Aprobada**, incluido el ciclo de abono, la resolución manual del vencimiento y las listas semanales. D04 está **Aprobada con liberación manual de cupos**.
 
 **Contexto:** WorkUp es un caso ficticio. Las decisiones se acuerdan para el proyecto con criterios realistas y simples; la dueña es un rol del sistema, no una entrevistada real.
 
@@ -22,7 +22,7 @@
 | D04 | Inscripción pendiente y cupos | La inscripción pendiente ocupa los lugares fijos; el cobro activa el abono. Si no paga o no se presenta, la dueña anula la inscripción y libera los lugares, sin vencimiento automático al inicio. | Aprobada |
 | D05 | Notificaciones | Al reservar un turno individual se envía inmediatamente un email con sus detalles y el enlace privado; 24 horas antes se envía un recordatorio con ese mismo enlace, sujeto a las reglas aprobadas de confirmación y deduplicación. La dueña puede compartir manualmente el enlace vigente. Clases con abono sin recordatorios ni confirmación; clases sueltas con recordatorio por email 24 h antes; suspensión con email inmediato a los anotados. Abonos: email 3 días antes y al vencer si no renovó, sin insistencia diaria ni liberación automática. | Reglas aprobadas |
 | D06 | Vencimiento y renovación | Un mes desde el alta del abono; renovación anticipada desde el vencimiento y tardía desde el pago. El lugar se conserva hasta resolución manual; la lista muestra “Pendiente de renovación” sin habilitar asistencia y se regenera sin duplicar ni borrar cancelaciones o suspensiones. | Aprobada |
-| D07 | Consecuencias financieras | Mantener el registro trazable de cobros; las políticas de depósitos, cobro, reintegro, traslado y penalidades quedan pendientes y fuera de WorkUp, a cargo de la dueña. | Pendiente |
+| D07 | Consecuencias financieras | Cancelar no genera devolución, crédito ni penalización automáticos y no borra cobros. Las señas y los acuerdos económicos los gestiona la dueña fuera de WorkUp. | Aprobada |
 | D08 | Capacidades y solapamientos | Validar una combinación de capacidad de servicio, trabajadora, puesto y negocio antes de reservar. | Pendiente |
 
 ---
@@ -324,27 +324,25 @@ Los avisos se rigen por D05: email 3 días antes y al vencer si no renovó, sin 
 
 ## D07 — Cancelaciones, pagos, reintegros y ausencias
 
-**Estado:** **Pendiente**.
+**Estado:** **Alcance aprobado en este documento; sin modificar los RF ni el SRS**.
 
 **Evidencia actual.** RF 10 indica que una falta con abono pierde la clase; RF 12 establece que una clase suspendida no se recupera ni devuelve dinero y que la clase suelta se paga al llegar; RF 17 y RF 18 liberan turnos o lugares, pero no detallan consecuencias de una atención o clase suelta ya pagada. RF 5 registra pagos, sin política de reintegro.
 
-**Alcance pendiente.** La cancelación directa de un turno individual antes de su inicio, aprobada en D02, libera el horario pero **no decide** reintegros, traslados, penalidades ni cobros. No hay un corte de dos horas aprobado o propuesto para esa cancelación individual.
+**Alcance aprobado.** Cancelar no genera automáticamente devoluciones, créditos ni penalizaciones. Los cobros registrados se conservan: cancelar no los borra ni modifica. La cancelación directa de un turno individual antes de su inicio, aprobada en D02, libera el horario pero **no decide** reintegros, traslados, penalidades ni cobros. No hay un corte de dos horas aprobado o propuesto para esa cancelación individual.
 
 Las políticas de depósitos, cobro, reintegro, traslado y aplicación de penalidades quedan fuera de alcance de WorkUp y son gestionadas por la dueña fuera del sistema. Esto no elimina el registro de cobros ya previsto por los RF: cuando la dueña registre un cobro u otro movimiento admitido, conserva la trazabilidad requerida por D03 y RF 13. No se aprueba por esta propuesta una política financiera nueva ni un mecanismo de ejecución automática.
 
-**Rationale.** Separa la disponibilidad del turno de una consecuencia financiera aún no decidida y conserva el registro histórico de cobros sin convertir WorkUp en el gestor de la política o su ejecución.
+**Justificación.** Separa la disponibilidad del turno de los acuerdos económicos externos y conserva el registro histórico de cobros sin convertir WorkUp en el gestor de señas, devoluciones, créditos o penalizaciones. No modifica las reglas de cobro y activación de abonos de D03, D04 y D06.
 
 **Ejemplos de alcance.**
 
 - Normal: una clienta cancela directamente un turno individual antes de su inicio; el horario se libera y la decisión financiera, si existiera, queda a cargo de la dueña fuera de WorkUp.
 - Borde: una notificación posterior al inicio puede llevar a que la dueña registre una ausencia; no determina por sí sola un cobro, reintegro, penalidad ni cambio de asistencia.
-- Borde: se suspende una clase fija de abono; la ocurrencia queda suspendida y no se marca a ningún alumno como ausente. Las consecuencias financieras continúan sujetas a las reglas vigentes y a la decisión pendiente.
+- Borde: se suspende una clase fija de abono; la ocurrencia queda suspendida y no se marca a ningún alumno como ausente. No se ejecuta automáticamente una devolución ni se borra el cobro del abono; los acuerdos económicos se gestionan fuera de WorkUp.
 
-**Subdecisiones pendientes para discusión posterior.**
+**Límites del acuerdo.** No se incorpora una política económica externa concreta ni un módulo de reintegros. Esta decisión no aprueba las propuestas pendientes de ajustes y correcciones de cobros de D03. Las reglas de cancelación por ocurrencia y conservación del abono de D02 permanecen vigentes en este documento.
 
-- Definir, fuera de WorkUp, si una cancelación, ausencia o suspensión genera reintegro, traslado, depósito, cobro o penalidad y bajo qué criterio.
-- Ratificar o modificar las exclusiones de recuperación y devolución de abonos ya previstas en RF 10 y RF 12.
-- Definir qué movimientos financieros ya admitidos debe registrar WorkUp para preservar los cobros originales y su trazabilidad, sin ejecutar la política financiera.
+- Borde: una clienta había pagado y cancela. El cobro original sigue registrado; WorkUp no crea un crédito, un reintegro ni una penalización por esa acción.
 
 ---
 
@@ -390,7 +388,7 @@ Una reserva del cliente o cargada por la dueña aplica estas validaciones de for
 5. [x] D02: cancelar una clase con abono antes del inicio libera solo esa fecha, conserva horarios fijos y no genera recuperación ni devolución automáticas; desde el inicio la dueña registra ausencia cuando corresponde. Siguen pendientes reprogramación autenticada, cambio de horario fijo y clases sueltas.
 6. [x] D04: inscripción pendiente ocupa lugares fijos, cobro registrado activa el abono y anulación manual por falta de pago o inasistencia libera los lugares. Sin vencimiento automático al inicio de la primera clase.
 7. [x] D06: aprobado mes desde alta, ajuste al último día si no existe fecha equivalente, renovación anticipada desde vencimiento y tardía desde pago, conservación manual del lugar sin asistencia hasta renovar. Aprobado que el vencimiento sea el primer día sin cobertura, sin depender de la hora de pago. Aprobado conservar el día de referencia al renovar sin interrupción y reiniciarlo con el día de pago al renovar tarde. Aprobado el regreso tras baja mediante nueva inscripción sujeta a cupo, conservando cliente, cuenta e historial. Aprobadas las listas semanales con “Pendiente de renovación”, sin asistencia hasta renovar ni duplicación o pérdida de cancelaciones y suspensiones al regenerar. D06 cerrada en este documento.
-8. [ ] D07: definir fuera de WorkUp las consecuencias financieras y conservar en WorkUp el registro trazable de cobros ya previsto.
+8. [x] D07: aprobada la gestión externa de señas y acuerdos económicos; cancelar no genera devoluciones, créditos ni penalizaciones automáticos ni borra los cobros registrados.
 9. [x] D03: aprobados cobro y asistencia independientes, concepto y referencia concretos, cobro por abono sin duplicación por clase y respeto del precio pactado. Ajustes, descuentos y reintegros continúan pendientes.
 10. [ ] D08: validar las restricciones de capacidad que se aplican a reservas y atenciones sin turno.
 11. [x] D05: aprobadas clases con abono sin recordatorio ni confirmación, clase suelta con email 24 h antes sin pedir confirmación y suspensión con email inmediato a los anotados. También aprobados email de abono 3 días antes y al vencer si no renovó, sin mensajes diarios. Aprobada también la inscripción a clase suelta con menos de 24 h: único email inmediato con fecha y horario, sin confirmación ni recordatorio adicional.
