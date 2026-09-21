@@ -118,7 +118,11 @@ Cada tarea indica los RF que cubre, lo que debe quedar funcionando y las reglas 
   - Evidencia: TDD RED 32/33 con `NotImplementedException` (filtro `Catalog`), GREEN 33/33; suite 83/83; build 0 errores, 0 advertencias. Ejecución: menú sin Clases ni Abonos hasta crear un servicio con cupo > 1 (la barra inferior completa con Clientes), precio 0 rechazado con mensaje, edición, archivo y reactivación 302, precio de abono por frecuencia alta y baja. Verificación del orquestador: `dotnet test` 83/83.
   - Commits: `3b6e1ce` reglas (653) · `f587a58` repositorios (148) · `1a84c79` web y navegación (435).
   - Nota: la consulta `HasBookingHistoryAsync` lee `Appointments` y `GridClasses` desde el repositorio de Catalog porque sus repositorios propios llegan en T04 y T08; si esas tareas agregan reglas de archivo, revisarla.
-- [ ] **T03 · Trabajadoras, horarios y pausas** (RF-03) [T01]. CUIL único por negocio; fin posterior al inicio; pausas dentro del horario del día.
+- [x] **T03 · Trabajadoras, horarios y pausas** (RF-03) [T01]. CUIL único por negocio; fin posterior al inicio; pausas dentro del horario del día.
+  - Ruta: agente escritor. Rama `feat/workup-mvp-03-trabajadoras`.
+  - Evidencia: TDD RED 28/28 (`CuilFormat`, `WeeklyScheduleRules`) y 24/24 (`StaffService`) con `NotImplementedException`, luego GREEN; suite 135/135; build 0 errores, 0 advertencias. Ejecución: alta lunes a viernes 9–20 con pausa 13–16, edición, CUIL duplicado, pausa fuera de horario y fin antes del inicio rechazados con mensaje, archivo y reactivación. Verificación del orquestador: build y `dotnet test` 135/135.
+  - Commits: `9fd481c` reglas y servicio (1.050) · `6f85c50` repositorio (196) · `af96f53` web (381).
+  - Notas: el formulario ofrece 2 pausas por día (funciona sin JavaScript; el dominio admite cualquier cantidad). CUIL validado solo por formato de 11 dígitos. Teléfono enmascarado con `Formatting.MaskPhone` (últimos 4 dígitos). `WeeklyScheduleRules.IsAvailable` queda listo para T04 y T08.
 - [ ] **T04 · Grilla semanal** (RF-04) [T02, T03]. Clases de la grilla por día, horario, tipo de clase (cupo > 1) y profesora; se valida que la clase entre en el horario de la profesora y no se superponga con otra clase suya.
 - [ ] **T05 · Fichas de clientes** (RF 1, RF-11 observaciones) [T01]. Listado con búsqueda, alta (email único por negocio, teléfono y nombre obligatorios), detalle con observaciones de salud y notas, historial de turnos y cobros. Las observaciones nunca se muestran fuera del panel de la dueña.
 - [ ] **T06 · Gastos e insumos** (RF-13, RF-14) [T01]. Gastos por tipo y período. Insumos con existencia declarada y mínimo; alerta de reposición visible en la lista y en la navegación. La existencia solo cambia por declaración.
@@ -169,8 +173,8 @@ Cada tarea indica los RF que cubre, lo que debe quedar funcionando y las reglas 
 ## 6. Progreso
 
 - 2026-09-21: rama `feat/workup-mvp` creada desde `docs/nuevo-srs-rf` (incluye SRS v3.0). `design/paleta-verde` mergeada en la rama: `DESIGN.md` ya describe la paleta verde que usan los tokens de `wwwroot/css`.
-- Espejo en Engram: pendiente (el guardado de memoria falla en esta sesión por sesiones activas ambiguas).
+- Espejo en Engram: tópico `odd/workup-mvp/tasks` del proyecto `workup`, guardado con `engram save` por línea de comandos (el `mem_save` por MCP fallaba por sesiones ambiguas).
 
 ## 7. Próximo paso
 
-Definir con el usuario la estrategia de encadenamiento de PRs y lanzar T01 con un agente escritor.
+T04 (grilla semanal) en una rama nueva `feat/workup-mvp-04-grilla` creada desde `feat/workup-mvp-03-trabajadoras`.
