@@ -1,7 +1,9 @@
 using WorkUp.BusinessLogic.Abstractions;
 using WorkUp.BusinessLogic.Businesses;
+using WorkUp.BusinessLogic.Catalog;
 using WorkUp.Data;
 using WorkUp.Data.Businesses;
+using WorkUp.Data.Catalog;
 
 namespace WorkUp.Infrastructure;
 
@@ -39,6 +41,13 @@ public static class ServiceRegistration
         services.AddScoped<OwnerLoginService>();
         services.AddScoped<BusinessSettingsService>();
         services.AddScoped<ExpenseTypeService>();
+
+        // Catalog (T02)
+        services.AddScoped<IServiceRepository, SqlServiceRepository>();
+        services.AddScoped<IMembershipPriceRepository, SqlMembershipPriceRepository>();
+        services.AddScoped<CatalogService>();
+        services.AddScoped<MembershipPriceService>();
+        services.AddScoped<OwnerNavigationProvider>();
 
         return services;
     }

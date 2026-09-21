@@ -1,12 +1,19 @@
 @inject Microsoft.Extensions.Options.IOptions<WorkUpOptions> Options
+@inject OwnerNavigationProvider NavigationProvider
 @{
     Layout = "_Layout";
     var current = ViewContext.RouteData.Values["controller"] as string;
-    var sections = OwnerNavigation.Sections.ToList();
+    // Anonymous pages (Account/Login, Account/Register) render this same layout: keep the full section list for
+    // them, since there is no signed-in business yet to ask the catalog about.
+    var visibleSections = User.Identity?.IsAuthenticated == true
+        ? await NavigationProvider.VisibleSectionsAsync(User.GetBusinessId())
+        : OwnerNavigation.Sections;
+    var sections = visibleSections.ToList();
     if (Options.Value.Features.DevTools)
     {
         sections.Add(OwnerNavigation.DevTools);
     }
+    var bottomBarItems = OwnerNavigationProvider.BottomBarItems(visibleSections);
     string? CurrentFor(NavItem item) => string.Equals(item.Controller, current, StringComparison.OrdinalIgnoreCase) ? "page" : null;
 }
 <div class="owner-shell">
@@ -38,7 +45,7 @@
     </main>
 
     <nav class="bottom-bar" aria-label="Accesos rápidos">
-        @foreach (var item in sections.Where(s => s.InBottomBar))
+        @foreach (var item in bottomBarItems)
         {
             <a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon)<span>@item.Label</span></a>
         }
