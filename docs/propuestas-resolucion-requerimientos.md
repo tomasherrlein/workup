@@ -2,7 +2,7 @@
 
 ## Estado, alcance y línea de base
 
-**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02, los detalles de ajustes de D03 y las decisiones D07–D08 permanecen **Pendientes**. D06 tiene **Aprobado el ciclo de abono y la resolución manual del vencimiento**, con detalles de generación semanal pendientes. D04 está **Aprobada con liberación manual de cupos**.
+**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02, los detalles de ajustes de D03 y las decisiones D07–D08 permanecen **Pendientes**. D06 está **Aprobada**, incluido el ciclo de abono, la resolución manual del vencimiento y las listas semanales. D04 está **Aprobada con liberación manual de cupos**.
 
 **Contexto:** WorkUp es un caso ficticio. Las decisiones se acuerdan para el proyecto con criterios realistas y simples; la dueña es un rol del sistema, no una entrevistada real.
 
@@ -21,7 +21,7 @@
 | D03 | Cobros y asistencia | Cobro y asistencia independientes; cada cobro identifica el concepto concreto; se respeta el precio acordado y el abono no se cobra por cada clase. | Núcleo aprobado; ajustes pendientes |
 | D04 | Inscripción pendiente y cupos | La inscripción pendiente ocupa los lugares fijos; el cobro activa el abono. Si no paga o no se presenta, la dueña anula la inscripción y libera los lugares, sin vencimiento automático al inicio. | Aprobada |
 | D05 | Notificaciones | Al reservar un turno individual se envía inmediatamente un email con sus detalles y el enlace privado; 24 horas antes se envía un recordatorio con ese mismo enlace, sujeto a las reglas aprobadas de confirmación y deduplicación. La dueña puede compartir manualmente el enlace vigente. Clases con abono sin recordatorios ni confirmación; clases sueltas con recordatorio por email 24 h antes; suspensión con email inmediato a los anotados. Abonos: email 3 días antes y al vencer si no renovó, sin insistencia diaria ni liberación automática. | Reglas aprobadas |
-| D06 | Vencimiento y renovación | Un mes desde el alta del abono; renovación anticipada desde el vencimiento y tardía desde el pago. El lugar se conserva hasta resolución manual, pero no habilita asistencia sin renovar. | Núcleo aprobado; detalles pendientes |
+| D06 | Vencimiento y renovación | Un mes desde el alta del abono; renovación anticipada desde el vencimiento y tardía desde el pago. El lugar se conserva hasta resolución manual; la lista muestra “Pendiente de renovación” sin habilitar asistencia y se regenera sin duplicar ni borrar cancelaciones o suspensiones. | Aprobada |
 | D07 | Consecuencias financieras | Mantener el registro trazable de cobros; las políticas de depósitos, cobro, reintegro, traslado y penalidades quedan pendientes y fuera de WorkUp, a cargo de la dueña. | Pendiente |
 | D08 | Capacidades y solapamientos | Validar una combinación de capacidad de servicio, trabajadora, puesto y negocio antes de reservar. | Pendiente |
 
@@ -279,7 +279,7 @@ Una clase “suspendida” se diferencia de un mensaje “preparado” o “envi
 
 **Evidencia actual.** RF 5 cubre un mes desde el pago; RF 19 genera alumnos fijos solo con abono vigente y libera el lugar si no renovaron. RF 4 y RF 5 introducen inscripciones pendientes; no determinan cómo se coordinan vencimiento, aviso, una renovación tardía y semanas ya generadas. Tampoco precisan la semántica de “un mes” en límites de fecha, horario o meses de distinta duración.
 
-**Estado:** **Núcleo aprobado; detalles pendientes**.
+**Estado:** **Aprobada en este documento de propuestas; pendiente de incorporación a los RF y al SRS**.
 
 ### Reglas de negocio aprobadas
 
@@ -304,11 +304,17 @@ Esta decisión sustituye la propuesta anterior de liberación automática y requ
 - Borde: el abono está vencido y la dueña aún no resolvió; el lugar sigue retenido, pero el alumno necesita renovar antes de asistir.
 - Normal: la dueña da de baja una inscripción vencida y libera sus lugares para nuevas inscripciones.
 
-### Generación semanal y pendientes
+### Generación semanal aprobada
 
-La conservación de lugar debe distinguirse de la cobertura para asistir. No se aprobó todavía cómo reflejar un lugar retenido con abono vencido en las listas semanales; su generación no puede ofrecer ese lugar como libre ni habilitar asistencia sin renovación.
+- Si el alumno conserva su lugar fijo pero tiene el abono vencido, la lista semanal lo muestra como **“Pendiente de renovación”**. El lugar continúa ocupado y no puede ofrecerse a otra persona.
+- Ese estado no habilita a registrar asistencia hasta renovar el abono. Conservar un lugar no equivale a tener cobertura vigente.
+- Regenerar la lista no duplica inscripciones ni borra el historial, las cancelaciones o las suspensiones. No vuelve a activar una ocurrencia cancelada ni convierte una clase suspendida en ausencias.
 
-Se mantiene como propuesta pendiente que repetir la generación no duplique anotaciones ni borre historial, cancelaciones o suspensiones. Su coordinación con la renovación y la baja manual se definirá antes de actualizar RF 19.
+**Ejemplos de aceptación.**
+
+- Un alumno con abono vencido y lugar retenido aparece como “Pendiente de renovación”; para registrar su asistencia debe renovarse primero el abono.
+- Generar dos veces la misma semana no agrega dos veces al mismo alumno a una clase.
+- Si una ocurrencia fue cancelada o una clase fue suspendida, regenerar conserva ese estado.
 
 **Regreso tras baja aprobado.** La baja termina la inscripción a los horarios fijos y libera sus lugares; no elimina la ficha del cliente, su cuenta ni su historial. Si vuelve, usa la misma cuenta si ya tenía una y realiza una nueva inscripción en horarios con cupo, con un nuevo abono. No tiene garantizados sus antiguos horarios. Si la inscripción todavía conserva sus lugares y solo venció el abono, corresponde renovar, no crear una inscripción nueva.
 
@@ -383,7 +389,7 @@ Una reserva del cliente o cargada por la dueña aplica estas validaciones de for
 4. [ ] D01: definir la presentación y el tratamiento operativo de la notificación posterior al inicio, la asociación histórica de cuentas y el flujo de autoregistro opcional. La mecánica técnica de enlaces y emails queda pendiente sin reabrir sus reglas de negocio aprobadas.
 5. [x] D02: cancelar una clase con abono antes del inicio libera solo esa fecha, conserva horarios fijos y no genera recuperación ni devolución automáticas; desde el inicio la dueña registra ausencia cuando corresponde. Siguen pendientes reprogramación autenticada, cambio de horario fijo y clases sueltas.
 6. [x] D04: inscripción pendiente ocupa lugares fijos, cobro registrado activa el abono y anulación manual por falta de pago o inasistencia libera los lugares. Sin vencimiento automático al inicio de la primera clase.
-7. [x] D06: aprobado mes desde alta, ajuste al último día si no existe fecha equivalente, renovación anticipada desde vencimiento y tardía desde pago, conservación manual del lugar sin asistencia hasta renovar. Aprobado que el vencimiento sea el primer día sin cobertura, sin depender de la hora de pago. Aprobado conservar el día de referencia al renovar sin interrupción y reiniciarlo con el día de pago al renovar tarde. Aprobado el regreso tras baja mediante nueva inscripción sujeta a cupo, conservando cliente, cuenta e historial. Solo queda pendiente la generación semanal de D06.
+7. [x] D06: aprobado mes desde alta, ajuste al último día si no existe fecha equivalente, renovación anticipada desde vencimiento y tardía desde pago, conservación manual del lugar sin asistencia hasta renovar. Aprobado que el vencimiento sea el primer día sin cobertura, sin depender de la hora de pago. Aprobado conservar el día de referencia al renovar sin interrupción y reiniciarlo con el día de pago al renovar tarde. Aprobado el regreso tras baja mediante nueva inscripción sujeta a cupo, conservando cliente, cuenta e historial. Aprobadas las listas semanales con “Pendiente de renovación”, sin asistencia hasta renovar ni duplicación o pérdida de cancelaciones y suspensiones al regenerar. D06 cerrada en este documento.
 8. [ ] D07: definir fuera de WorkUp las consecuencias financieras y conservar en WorkUp el registro trazable de cobros ya previsto.
 9. [x] D03: aprobados cobro y asistencia independientes, concepto y referencia concretos, cobro por abono sin duplicación por clase y respeto del precio pactado. Ajustes, descuentos y reintegros continúan pendientes.
 10. [ ] D08: validar las restricciones de capacidad que se aplican a reservas y atenciones sin turno.
