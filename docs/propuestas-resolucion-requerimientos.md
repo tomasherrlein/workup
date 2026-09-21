@@ -131,7 +131,10 @@ La recomendación previa de vincular automáticamente una ficha histórica al ve
 
 **Reglas aceptadas en la conversación.**
 
-- Cobro y asistencia se registran por separado: se puede pagar antes o después de asistir. Ningún registro modifica automáticamente el otro.
+- Cobro y asistencia se mantienen como información independiente: se puede pagar antes o después de asistir. Registrar únicamente uno no modifica automáticamente el otro; el flujo habitual permite cargar ambos juntos, sin exigir dos operaciones.
+- Para un turno individual o una clase suelta, la acción **“Finalizar atención”** presenta la asistencia **“Asistió”**, el concepto y el importe acordado, con la opción **“Registrar cobro ahora”**. Al guardar, registra asistencia y cobro si se eligió cobrar, o solo asistencia si no se eligió.
+- Si la atención ya estaba pagada, muestra el pago existente y no genera otro cobro al finalizarla. Se conserva la posibilidad de registrar solo un cobro, sin marcar asistencia.
+- Para clases con abono se registra la asistencia por clase; el cobro se carga por separado una vez por período, no por cada asistencia.
 - Cada cobro identifica qué se paga y el turno, atención sin turno, clase suelta o abono concreto al que corresponde. No basta con un importe y el nombre del cliente.
 - El cobro de un abono corresponde a su período; no se duplica por cada clase cubierta.
 - Se respeta el precio acordado al reservar o contratar el abono. Las nuevas tarifas se aplican a acuerdos posteriores, no retroactivamente. Para una atención sin reserva, se conserva el importe acordado para esa atención.
@@ -155,7 +158,10 @@ La recomendación previa de vincular automáticamente una ficha histórica al ve
 
 **Ejemplos de aceptación propuestos.**
 
-- Normal: al inscribir a Lucía en una clase suelta se captura el importe acordado; al cobrarla al llegar y registrar la asistencia, ambos eventos quedan enlazados a esa inscripción y conservan sus momentos distintos.
+- Normal: Lucía finaliza un turno individual y paga el precio acordado. La dueña usa “Finalizar atención” con “Registrar cobro ahora” y guarda una sola vez; quedan registrados la asistencia y el cobro, como datos independientes vinculados a ese turno.
+- Borde: Lucía asiste pero paga después. La dueña guarda solo la asistencia y posteriormente registra el cobro sin repetirla.
+- Borde: la clase suelta ya estaba pagada. Al finalizarla se muestra el pago previo y solo se registra la asistencia, sin duplicar el ingreso.
+- Normal: se registra la asistencia a una clase con abono; no se genera un cobro adicional por esa clase.
 - Normal: una promoción acuerda $8.000 para una reserva cuando el tarifario vigente sugería $10.000; el cobro posterior usa $8.000 con el motivo “promoción”, aunque luego cambie el tarifario.
 - Borde: se registra una atención sin turno; el cobro puede no tener reserva previa, pero conserva el motivo y el vínculo con la atención creada conforme a RF 11.
 - Borde: se corrige un cobro duplicado; se registra un reintegro manual enlazado al original, en vez de borrar el ingreso.
