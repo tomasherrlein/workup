@@ -2,7 +2,7 @@
 
 ## Estado, alcance y línea de base
 
-**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02, los detalles de ajustes de D03 y las decisiones D07–D08 permanecen **Pendientes**. D06 tiene **Aprobado el ciclo de abono y la resolución manual del vencimiento**, con detalles de generación y límites horarios pendientes. D04 está **Aprobada con liberación manual de cupos**.
+**Estado:** documento de propuesta; D01 está **Aprobada para el enlace privado de turnos individuales** y D02 está **Parcialmente aprobada para la cancelación de turnos individuales y de clases con abono**. D03 tiene **Aprobado el núcleo de cobros, asistencia y precio acordado**. D05 tiene **Aprobadas las notificaciones de turnos, clases y vencimiento de abonos**, incluido el caso de inscripción tardía a clase suelta. Las demás reglas de D02, los detalles de ajustes de D03 y las decisiones D07–D08 permanecen **Pendientes**. D06 tiene **Aprobado el ciclo de abono y la resolución manual del vencimiento**, con detalles de generación y encadenamiento mensual pendientes. D04 está **Aprobada con liberación manual de cupos**.
 
 **Contexto:** WorkUp es un caso ficticio. Las decisiones se acuerdan para el proyecto con criterios realistas y simples; la dueña es un rol del sistema, no una entrevistada real.
 
@@ -271,7 +271,7 @@ Una clase “suspendida” se diferencia de un mensaje “preparado” o “envi
 
 **Caso aprobado de inscripción tardía.** Una alumna se inscribe a una clase suelta que comienza en dos horas: recibe un único email con fecha y horario al inscribirse, sin solicitud de confirmación ni otro recordatorio.
 
-**Dependencia pendiente.** La hora exacta de vencimiento del abono continúa pendiente en D06; no reabre los canales ni la frecuencia de avisos aprobados en D05.
+**Criterio de vencimiento aprobado.** Los avisos usan la fecha de vencimiento de D06: es el primer día sin cobertura. La hora del pago no determina el vencimiento ni cambia la frecuencia aprobada de avisos.
 
 ---
 
@@ -285,6 +285,7 @@ Una clase “suspendida” se diferencia de un mensaje “preparado” o “envi
 
 - El abono dura **un mes desde su alta**, que ocurre cuando la dueña registra el cobro y lo activa según D04. No comienza al crear la ficha ni la inscripción pendiente.
 - Vence en el mismo número de día del mes siguiente. Si ese día no existe, se utiliza el último día de ese mes; no se reemplaza el mes por un plazo fijo de 30 días.
+- La **fecha de vencimiento es el primer día sin cobertura**: el período incluye la fecha de alta y llega hasta el día anterior al vencimiento inclusive. Se trabaja por fechas, sin depender de la hora a la que se pagó.
 - La renovación anticipada comienza al vencimiento del período actual, no el día del pago: no se pierden días por pagar antes.
 - Al vencer, el abono queda **vencido**, sin renovación automática. El lugar fijo se conserva pendiente de resolución y no se ofrece a otra persona.
 - La dueña registra la renovación o da de baja la inscripción y libera el lugar. Mientras no resuelva, el lugar permanece retenido.
@@ -295,7 +296,7 @@ Esta decisión sustituye la propuesta anterior de liberación automática y requ
 
 ### Ejemplos de aceptación
 
-- Normal: alta el 12 de abril; vencimiento el 12 de mayo. Un pago anticipado el 10 de mayo inicia la siguiente cobertura al vencer la actual, el 12 de mayo.
+- Normal: alta el 12 de abril; cobertura hasta el 11 de mayo inclusive y vencimiento el 12 de mayo. Desde el 12 necesita renovar para asistir. Un pago anticipado el 10 de mayo inicia la siguiente cobertura el 12 de mayo, sin huecos ni días duplicados.
 - Borde: alta el 31 de enero; vencimiento el último día de febrero de ese año.
 - Borde: vence el 12 de mayo y paga el 15 de mayo; la nueva cobertura comienza el 15 de mayo y vence el 15 de junio. Los días intermedios no quedan cubiertos retroactivamente.
 - Borde: el abono está vencido y la dueña aún no resolvió; el lugar sigue retenido, pero el alumno necesita renovar antes de asistir.
@@ -307,7 +308,6 @@ La conservación de lugar debe distinguirse de la cobertura para asistir. No se 
 
 Se mantiene como propuesta pendiente que repetir la generación no duplique anotaciones ni borre historial, cancelaciones o suspensiones. Su coordinación con la renovación y la baja manual se definirá antes de actualizar RF 19.
 
-- Definir la hora exacta y la inclusión del día de vencimiento; las fechas aprobadas no resuelven ese límite horario.
 - Precisar el encadenamiento de renovaciones tras un vencimiento ajustado al último día del mes.
 - Resolver el regreso tras una baja que ya liberó el lugar, sin confundirlo con la renovación tardía de una inscripción aún retenida.
 Los avisos se rigen por D05: email 3 días antes y al vencer si no renovó, sin mensajes diarios ni liberación automática del lugar.
@@ -381,7 +381,7 @@ Una reserva del cliente o cargada por la dueña aplica estas validaciones de for
 4. [ ] D01: definir la presentación y el tratamiento operativo de la notificación posterior al inicio, la asociación histórica de cuentas y el flujo de autoregistro opcional. La mecánica técnica de enlaces y emails queda pendiente sin reabrir sus reglas de negocio aprobadas.
 5. [x] D02: cancelar una clase con abono antes del inicio libera solo esa fecha, conserva horarios fijos y no genera recuperación ni devolución automáticas; desde el inicio la dueña registra ausencia cuando corresponde. Siguen pendientes reprogramación autenticada, cambio de horario fijo y clases sueltas.
 6. [x] D04: inscripción pendiente ocupa lugares fijos, cobro registrado activa el abono y anulación manual por falta de pago o inasistencia libera los lugares. Sin vencimiento automático al inicio de la primera clase.
-7. [x] D06: aprobado mes desde alta, ajuste al último día si no existe fecha equivalente, renovación anticipada desde vencimiento y tardía desde pago, conservación manual del lugar sin asistencia hasta renovar. Quedan pendientes límites horarios, generación semanal y regreso tras baja.
+7. [x] D06: aprobado mes desde alta, ajuste al último día si no existe fecha equivalente, renovación anticipada desde vencimiento y tardía desde pago, conservación manual del lugar sin asistencia hasta renovar. Aprobado que el vencimiento sea el primer día sin cobertura, sin depender de la hora de pago. Quedan pendientes encadenamiento mensual, generación semanal y regreso tras baja.
 8. [ ] D07: definir fuera de WorkUp las consecuencias financieras y conservar en WorkUp el registro trazable de cobros ya previsto.
 9. [x] D03: aprobados cobro y asistencia independientes, concepto y referencia concretos, cobro por abono sin duplicación por clase y respeto del precio pactado. Ajustes, descuentos y reintegros continúan pendientes.
 10. [ ] D08: validar las restricciones de capacidad que se aplican a reservas y atenciones sin turno.
