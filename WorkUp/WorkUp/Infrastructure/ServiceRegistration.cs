@@ -6,6 +6,7 @@ using WorkUp.BusinessLogic.Clients;
 using WorkUp.BusinessLogic.Staff;
 using WorkUp.BusinessLogic.Expenses;
 using WorkUp.BusinessLogic.Supplies;
+using WorkUp.BusinessLogic.Scheduling;
 using WorkUp.Data;
 using WorkUp.Data.Businesses;
 using WorkUp.Data.Catalog;
@@ -15,6 +16,8 @@ using WorkUp.Data.DemoData;
 using WorkUp.Data.Staff;
 using WorkUp.Data.Expenses;
 using WorkUp.Data.Supplies;
+using WorkUp.Data.Scheduling;
+using Microsoft.Extensions.Hosting;
 
 namespace WorkUp.Infrastructure;
 
@@ -24,14 +27,18 @@ namespace WorkUp.Infrastructure;
 /// </summary>
 public static class ServiceRegistration
 {
-    public static IServiceCollection AddWorkUp(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddWorkUp(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        IHostEnvironment environment)
     {
+        var section = configuration.GetSection("WorkUp");
+        var options = section.Get<WorkUpOptions>() ?? new WorkUpOptions();
+        PublicAppointmentUrlRules.ValidateBaseUrl(options.PublicBaseUrl, environment.IsDevelopment());
+
         var connectionString = configuration.GetConnectionString("WorkUp")
             ?? throw new InvalidOperationException("Missing connection string \"WorkUp\" in appsettings.json.");
-
-        var section = configuration.GetSection("WorkUp");
         services.Configure<WorkUpOptions>(section);
-        var options = section.Get<WorkUpOptions>() ?? new WorkUpOptions();
 
         // Infrastructure
         services.AddSingleton(new DatabaseMigrator(connectionString));
@@ -45,6 +52,7 @@ public static class ServiceRegistration
             sp.GetRequiredService<IClock>()));
         services.AddDataProtection();
         services.AddSingleton<ILinkTokenProtector, DataProtectionLinkTokenProtector>();
+        services.AddSingleton<IPublicAppointmentUrlBuilder, PublicAppointmentUrlBuilder>();
 
         // Modules: add repositories and services below as each task introduces them.
 
@@ -82,6 +90,13 @@ public static class ServiceRegistration
         services.AddScoped<ExpenseService>();
         services.AddScoped<ISupplyRepository, SqlSupplyRepository>();
         services.AddScoped<SupplyService>();
+
+        // Public individual reservations (T09)
+        services.AddScoped<SqlPublicBookingRepository>();
+        services.AddScoped<IPublicBookingRepository>(sp => sp.GetRequiredService<SqlPublicBookingRepository>());
+        services.AddScoped<IPublicBookingBrowseRepository>(sp => sp.GetRequiredService<SqlPublicBookingRepository>());
+        services.AddScoped<BookingService>();
+        services.AddScoped<PublicBookingBrowseService>();
 
         return services;
     }

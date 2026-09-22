@@ -53,7 +53,7 @@ if (seedDemoData)
 
 builder.Services.AddControllersWithViews(options =>
     options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute()));
-builder.Services.AddWorkUp(builder.Configuration);
+builder.Services.AddWorkUp(builder.Configuration, builder.Environment);
 builder.Services.AddWorkUpAuthentication();
 
 var app = builder.Build();

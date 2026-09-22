@@ -1,0 +1,19 @@
+@model int
+@{
+    var labels = new[] { "Servicio", "Trabajadora", "Día y horario", "Tus datos", "Confirmación" };
+}
+<ol class="steps" aria-label="Pasos para reservar">
+    @for (var index = 0; index < labels.Length; index++)
+    {
+        <li>
+            @if (index + 1 == Model)
+            {
+                <span aria-current="step">@(index + 1). @labels[index]</span>
+            }
+            else
+            {
+                <span>@(index + 1). @labels[index]</span>
+            }
+        </li>
+    }
+</ol>

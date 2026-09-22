@@ -5,8 +5,29 @@ using WorkUp.Domain.Enums;
 
 namespace WorkUp.Data.Scheduling;
 
-public sealed class SqlPublicBookingRepository(DbSession session) : SqlRepositoryBase(session), IPublicBookingRepository
+public sealed class SqlPublicBookingRepository(DbSession session) : SqlRepositoryBase(session), IPublicBookingRepository, IPublicBookingBrowseRepository
 {
+    public async Task<IReadOnlyList<Service>> ListActiveIndividualServicesAsync(int businessId, CancellationToken ct = default) =>
+        await QueryAsync(
+            "SELECT Id, BusinessId, Name, Price, DurationMinutes, MaxCapacity, IsActive FROM Services WHERE BusinessId = @businessId AND IsActive = 1 AND MaxCapacity = 1 ORDER BY Name",
+            MapService,
+            p => p.AddValue("@businessId", businessId),
+            ct);
+
+    public async Task<IReadOnlyList<PublicBookingWorkerOption>> ListActiveWorkersAsync(int businessId, CancellationToken ct = default) =>
+        await QueryAsync(
+            "SELECT Id, CONCAT(FirstName, N' ', LastName) AS FullName FROM Workers WHERE BusinessId = @businessId AND IsActive = 1 ORDER BY LastName, FirstName",
+            MapPublicWorker,
+            p => p.AddValue("@businessId", businessId),
+            ct);
+
+    public Task<PublicBookingWorkerOption?> GetActiveWorkerAsync(int businessId, int workerId, CancellationToken ct = default) =>
+        QuerySingleOrDefaultAsync(
+            "SELECT Id, CONCAT(FirstName, N' ', LastName) AS FullName FROM Workers WHERE Id = @workerId AND BusinessId = @businessId AND IsActive = 1",
+            MapPublicWorker,
+            p => p.AddValue("@workerId", workerId).AddValue("@businessId", businessId),
+            ct);
+
     public Task<Worker?> LockActiveWorkerAsync(int businessId, int workerId, CancellationToken ct = default) =>
         QuerySingleOrDefaultAsync(
             """
@@ -188,6 +209,9 @@ public sealed class SqlPublicBookingRepository(DbSession session) : SqlRepositor
                 .AddValue("@bodyHtml", notification.BodyHtml).AddValue("@dedupKey", notification.DedupKey)
                 .AddValue("@status", notification.Status).AddValue("@createdAt", notification.CreatedAt),
             ct);
+
+    private static PublicBookingWorkerOption MapPublicWorker(SqlDataReader reader) =>
+        new(reader.Get<int>("Id"), reader.Get<string>("FullName"));
 
     private static Worker MapWorker(SqlDataReader reader) => new()
     {

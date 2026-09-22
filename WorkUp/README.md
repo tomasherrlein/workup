@@ -12,6 +12,7 @@ dotnet run --project WorkUp/WorkUp --launch-profile https
 
 - La primera vez crea la base `WorkUp` y aplica los scripts de `WorkUp.Data/Sql`. Si tu SQL Server no es LocalDB, cambiá `ConnectionStrings:WorkUp` en `WorkUp/appsettings.json` (por ejemplo `Server=.\SQLEXPRESS;Database=WorkUp;Trusted_Connection=True;TrustServerCertificate=True`).
 - En desarrollo están activas las herramientas de prueba (`WorkUp:Features:DevTools`): los emails no se envían, quedan en la bandeja de salida.
+- Configurá `WorkUp:PublicBaseUrl` con la URL absoluta y confiable que se incluirá en los enlaces privados. Fuera de `Development` debe ser HTTPS y no puede apuntar a loopback; por ejemplo, definí `WorkUp__PublicBaseUrl=https://reservas.example.com` en el entorno del despliegue. En `Development` se permite `localhost` por HTTP o HTTPS. La aplicación valida esto al iniciar y nunca deriva el dominio del encabezado `Host` de la solicitud.
 - Pruebas: `dotnet test WorkUp/WorkUp.sln`.
 
 ### Semilla local de datos de demostración (T07)

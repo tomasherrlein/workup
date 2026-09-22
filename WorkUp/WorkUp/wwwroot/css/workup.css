@@ -513,6 +513,15 @@ a:hover { color: var(--pine-deep); }
   background: var(--pine-wash);
 }
 
+/* ---------- Public individual booking ---------- */
+
+.public-booking h1 { margin-bottom: var(--space-sm); }
+.public-booking > p { margin-bottom: var(--space-lg); }
+.public-booking .public-date-form { margin-top: var(--space-lg); }
+.public-booking-summary { margin-top: var(--space-lg); padding-bottom: var(--space-md); border-bottom: 1px solid var(--rule); }
+.public-slots { margin-top: var(--space-md); }
+.public-empty-state .choice { margin-top: var(--space-md); text-align: left; }
+
 /* ---------- Rows (the agenda row is the signature component) ---------- */
 
 .rows { list-style: none; margin: 0; padding: 0; background: var(--sheet); }

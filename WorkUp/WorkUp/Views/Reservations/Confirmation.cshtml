@@ -1,0 +1,23 @@
+@model PublicBookingConfirmationViewModel
+@{
+    ViewData["Title"] = "Reserva recibida";
+}
+<partial name="_BookingSteps" model="5" />
+<section class="public-booking" aria-labelledby="booking-title">
+    <h1 id="booking-title">Recibimos tu reserva</h1>
+    <div class="notice notice-success" role="status">
+        @Icons.Svg("check")
+        <p>La reserva quedó pendiente. Vas a recibir un email con los detalles y el enlace privado de este turno.</p>
+    </div>
+
+    <dl class="details public-booking-summary">
+        <dt>Estado</dt><dd><partial name="_StatusTag" model="StatusTag.For(BookingStatus.Pending)" /></dd>
+        <dt>Servicio</dt><dd>@Model.Confirmation.ServiceName</dd>
+        <dt>Trabajadora</dt><dd>@Model.Confirmation.WorkerName</dd>
+        <dt>Día</dt><dd>@Formatting.LongDate(Model.Confirmation.StartsAt)</dd>
+        <dt>Horario</dt><dd>@Formatting.Time(Model.Confirmation.StartsAt)</dd>
+        <dt>Precio</dt><dd>@Formatting.Money(Model.Confirmation.AgreedPrice)</dd>
+    </dl>
+    <p class="muted">Revisá tu email para consultar el turno y guardar el enlace privado.</p>
+    <a class="btn btn-secondary" asp-action="Index" asp-route-slug="@Model.Business.Slug">Volver a los servicios</a>
+</section>
