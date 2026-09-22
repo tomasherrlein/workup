@@ -132,7 +132,10 @@ Cada tarea indica los RF que cubre, lo que debe quedar funcionando y las reglas 
   - Ruta: agente escritor en `feat/workup-mvp-05-clientes`; corrección posterior por hallazgos de verificación independiente.
   - Evidencia: TDD RED 18/18 para formatos y luego 19/19 al sumar comportamiento de clientes; regresión de privacidad RED por ausencia de `ClientReference`. GREEN focalizado 30/30 y 12/12 tras corrección. Suite completa y spot-check del orquestador: 198/198. Build: 0 errores, 0 advertencias. Ejecución contra LocalDB: alta temporal de dueña, listado vacío, creación de ficha con observación de salud y detalle con historial de cobros vacío; `WorkUp.exe` finalizado. Verificación independiente corrigió aislamiento por `BusinessId` en todos los joins, pagos referenciados por anotación con `ClientId` nulo, DTO público sin datos privados y composición DI centralizada. `git diff --check` sin errores. Limitación: consultas SQL verificadas estructuralmente porque no existe fixture de integración SQL.
   - Commits: `d7c1ef3` reglas, servicio y pruebas · `8151782` repositorios SQL · `c92f63d` panel de fichas y DI.
-- [ ] **T06 · Gastos e insumos** (RF-13, RF-14) [T01]. Gastos por tipo y período. Insumos con existencia declarada y mínimo; alerta de reposición visible en la lista y en la navegación. La existencia solo cambia por declaración.
+- [x] **T06 · Gastos e insumos** (RF-13, RF-14) [T01]. Gastos por tipo y período. Insumos con existencia declarada y mínimo; alerta de reposición visible en la lista y en la navegación. La existencia solo cambia por declaración.
+  - Ruta: agente escritor en `feat/workup-mvp-06-gastos-insumos` y verificación independiente; corrección de bloqueos sobre fecha de negocio y precisión SQL.
+  - Evidencia: TDD RED 10/10 para reglas iniciales y 14/32 en regresiones de escala/rango; GREEN 16/16 y luego 32/32. `dotnet build WorkUp/WorkUp.sln`: 0 errores, 0 advertencias. Suite completa y spot-check del orquestador: 230/230. Runtime LocalDB: gasto decimal 1.500,50, declaración de insumo 0,50 bajo mínimo 1,00, alerta “Reponer” y badge 1 en Insumos; proceso terminado. Verificación independiente PASS: consultas aisladas por negocio, reloj `IClock`, límites DECIMAL(12,2) y DECIMAL(10,2) en negocio antes de persistir. `git diff --check` sin errores (advertencias LF→CRLF). Limitación: sin fixture SQL de integración; consultas revisadas estructuralmente. Los datos de prueba persisten en LocalDB local.
+  - Commit: `a790182` (975 líneas autorales; gasto e insumo comparten indicador en navegación y composición de servicios, una unidad funcional coherente; supera la referencia de 400 líneas sin recortar controles o pruebas).
 - [ ] **T07 · Datos de demostración** [T02–T06]. Semilla idempotente de la peluquería (2 trabajadoras, servicios individuales) y el estudio de yoga (2 profesoras, tipos de clase, grilla), con usuarios de prueba documentados en `WorkUp/README.md`. Se amplía en T15 y T20 con abonos y cuentas.
 
 ### Fase 2: turnos individuales
@@ -184,4 +187,4 @@ Cada tarea indica los RF que cubre, lo que debe quedar funcionando y las reglas 
 
 ## 7. Próximo paso
 
-T06 (gastos e insumos) en una rama nueva `feat/workup-mvp-06-gastos-insumos` creada desde `feat/workup-mvp-05-clientes`.
+T07 (datos de demostración) en una rama nueva `feat/workup-mvp-07-demo` creada desde `feat/workup-mvp-06-gastos-insumos`.
