@@ -882,8 +882,9 @@ indica orden de ejecución.
 >
 > **Proceso:**
 > 1. Validar que el enlace esté vigente y no haya sido revocado.
-> 2. Mostrar únicamente la fecha y el horario del turno exacto al que se limita el enlace, sin historial,
->    clases, abonos, observaciones ni otros datos del cliente.
+> 2. Mostrar únicamente la fecha, el horario, el servicio y la trabajadora del turno exacto al que se limita
+>    el enlace, sin historial, clases, abonos, observaciones ni otros datos del cliente. La inclusión de servicio
+>    y trabajadora fue confirmada para la demo en T10; no habilita ver otras reservas.
 > 3. Antes del inicio del turno, permitir confirmar la intención de asistir (RF-08) o cancelar directamente
 >    (RF-22), sin plazo mínimo ni aprobación de la dueña.
 > 4. Desde el inicio del turno, permitir confirmar "No voy a asistir", lo que registra Ausente con constancia de
