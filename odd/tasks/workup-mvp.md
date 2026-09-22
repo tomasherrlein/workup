@@ -136,7 +136,11 @@ Cada tarea indica los RF que cubre, lo que debe quedar funcionando y las reglas 
   - Ruta: agente escritor en `feat/workup-mvp-06-gastos-insumos` y verificación independiente; corrección de bloqueos sobre fecha de negocio y precisión SQL.
   - Evidencia: TDD RED 10/10 para reglas iniciales y 14/32 en regresiones de escala/rango; GREEN 16/16 y luego 32/32. `dotnet build WorkUp/WorkUp.sln`: 0 errores, 0 advertencias. Suite completa y spot-check del orquestador: 230/230. Runtime LocalDB: gasto decimal 1.500,50, declaración de insumo 0,50 bajo mínimo 1,00, alerta “Reponer” y badge 1 en Insumos; proceso terminado. Verificación independiente PASS: consultas aisladas por negocio, reloj `IClock`, límites DECIMAL(12,2) y DECIMAL(10,2) en negocio antes de persistir. `git diff --check` sin errores (advertencias LF→CRLF). Limitación: sin fixture SQL de integración; consultas revisadas estructuralmente. Los datos de prueba persisten en LocalDB local.
   - Commit: `a790182` (975 líneas autorales; gasto e insumo comparten indicador en navegación y composición de servicios, una unidad funcional coherente; supera la referencia de 400 líneas sin recortar controles o pruebas).
-- [ ] **T07 · Datos de demostración** [T02–T06]. Semilla idempotente de la peluquería (2 trabajadoras, servicios individuales) y el estudio de yoga (2 profesoras, tipos de clase, grilla), con usuarios de prueba documentados en `WorkUp/README.md`. Se amplía en T15 y T20 con abonos y cuentas.
+- [x] **T07 · Datos de demostración** [T02–T06]. Semilla idempotente de la peluquería (2 trabajadoras, servicios individuales) y el estudio de yoga (2 profesoras, tipos de clase, grilla), con usuarios de prueba documentados en `WorkUp/README.md`. Se amplía en T15 y T20 con abonos y cuentas.
+  - Ruta: agente escritor en `feat/workup-mvp-07-demo`, exploración previa y verificación independiente; corregidos parseo del argumento CLI, comparación sensible a duplicados y destino LocalDB dedicado.
+  - Evidencia: TDD RED 7 casos y luego 11 regresiones; GREEN 20/20 focalizadas. `dotnet build WorkUp/WorkUp.sln`: 0 errores, 0 advertencias. Suite completa y spot-check del orquestador: 250/250. CLI rechazó faltas de opt-in/contraseña y flags duplicados/malformados antes de conectar. Contra `WorkUpDemoT07Verifier2` nueva, primera ejecución creó 2 negocios, la segunda reconoció 2 existentes sin duplicar; conteo: 2 cuentas, 4 trabajadoras, 5 servicios y 4 clases. Requiere flag, Development, configuración habilitada, contraseña por entorno y base LocalDB dedicada; no modifica la base predeterminada. Verificación independiente PASS sobre reglas, SQL y documentación; SQL sin fixture de integración automatizada.
+  - Incidente acotado: `WorkUpT07DemoIsolation` conserva un esquema scratch parcial vacío tras `sqlcmd` sin `-I`; fue diagnosticado como separado de la base predeterminada y no se eliminó por ser destructivo. `WorkUpT07DemoSeedRun` y `WorkUpDemoT07Verifier2` conservan datos sintéticos de las pruebas. No se usó ni alteró `WorkUp` predeterminada al sembrar. Para futuros scripts filtrados usar `sqlcmd -I`.
+  - Commit: `b4307aa` (931 líneas autorales: plan, protección, persistencia SQL transaccional, pruebas y documentación forman una unidad indivisible; no se recortaron controles para cumplir la referencia de 400 líneas).
 
 ### Fase 2: turnos individuales
 
@@ -187,4 +191,4 @@ Cada tarea indica los RF que cubre, lo que debe quedar funcionando y las reglas 
 
 ## 7. Próximo paso
 
-T07 (datos de demostración) en una rama nueva `feat/workup-mvp-07-demo` creada desde `feat/workup-mvp-06-gastos-insumos`.
+T08 (cálculo de disponibilidad) en una rama nueva `feat/workup-mvp-08-disponibilidad` creada desde `feat/workup-mvp-07-demo`.
