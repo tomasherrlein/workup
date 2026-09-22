@@ -31,7 +31,7 @@
         <ul class="nav-list">
             @foreach (var item in sections)
             {
-                <li><a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon) @item.Label</a></li>
+                <li><a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon) @item.Label @if (item.AlertCount > 0) { <span class="badge" aria-label="@item.AlertCount insumos para reponer">@item.AlertCount</span> }</a></li>
             }
         </ul>
         <div class="rail-footer">
@@ -47,7 +47,7 @@
     <nav class="bottom-bar" aria-label="Accesos rápidos">
         @foreach (var item in bottomBarItems)
         {
-            <a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon)<span>@item.Label</span></a>
+            <a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon)<span>@item.Label</span>@if (item.AlertCount > 0) { <span class="badge" aria-label="@item.AlertCount insumos para reponer">@item.AlertCount</span> }</a>
         }
         <button type="button" data-nav-open aria-controls="nav-sheet" aria-expanded="false">@Icons.Svg("more")<span>Más</span></button>
     </nav>
@@ -57,7 +57,7 @@
             <ul class="nav-list">
                 @foreach (var item in sections)
                 {
-                    <li><a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon) @item.Label</a></li>
+                    <li><a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon) @item.Label @if (item.AlertCount > 0) { <span class="badge" aria-label="@item.AlertCount insumos para reponer">@item.AlertCount</span> }</a></li>
                 }
             </ul>
             <partial name="_OwnerAccountLinks" />

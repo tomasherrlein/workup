@@ -1,6 +1,6 @@
 namespace WorkUp.Infrastructure;
 
-public sealed record NavItem(string Label, string Controller, string Icon, bool InBottomBar = false);
+public sealed record NavItem(string Label, string Controller, string Icon, bool InBottomBar = false, int AlertCount = 0);
 
 /// <summary>
 /// Owner panel sections, in menu order. Controller names are fixed: each task creates the controller for its

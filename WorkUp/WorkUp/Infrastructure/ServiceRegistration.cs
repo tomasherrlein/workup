@@ -4,12 +4,16 @@ using WorkUp.BusinessLogic.Catalog;
 using WorkUp.BusinessLogic.Classes;
 using WorkUp.BusinessLogic.Clients;
 using WorkUp.BusinessLogic.Staff;
+using WorkUp.BusinessLogic.Expenses;
+using WorkUp.BusinessLogic.Supplies;
 using WorkUp.Data;
 using WorkUp.Data.Businesses;
 using WorkUp.Data.Catalog;
 using WorkUp.Data.Classes;
 using WorkUp.Data.Clients;
 using WorkUp.Data.Staff;
+using WorkUp.Data.Expenses;
+using WorkUp.Data.Supplies;
 
 namespace WorkUp.Infrastructure;
 
@@ -67,6 +71,12 @@ public static class ServiceRegistration
         services.AddScoped<IClientRepository, SqlClientRepository>();
         services.AddScoped<IClientNoteRepository, SqlClientNoteRepository>();
         services.AddScoped<ClientsService>();
+
+        // Expenses and supplies (T06)
+        services.AddScoped<IExpenseRepository, SqlExpenseRepository>();
+        services.AddScoped<ExpenseService>();
+        services.AddScoped<ISupplyRepository, SqlSupplyRepository>();
+        services.AddScoped<SupplyService>();
 
         return services;
     }
