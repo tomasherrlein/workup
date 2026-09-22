@@ -123,7 +123,11 @@ Cada tarea indica los RF que cubre, lo que debe quedar funcionando y las reglas 
   - Evidencia: TDD RED 28/28 (`CuilFormat`, `WeeklyScheduleRules`) y 24/24 (`StaffService`) con `NotImplementedException`, luego GREEN; suite 135/135; build 0 errores, 0 advertencias. Ejecución: alta lunes a viernes 9–20 con pausa 13–16, edición, CUIL duplicado, pausa fuera de horario y fin antes del inicio rechazados con mensaje, archivo y reactivación. Verificación del orquestador: build y `dotnet test` 135/135.
   - Commits: `9fd481c` reglas y servicio (1.050) · `6f85c50` repositorio (196) · `af96f53` web (381).
   - Notas: el formulario ofrece 2 pausas por día (funciona sin JavaScript; el dominio admite cualquier cantidad). CUIL validado solo por formato de 11 dígitos. Teléfono enmascarado con `Formatting.MaskPhone` (últimos 4 dígitos). `WeeklyScheduleRules.IsAvailable` queda listo para T04 y T08.
-- [ ] **T04 · Grilla semanal** (RF-04) [T02, T03]. Clases de la grilla por día, horario, tipo de clase (cupo > 1) y profesora; se valida que la clase entre en el horario de la profesora y no se superponga con otra clase suya.
+- [x] **T04 · Grilla semanal** (RF-04) [T02, T03]. Clases de la grilla por día, horario, tipo de clase (cupo > 1) y profesora; se valida que la clase entre en el horario de la profesora y no se superponga con otra clase suya.
+  - Ruta: agente escritor. Rama `feat/workup-mvp-04-grilla`.
+  - Evidencia: TDD RED 33/33 con `NotImplementedException`, GREEN 33/33; suite 168/168; build 0 errores, 0 advertencias. Ejecución: clase del martes 18:00 creada y visible, clase fuera del horario de la profesora y superposición con la misma profesora rechazadas con mensaje, superposición con otra profesora aceptada, edición, archivo y reactivación, acceso "Grilla semanal" en Configuración. Verificación del orquestador: build y `dotnet test` 168/168.
+  - Commits: `9ee08a5` reglas y servicio (722) · `f068647` repositorio (103) · `57dc5d9` web (444).
+  - Notas: mientras una clase de la grilla tenga clases fijas vigentes no se puede cambiar su día, hora ni tipo, ni archivarla (consulta directa a `EnrollmentFixedClasses` hasta T15). Hueco detectado: si después se archiva la profesora o el tipo de clase de una clase de la grilla, su edición falla hasta reasignarlos; resolver en T27 (bloquear o advertir el archivo de profesoras y tipos de clase con clases activas en la grilla).
 - [ ] **T05 · Fichas de clientes** (RF 1, RF-11 observaciones) [T01]. Listado con búsqueda, alta (email único por negocio, teléfono y nombre obligatorios), detalle con observaciones de salud y notas, historial de turnos y cobros. Las observaciones nunca se muestran fuera del panel de la dueña.
 - [ ] **T06 · Gastos e insumos** (RF-13, RF-14) [T01]. Gastos por tipo y período. Insumos con existencia declarada y mínimo; alerta de reposición visible en la lista y en la navegación. La existencia solo cambia por declaración.
 - [ ] **T07 · Datos de demostración** [T02–T06]. Semilla idempotente de la peluquería (2 trabajadoras, servicios individuales) y el estudio de yoga (2 profesoras, tipos de clase, grilla), con usuarios de prueba documentados en `WorkUp/README.md`. Se amplía en T15 y T20 con abonos y cuentas.
@@ -177,4 +181,4 @@ Cada tarea indica los RF que cubre, lo que debe quedar funcionando y las reglas 
 
 ## 7. Próximo paso
 
-T04 (grilla semanal) en una rama nueva `feat/workup-mvp-04-grilla` creada desde `feat/workup-mvp-03-trabajadoras`.
+T05 (fichas de clientes) en una rama nueva `feat/workup-mvp-05-clientes` creada desde `feat/workup-mvp-04-grilla`.
