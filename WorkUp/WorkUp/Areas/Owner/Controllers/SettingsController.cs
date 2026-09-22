@@ -19,7 +19,12 @@ public class SettingsController(
     MembershipPriceService membershipPriceService,
     StaffService staffService) : OwnerControllerBase
 {
-    public IActionResult Index() => View();
+    public async Task<IActionResult> Index(CancellationToken ct)
+    {
+        // Drives the "Grilla semanal" shortcut row: same gate as the Clases/Abonos navigation (T02 acceptance).
+        ViewData["HasGroupServices"] = await catalogService.HasGroupServicesAsync(BusinessId, ct);
+        return View();
+    }
 
     [HttpGet]
     public async Task<IActionResult> Business(CancellationToken ct)

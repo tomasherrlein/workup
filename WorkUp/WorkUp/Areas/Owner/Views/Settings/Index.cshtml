@@ -33,4 +33,13 @@
             @Icons.Svg("arrow-right")
         </a>
     </li>
+    @if ((bool)(ViewData["HasGroupServices"] ?? false))
+    {
+        <li>
+            <a class="choice" asp-controller="Classes" asp-action="Index">
+                <span><strong>Grilla semanal</strong><br /><span class="muted">Días, horarios y profesoras de las clases</span></span>
+                @Icons.Svg("arrow-right")
+            </a>
+        </li>
+    }
 </ul>

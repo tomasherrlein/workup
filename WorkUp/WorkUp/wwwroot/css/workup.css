@@ -176,6 +176,57 @@ a:hover { color: var(--pine-deep); }
 
 .stack > * + * { margin-top: var(--space-md); }
 
+/* ---------- Weekly grid day picker (Classes, T04) ---------- */
+
+.day-picker { margin-bottom: var(--space-lg); }
+
+.day-picker ul {
+  display: flex;
+  overflow-x: auto;
+  gap: var(--space-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.day-picker a {
+  display: block;
+  min-height: var(--hit);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--control-edge);
+  border-radius: var(--radius-control);
+  color: var(--counter-ink);
+  text-decoration: none;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.day-picker a:hover { border-color: var(--pine); }
+
+.day-picker a[aria-current="page"] {
+  border: 2px solid var(--pine);
+  background: var(--pine-wash);
+  color: var(--pine-deep);
+  font-weight: 700;
+}
+
+/* On the phone, only the day picked above renders; the grid stacks its sections instead of columns. */
+.day-section-inactive { display: none; }
+
+@media (min-width: 1024px) {
+  /* At desktop width every day shows at once as its own column: the picker above becomes redundant. */
+  .day-picker { display: none; }
+
+  .day-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: var(--space-lg) var(--space-md);
+    align-items: start;
+  }
+
+  .day-section-inactive { display: block; }
+}
+
 /* ---------- Owner shell ---------- */
 
 .app-bar {
