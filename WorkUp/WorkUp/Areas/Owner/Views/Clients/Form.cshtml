@@ -1,0 +1,45 @@
+@model WorkUp.Areas.Owner.Controllers.ClientFormViewModel
+@{
+    var clientId = ViewData["ClientId"] as int?;
+    var actionName = clientId.HasValue ? "Edit" : "Create";
+}
+<div class="page-header"><div><h1>@ViewData["Title"]</h1></div></div>
+
+<form asp-action="@actionName" method="post" class="form" novalidate>
+    <div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+    @if (clientId.HasValue)
+    {
+        <input type="hidden" name="id" value="@clientId" />
+    }
+    <div class="field">
+        <label asp-for="FirstName"></label>
+        <input asp-for="FirstName" autocomplete="given-name" />
+        <span asp-validation-for="FirstName" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="LastName"></label>
+        <input asp-for="LastName" autocomplete="family-name" />
+        <span asp-validation-for="LastName" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="Email"></label>
+        <input asp-for="Email" type="email" autocomplete="email" />
+        <span asp-validation-for="Email" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="Phone"></label>
+        <input asp-for="Phone" autocomplete="tel" />
+        <span asp-validation-for="Phone" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="HealthNotes"></label>
+        <textarea asp-for="HealthNotes" rows="4"></textarea>
+        <p class="hint">Solo se muestra en el panel de la dueña.</p>
+        <span asp-validation-for="HealthNotes" class="field-error"></span>
+    </div>
+    <div class="actions"><button type="submit" class="btn btn-primary">@(clientId.HasValue ? "Guardar cambios" : "Crear ficha")</button></div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

@@ -2,11 +2,13 @@ using WorkUp.BusinessLogic.Abstractions;
 using WorkUp.BusinessLogic.Businesses;
 using WorkUp.BusinessLogic.Catalog;
 using WorkUp.BusinessLogic.Classes;
+using WorkUp.BusinessLogic.Clients;
 using WorkUp.BusinessLogic.Staff;
 using WorkUp.Data;
 using WorkUp.Data.Businesses;
 using WorkUp.Data.Catalog;
 using WorkUp.Data.Classes;
+using WorkUp.Data.Clients;
 using WorkUp.Data.Staff;
 
 namespace WorkUp.Infrastructure;
@@ -60,6 +62,11 @@ public static class ServiceRegistration
         // Classes (T04)
         services.AddScoped<IGridClassRepository, SqlGridClassRepository>();
         services.AddScoped<ClassesService>();
+
+        // Clients (T05)
+        services.AddScoped<IClientRepository, SqlClientRepository>();
+        services.AddScoped<IClientNoteRepository, SqlClientNoteRepository>();
+        services.AddScoped<ClientsService>();
 
         return services;
     }
