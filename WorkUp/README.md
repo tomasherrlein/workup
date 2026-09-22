@@ -14,6 +14,30 @@ dotnet run --project WorkUp/WorkUp --launch-profile https
 - En desarrollo están activas las herramientas de prueba (`WorkUp:Features:DevTools`): los emails no se envían, quedan en la bandeja de salida.
 - Pruebas: `dotnet test WorkUp/WorkUp.sln`.
 
+### Semilla local de datos de demostración (T07)
+
+La semilla es una operación independiente y explícita; **nunca** corre al iniciar la aplicación, en una migración ni por activar DevTools. Solo funciona con las tres protecciones a la vez: argumento `--seed-demo-data`, entorno `Development` y configuración `WorkUp:DemoData:Enabled=true`. También requiere `WORKUP_DEMO_PASSWORD` en el entorno del proceso; no hay una contraseña incluida en el código ni en este documento. Las dos cuentas de demo usan esa contraseña elegida localmente y se guarda únicamente su hash con el hasher de Identity.
+
+Usá siempre una base LocalDB de desarrollo dedicada y descartable, nunca producción ni una base que contenga negocios de personas. La semilla acepta únicamente la instancia `(localdb)\MSSQLLocalDB`, autenticación integrada y un nombre de base que empiece con `WorkUpDemo` o `WorkUpT07Demo`; rechaza la base compartida predeterminada `WorkUp`. Por ejemplo, configurá `ConnectionStrings__WorkUp` como `Data Source=(localdb)\MSSQLLocalDB;Initial Catalog=WorkUpDemoT07SeedRun;Integrated Security=True;TrustServerCertificate=True`. Para crear primero el esquema en esa base nueva, iniciá normalmente la app una vez y detenela. La semilla no ejecuta migraciones. El comando exacto de siembra es `dotnet run --project WorkUp/WorkUp -- --seed-demo-data`. En una terminal PowerShell local dedicada, el siguiente ejemplo solicita la contraseña sin mostrarla ni guardarla en el historial:
+
+```powershell
+$env:ASPNETCORE_ENVIRONMENT = 'Development'
+$env:ConnectionStrings__WorkUp = 'Data Source=(localdb)\MSSQLLocalDB;Initial Catalog=WorkUpDemoT07SeedRun;Integrated Security=True;TrustServerCertificate=True'
+$env:WorkUp__DemoData__Enabled = 'true'
+$securePassword = Read-Host -AsSecureString 'Contraseña local para las cuentas demo'
+$passwordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+try {
+    $env:WORKUP_DEMO_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer)
+    dotnet run --project WorkUp/WorkUp -- --seed-demo-data
+}
+finally {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPointer)
+    Remove-Item Env:WORKUP_DEMO_PASSWORD, Env:WorkUp__DemoData__Enabled, Env:ConnectionStrings__WorkUp, Env:ASPNETCORE_ENVIRONMENT
+}
+```
+
+Las cuentas creadas son `marina.demo` y `lucia.demo`; la contraseña la define quien ejecuta el comando. Los negocios de Marina y Lucía, las trabajadoras/profesoras, teléfonos, CUIL, precios y horarios del plan son ficticios o sintéticos y solo para demo. Los emails terminan en `.invalid` para impedir el envío a direcciones reales. Si los identificadores demo ya existen con datos distintos o incompletos, la operación se detiene sin modificarlos; una repetición sobre los datos demo intactos no duplica filas.
+
 ## Estructura
 
 ```

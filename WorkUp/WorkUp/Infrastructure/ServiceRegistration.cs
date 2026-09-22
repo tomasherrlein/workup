@@ -11,6 +11,7 @@ using WorkUp.Data.Businesses;
 using WorkUp.Data.Catalog;
 using WorkUp.Data.Classes;
 using WorkUp.Data.Clients;
+using WorkUp.Data.DemoData;
 using WorkUp.Data.Staff;
 using WorkUp.Data.Expenses;
 using WorkUp.Data.Supplies;
@@ -38,6 +39,10 @@ public static class ServiceRegistration
         services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<DbSession>());
         services.AddSingleton<IClock>(new BusinessClock(TimeZoneInfo.FindSystemTimeZoneById(options.TimeZone)));
         services.AddSingleton<IPasswordHasher, IdentityPasswordHasher>();
+        services.AddScoped(sp => new DemoDataSeeder(
+            connectionString,
+            sp.GetRequiredService<IPasswordHasher>(),
+            sp.GetRequiredService<IClock>()));
         services.AddDataProtection();
         services.AddSingleton<ILinkTokenProtector, DataProtectionLinkTokenProtector>();
 
