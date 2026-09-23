@@ -108,6 +108,8 @@ public static class ServiceRegistration
         // Owner agenda (T11)
         services.AddScoped<IOwnerAgendaRepository, SqlOwnerAgendaRepository>();
         services.AddScoped<OwnerAgendaService>();
+        services.AddScoped<IOwnerDayRepository, SqlOwnerDayRepository>();
+        services.AddScoped<OwnerDayService>();
         services.AddScoped<IOwnerBookingActionsRepository, SqlOwnerBookingActionsRepository>();
         services.AddScoped<OwnerBookingActionsService>();
         services.AddScoped<IOwnerRescheduleRepository, SqlOwnerRescheduleRepository>();

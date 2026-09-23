@@ -1,14 +1,111 @@
-@model DateOnly
+@using System.Globalization
+@using WorkUp.BusinessLogic.Scheduling
+@using WorkUp.Domain.Enums
+@model WorkUp.Areas.Owner.Models.Day.DayIndexViewModel
 @{
     ViewData["Title"] = "Jornada";
+    var sections = new[]
+    {
+        (Id: "now", Title: "Ahora", Empty: "No hay atenciones en curso.", Items: Model.Day.Now),
+        (Id: "next", Title: "Próximo", Empty: "No hay próximos turnos ni clases.", Items: Model.Day.Next),
+        (Id: "later", Title: "Más tarde", Empty: "No hay más turnos ni clases para este día.", Items: Model.Day.Later),
+        (Id: "finished", Title: "Finalizado", Empty: "Todavía no hay atenciones finalizadas.", Items: Model.Day.Finished)
+    };
 }
+
 <div class="page-header">
     <div>
         <h1>Jornada</h1>
-        <p>@Formatting.LongDate(Model)</p>
+        <p>@Formatting.LongDate(Model.Day.SelectedDate)</p>
     </div>
 </div>
 
-<div class="empty-state">
-    <p>Todavía no hay turnos ni clases para hoy.</p>
+<form method="get" class="owner-day-date-picker" aria-label="Elegir fecha de la jornada">
+    <div class="field">
+        <label for="date">Fecha</label>
+        <input id="date" name="date" type="date"
+               value="@Model.Day.SelectedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)" />
+    </div>
+    <button class="btn" type="submit">Ver jornada</button>
+</form>
+
+<div class="summary-band" aria-label="Totales de la jornada">
+    <div>
+        <span class="label">Cobrado en la fecha</span>
+        <strong class="figure">@Formatting.Money(Model.Day.TotalPaid)</strong>
+    </div>
+    <div>
+        <span class="label">Pendientes de cobro</span>
+        <strong class="figure-sm">@Model.Day.PendingPaymentCount</strong>
+    </div>
+</div>
+
+<div class="owner-day-sections">
+    @foreach (var daySection in sections)
+    {
+        <section class="section owner-day-section" aria-labelledby="owner-day-@daySection.Id">
+            <div class="section-header">
+                <h2 id="owner-day-@daySection.Id">@daySection.Title</h2>
+                <span class="count">@daySection.Items.Count</span>
+            </div>
+            @if (daySection.Items.Count == 0)
+            {
+                <div class="empty-state"><p>@daySection.Empty</p></div>
+            }
+            else
+            {
+                <ul class="rows owner-day-rows">
+                    @foreach (var item in daySection.Items)
+                    {
+                        var kindLabel = item.Kind == AppointmentKind.Individual ? "Turno individual" : "Clase";
+                        var originLabel = item.Origin switch
+                        {
+                            AppointmentOrigin.Reserved => "Reservado",
+                            AppointmentOrigin.WalkIn => "Sin reserva",
+                            _ => null
+                        };
+                        <li class="row owner-day-item">
+                            <div class="row-time">
+                                <time datetime="@item.StartsAt.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture)">@Formatting.Time(item.StartsAt)</time>
+                                <span class="end">Hasta @Formatting.Time(item.EndsAt)</span>
+                            </div>
+                            <div class="row-main">
+                                <div class="row-title"><strong>@item.ServiceName</strong></div>
+                                <div class="row-sub">@item.WorkerName · @kindLabel@if (originLabel is not null) { <text> · @originLabel</text> }</div>
+                                <div class="row-tags">
+                                    <partial name="_StatusTag" model="StatusTag.For(item.AppointmentStatus)" />
+                                </div>
+                                @if (item.Attendees.Count == 0)
+                                {
+                                    <p class="owner-day-empty-attendees">Sin anotaciones.</p>
+                                }
+                                else
+                                {
+                                    <ul class="owner-day-attendees" aria-label="Personas anotadas">
+                                        @foreach (var attendee in item.Attendees)
+                                        {
+                                            <li>
+                                                <span class="owner-day-attendee-name">@attendee.ClientName</span>
+                                                <span class="row-tags">
+                                                    <partial name="_StatusTag" model="StatusTag.For(attendee.Status)" />
+                                                    @if (attendee.PaymentState == OwnerDayPaymentState.Paid)
+                                                    {
+                                                        <partial name="_StatusTag" model="StatusTag.Paid" />
+                                                    }
+                                                    else if (attendee.PaymentState == OwnerDayPaymentState.Pending)
+                                                    {
+                                                        <partial name="_StatusTag" model="StatusTag.PendingPayment" />
+                                                    }
+                                                </span>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+    }
 </div>

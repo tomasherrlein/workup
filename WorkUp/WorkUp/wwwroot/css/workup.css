@@ -890,3 +890,26 @@ dialog.sheet::backdrop { background: rgba(21, 28, 27, 0.4); }
 .section-header + p,
 .section-header + .rows,
 .section-header + .empty-state { margin-top: var(--space-md); }
+
+/* ---------- Owner day read model ---------- */
+
+.owner-day-date-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.owner-day-date-picker .field { margin-bottom: 0; }
+.owner-day-sections .section-header h2 { margin: 0; }
+.owner-day-attendees {
+  display: grid;
+  gap: var(--space-xs);
+  margin: var(--space-sm) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.owner-day-attendees li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-sm); }
+.owner-day-attendee-name { font-weight: 600; }
+.owner-day-empty-attendees { margin: var(--space-sm) 0 0; color: var(--counter-ink-muted); font-size: var(--text-label); }

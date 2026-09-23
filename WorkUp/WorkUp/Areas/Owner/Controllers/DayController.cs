@@ -1,13 +1,18 @@
 using Microsoft.AspNetCore.Mvc;
+using WorkUp.Areas.Owner.Models.Day;
 using WorkUp.BusinessLogic.Abstractions;
+using WorkUp.BusinessLogic.Scheduling;
 
 namespace WorkUp.Areas.Owner.Controllers;
 
-/// <summary>
-/// Jornada del día. Minimal placeholder for T01 (RF-01 needs somewhere to land after login); T12 replaces its
-/// content with the real Ahora/Próximo/Más tarde/Finalizado sections.
-/// </summary>
-public class DayController(IClock clock) : OwnerControllerBase
+public sealed class DayController(OwnerDayService dayService, IClock clock) : OwnerControllerBase
 {
-    public IActionResult Index() => View(clock.Today);
+    [HttpGet]
+    public async Task<IActionResult> Index(DateOnly? date = null, CancellationToken ct = default)
+    {
+        Response.Headers.CacheControl = "no-store";
+        Response.Headers.Pragma = "no-cache";
+        var day = await dayService.GetDayAsync(BusinessId, date ?? clock.Today, ct);
+        return View(new DayIndexViewModel(day));
+    }
 }
