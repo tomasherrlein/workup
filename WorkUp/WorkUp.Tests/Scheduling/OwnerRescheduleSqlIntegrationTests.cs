@@ -25,6 +25,9 @@ public sealed class OwnerRescheduleSqlIntegrationTests(ITestOutputHelper output)
     private static readonly DateTime OriginalStart = new(2026, 3, 11, 10, 0, 0);
     private static readonly DateTime RescheduledStart = new(2026, 3, 11, 11, 0, 0);
     private static readonly DateTime OccupiedBookingStart = new(2026, 3, 11, 12, 0, 0);
+    private static readonly DateTime RaceOriginalStartA = new(2026, 3, 11, 10, 0, 0);
+    private static readonly DateTime RaceOriginalStartB = new(2026, 3, 11, 14, 0, 0);
+    private static readonly DateTime RaceTargetStart = new(2026, 3, 11, 13, 0, 0);
 
     [Fact]
     public async Task Reschedules_existing_sql_booking_and_rejects_a_stale_occupied_target_atomically()
@@ -101,6 +104,113 @@ public sealed class OwnerRescheduleSqlIntegrationTests(ITestOutputHelper output)
         output.WriteLine("SQL assertions passed: appointment moved, booking confirmed, link token material preserved with a 24-hour expiry, one Rescheduled outbox row, and payments unchanged.");
         output.WriteLine("SQL assertions passed: the stale occupied target left its appointment, booking, link, and outbox unchanged.");
     }
+
+    /// <summary>
+    /// Two owner reschedules of different bookings for the same worker racing for the same free slot. The per-worker
+    /// UPDLOCK (README concurrency convention) must serialize them: exactly one wins and the loser's re-check under
+    /// lock sees the slot already taken, with no double booking left in the database.
+    /// </summary>
+    [Fact]
+    public async Task Two_owner_reschedules_racing_for_the_same_free_slot_leave_exactly_one_winner()
+    {
+        var suppliedConnectionString = Environment.GetEnvironmentVariable("WORKUP_T11_SQL_CONNECTION");
+        if (string.IsNullOrWhiteSpace(suppliedConnectionString))
+        {
+            output.WriteLine("SKIPPED: WORKUP_T11_SQL_CONNECTION is not set; no SQL connection was opened.");
+            return;
+        }
+
+        var target = ValidateTarget(suppliedConnectionString);
+        output.WriteLine($"SQL Server LocalDB target: {target.DatabaseName}");
+
+        var exists = await DatabaseExistsViaSqlcmdAsync(target.DatabaseName);
+        output.WriteLine($"master sqlcmd result: DB_ID('{target.DatabaseName}') = {(exists ? "1 (present)" : "0 (absent)")}");
+        Assert.False(exists, $"Refusing to use existing database '{target.DatabaseName}'; the target must be new.");
+
+        var appliedScripts = await new DatabaseMigrator(target.ConnectionString).MigrateAsync();
+        output.WriteLine($"DatabaseMigrator applied {appliedScripts.Count} schema script(s) to the new target; no teardown will run.");
+
+        var clock = new FakeClock { Now = FixedNow };
+        var ids = await SeedRaceDataAsync(target.ConnectionString, clock);
+
+        async Task<OwnerRescheduleAttempt> RescheduleAsync(int bookingId)
+        {
+            await using var session = new DbSession(target.ConnectionString);
+            var repository = new SqlOwnerRescheduleRepository(session);
+            var service = new OwnerRescheduleService(repository, session, clock);
+            return await service.RescheduleIndividualAsync(
+                ids.BusinessId, bookingId, new OwnerRescheduleRequest(ids.WorkerId, RaceTargetStart));
+        }
+
+        var results = await Task.WhenAll(
+            RescheduleAsync(ids.FirstBookingId),
+            RescheduleAsync(ids.SecondBookingId));
+
+        var succeeded = results.Where(result => result.Succeeded).ToArray();
+        var failed = results.Where(result => !result.Succeeded).ToArray();
+        Assert.Single(succeeded);
+        var loser = Assert.Single(failed);
+        Assert.Equal("owner_reschedule_slot_unavailable", loser.Error!.Code);
+
+        await using var verifyConnection = new SqlConnection(target.ConnectionString);
+        await verifyConnection.OpenAsync();
+        await using var winnersAtTarget = new SqlCommand(
+            "SELECT COUNT(*) FROM Appointments WHERE WorkerId = @workerId AND StartsAt = @start", verifyConnection);
+        AddParameter(winnersAtTarget, "@workerId", ids.WorkerId);
+        AddParameter(winnersAtTarget, "@start", RaceTargetStart);
+        var appointmentsAtTarget = (int)(await winnersAtTarget.ExecuteScalarAsync())!;
+        Assert.Equal(1, appointmentsAtTarget);
+
+        await using var confirmedBookings = new SqlCommand(
+            """
+            SELECT COUNT(*) FROM Bookings AS b JOIN Appointments AS a ON a.Id = b.AppointmentId
+             WHERE a.WorkerId = @workerId AND a.StartsAt = @start AND b.Status = @confirmed
+            """,
+            verifyConnection);
+        AddParameter(confirmedBookings, "@workerId", ids.WorkerId);
+        AddParameter(confirmedBookings, "@start", RaceTargetStart);
+        AddParameter(confirmedBookings, "@confirmed", BookingStatus.Confirmed);
+        var confirmedAtTarget = (int)(await confirmedBookings.ExecuteScalarAsync())!;
+        Assert.Equal(1, confirmedAtTarget);
+
+        output.WriteLine("Race assertions passed: exactly one reschedule won the free slot, the other was rejected, and no double booking exists at the target time.");
+    }
+
+    private static async Task<RaceIds> SeedRaceDataAsync(string connectionString, FakeClock clock)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var businessId = await InsertIdAsync(connection, transaction,
+            "INSERT INTO Businesses (Name, Slug, ContactPhone, NotificationEmail, CreatedAt) OUTPUT INSERTED.Id VALUES (@name, @slug, @phone, @email, @createdAt)",
+            ("@name", "Synthetic T11 Race Business"), ("@slug", "synthetic-t11-owner-reschedule-race"),
+            ("@phone", "0000000000"), ("@email", "t11.race.business@example.invalid"), ("@createdAt", clock.Now));
+        var serviceId = await InsertIdAsync(connection, transaction,
+            "INSERT INTO Services (BusinessId, Name, Price, DurationMinutes, MaxCapacity) OUTPUT INSERTED.Id VALUES (@businessId, @name, @price, @duration, 1)",
+            ("@businessId", businessId), ("@name", "Synthetic T11 Race Service"), ("@price", 100.00m), ("@duration", 45));
+        var workerId = await InsertIdAsync(connection, transaction,
+            "INSERT INTO Workers (BusinessId, FirstName, LastName, Phone, Cuil) OUTPUT INSERTED.Id VALUES (@businessId, @firstName, @lastName, @phone, @cuil)",
+            ("@businessId", businessId), ("@firstName", "Race"), ("@lastName", "Worker"),
+            ("@phone", "0000000000"), ("@cuil", "20999999999"));
+        await ExecuteAsync(connection, transaction,
+            "INSERT INTO WorkerSchedules (WorkerId, DayOfWeek, StartTime, EndTime) VALUES (@workerId, @day, @start, @end)",
+            ("@workerId", workerId), ("@day", (byte)DayOfWeek.Wednesday), ("@start", new TimeSpan(9, 0, 0)), ("@end", new TimeSpan(17, 0, 0)));
+        var clientId = await InsertIdAsync(connection, transaction,
+            "INSERT INTO Clients (BusinessId, FirstName, LastName, Email, Phone, CreatedAt) OUTPUT INSERTED.Id VALUES (@businessId, @firstName, @lastName, @email, @phone, @createdAt)",
+            ("@businessId", businessId), ("@firstName", "Race"), ("@lastName", "Client"),
+            ("@email", "t11.race.client@example.invalid"), ("@phone", "0000000000"), ("@createdAt", clock.Now));
+
+        var firstAppointmentId = await InsertAppointmentAsync(connection, transaction, businessId, serviceId, workerId, RaceOriginalStartA, clock.Now);
+        var secondAppointmentId = await InsertAppointmentAsync(connection, transaction, businessId, serviceId, workerId, RaceOriginalStartB, clock.Now);
+        var firstBookingId = await InsertBookingAsync(connection, transaction, businessId, firstAppointmentId, clientId, clock.Now);
+        var secondBookingId = await InsertBookingAsync(connection, transaction, businessId, secondAppointmentId, clientId, clock.Now);
+
+        await transaction.CommitAsync();
+        return new RaceIds(businessId, workerId, firstBookingId, secondBookingId);
+    }
+
+    private sealed record RaceIds(int BusinessId, int WorkerId, int FirstBookingId, int SecondBookingId);
 
     private static SqlTarget ValidateTarget(string suppliedConnectionString)
     {
