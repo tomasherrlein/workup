@@ -48,12 +48,16 @@ else if (form.ServiceId is not null && form.WorkerId is not null)
 {
     @if (Model.ConflictAlternative is { } conflictAlternative)
     {
+        var conflictDate = DateOnly.FromDateTime(conflictAlternative);
+        var conflictTime = TimeOnly.FromDateTime(conflictAlternative);
         <div class="notice notice-warning">
             <p>Ese horario se ocupó justo ahora. Tus datos se conservaron; elegí otro horario o probá el más cercano:</p>
             <a class="btn" asp-action="NewBooking"
                asp-route-serviceId="@form.ServiceId" asp-route-workerId="@form.WorkerId"
-               asp-route-date="@DateOnly.FromDateTime(conflictAlternative).ToString("yyyy-MM-dd")">
-                @Formatting.LongDate(DateOnly.FromDateTime(conflictAlternative)), @Formatting.Time(conflictAlternative)
+               asp-route-date="@conflictDate.ToString("yyyy-MM-dd")"
+               asp-route-startTime="@conflictTime.ToString("HH:mm")"
+               asp-route-email="@Model.Input.Email" asp-route-firstName="@Model.Input.FirstName" asp-route-lastName="@Model.Input.LastName">
+                @Formatting.LongDate(conflictDate), @Formatting.Time(conflictAlternative)
             </a>
         </div>
     }
@@ -63,10 +67,14 @@ else if (form.ServiceId is not null && form.WorkerId is not null)
             <p>No hay horarios disponibles para esa selección y ese día.</p>
             @if (form.NearestAlternative is { } nearestAlternative)
             {
+                var nearestDate = DateOnly.FromDateTime(nearestAlternative);
+                var nearestTime = TimeOnly.FromDateTime(nearestAlternative);
                 <a class="btn-primary" asp-action="NewBooking"
                    asp-route-serviceId="@form.ServiceId" asp-route-workerId="@form.WorkerId"
-                   asp-route-date="@DateOnly.FromDateTime(nearestAlternative).ToString("yyyy-MM-dd")">
-                    Horario más cercano: @Formatting.LongDate(DateOnly.FromDateTime(nearestAlternative)), @Formatting.Time(nearestAlternative)
+                   asp-route-date="@nearestDate.ToString("yyyy-MM-dd")"
+                   asp-route-startTime="@nearestTime.ToString("HH:mm")"
+                   asp-route-email="@Model.Input.Email" asp-route-firstName="@Model.Input.FirstName" asp-route-lastName="@Model.Input.LastName">
+                    Horario más cercano: @Formatting.LongDate(nearestDate), @Formatting.Time(nearestAlternative)
                 </a>
             }
         </div>
@@ -83,7 +91,7 @@ else if (form.ServiceId is not null && form.WorkerId is not null)
                     <option value="">Elegí un horario</option>
                     @foreach (var startTime in form.AvailableStartTimes)
                     {
-                        <option value="@startTime.ToString("HH:mm")">@Formatting.Time(form.Date.ToDateTime(startTime))</option>
+                        <option value="@startTime.ToString("HH:mm")" selected="@(Model.Input.StartTime == startTime)">@Formatting.Time(form.Date.ToDateTime(startTime))</option>
                     }
                 </select>
                 <span asp-validation-for="Input.StartTime"></span>

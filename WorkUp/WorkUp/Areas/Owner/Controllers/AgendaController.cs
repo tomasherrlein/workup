@@ -104,14 +104,25 @@ public sealed class AgendaController(
         int? serviceId = null,
         int? workerId = null,
         DateOnly? date = null,
+        TimeOnly? startTime = null,
+        string? email = null,
+        string? firstName = null,
+        string? lastName = null,
         CancellationToken ct = default)
     {
         SetPrivateResponseHeaders();
+        // startTime/email/firstName/lastName let the "conflict alternative" and "horario más cercano" links (which
+        // navigate here with GET) carry the data the owner already typed and preselect the suggested time, instead
+        // of discarding it as if the notice "Tus datos se conservaron" were not true.
         var input = new OwnerBookingCreateInput
         {
             ServiceId = serviceId,
             WorkerId = workerId,
-            Date = date ?? DateOnly.FromDateTime(clock.Now)
+            Date = date ?? DateOnly.FromDateTime(clock.Now),
+            StartTime = startTime,
+            Email = email ?? "",
+            FirstName = firstName ?? "",
+            LastName = lastName ?? ""
         };
         return BuildBookingFormAsync(input, ct);
     }
