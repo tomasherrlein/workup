@@ -512,8 +512,9 @@ indica orden de ejecución.
 > 5. Cambiar la fecha y la hora del turno, liberando recién en ese momento el horario anterior. *(Regla 5)*
 > 6. Dejar al cliente en estado `Confirmado`, porque el nuevo horario lo eligió él.
 >
-> **Outputs:** Turno con su nueva fecha y hora · Confirmación del nuevo día y hora al cliente. Si no se confirma
-> un nuevo horario, el turno original permanece reservado sin cambios.
+> **Outputs:** Turno con su nueva fecha y hora · Confirmación inmediata por email del nuevo día y hora al cliente.
+> El enlace privado existente se conserva y pasa a vencer 24 horas después del nuevo inicio; no se emite un token
+> distinto por reprogramar. Si no se confirma un nuevo horario, el turno original permanece reservado sin cambios.
 >
 > **Error Handling:** Si no hay ningún horario de esa trabajadora que le sirva al cliente, o si abandona el
 > cambio, el turno original se conserva; no se cancela automáticamente. *(`R36`)* Desde el inicio del turno
