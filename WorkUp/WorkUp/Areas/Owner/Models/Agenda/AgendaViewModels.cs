@@ -11,7 +11,20 @@ public sealed record AgendaIndexViewModel(
     BookingStatus? BookingStatus,
     AppointmentOrigin? Origin);
 
-public sealed record AgendaBookingDetailViewModel(OwnerAgendaBookingDetail Booking);
+public sealed record AgendaBookingDetailViewModel(OwnerAgendaBookingDetail Booking, bool CanReschedule = false);
+
+public sealed record AgendaBookingRescheduleViewModel(
+    OwnerAgendaBookingDetail Booking,
+    OwnerRescheduleInput Input);
+
+public sealed class OwnerRescheduleInput
+{
+    [Required(ErrorMessage = "Elegí un día.")]
+    public DateOnly? Date { get; set; }
+
+    [Required(ErrorMessage = "Elegí un horario.")]
+    public TimeOnly? StartTime { get; set; }
+}
 
 public sealed record AgendaBookingFormViewModel(
     OwnerBookingForm Form,

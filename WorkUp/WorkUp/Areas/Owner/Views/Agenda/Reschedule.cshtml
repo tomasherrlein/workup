@@ -1,0 +1,34 @@
+@model WorkUp.Areas.Owner.Models.Agenda.AgendaBookingRescheduleViewModel
+@{
+    ViewData["Title"] = "Reprogramar turno";
+    var booking = Model.Booking;
+}
+<div class="page-header">
+    <div>
+        <h1>Reprogramar turno</h1>
+        <p>Elegí un nuevo día y horario para @booking.ClientName, con @booking.WorkerName.</p>
+        <p>Turno actual: @Formatting.LongDate(booking.StartsAt), @Formatting.Time(booking.StartsAt).</p>
+    </div>
+    <a class="btn" asp-action="Detail" asp-route-id="@booking.BookingId">Volver al turno</a>
+</div>
+
+<p class="notice notice-warning">El horario se valida al guardar y puede ocuparse mientras tanto. Elegí una hora en intervalos de 15 minutos.</p>
+<div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+
+<form asp-action="Reschedule" asp-route-id="@booking.BookingId" method="post" class="form">
+    <div class="field">
+        <label asp-for="Input.Date">Nuevo día</label>
+        <input asp-for="Input.Date" type="date" />
+        <span asp-validation-for="Input.Date"></span>
+    </div>
+    <div class="field">
+        <label asp-for="Input.StartTime">Nuevo horario</label>
+        <input asp-for="Input.StartTime" type="time" step="900" />
+        <span asp-validation-for="Input.StartTime"></span>
+    </div>
+    <button type="submit" class="btn-primary">Confirmar reprogramación</button>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

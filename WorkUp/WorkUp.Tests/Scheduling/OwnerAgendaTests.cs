@@ -242,7 +242,7 @@ public sealed class OwnerAgendaTests
         var context = new DefaultHttpContext();
         context.User = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(WorkUpClaims.BusinessId, businessId.ToString())], "test"));
-        var controller = new AgendaController(service, bookingActionsService!, new FakeClock())
+        var controller = new AgendaController(service, bookingActionsService!, null!, new FakeClock())
         {
             ControllerContext = new ControllerContext { HttpContext = context }
         };

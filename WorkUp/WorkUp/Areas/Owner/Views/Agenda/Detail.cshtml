@@ -9,7 +9,13 @@
         <h1>Detalle del turno</h1>
         <p>Turno #@booking.AppointmentId · Reserva #@booking.BookingId</p>
     </div>
-    <a class="btn" asp-action="Index">Volver a la agenda</a>
+    <div class="page-actions">
+        @if (Model.CanReschedule)
+        {
+            <a class="btn" asp-action="Reschedule" asp-route-id="@booking.BookingId">Reprogramar turno</a>
+        }
+        <a class="btn" asp-action="Index">Volver a la agenda</a>
+    </div>
 </div>
 
 <section class="agenda-detail" aria-label="Información del turno">
