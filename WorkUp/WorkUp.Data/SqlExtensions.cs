@@ -1,3 +1,4 @@
+using System.Data;
 using Microsoft.Data.SqlClient;
 
 namespace WorkUp.Data;
@@ -18,6 +19,14 @@ public static class SqlExtensions
             _ => value
         };
         parameters.AddWithValue(name, dbValue);
+        return parameters;
+    }
+
+    /// <summary>Adds a parameter explicitly typed as SQL DATETIME2.</summary>
+    public static SqlParameterCollection AddDateTime2(
+        this SqlParameterCollection parameters, string name, DateTime value)
+    {
+        parameters.Add(name, SqlDbType.DateTime2).Value = value;
         return parameters;
     }
 

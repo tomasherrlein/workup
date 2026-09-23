@@ -522,6 +522,34 @@ a:hover { color: var(--pine-deep); }
 .public-slots { margin-top: var(--space-md); }
 .public-empty-state .choice { margin-top: var(--space-md); text-align: left; }
 
+/* ---------- Owner agenda ---------- */
+
+.agenda-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: end;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+  padding: var(--space-md);
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+}
+
+.agenda-filters .field { margin-bottom: 0; }
+.agenda-filters .btn-primary { min-height: var(--control-height); }
+
+.agenda-detail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-lg);
+  padding: var(--space-md);
+  border: 1px solid var(--rule);
+  background: var(--sheet);
+}
+
+.agenda-detail h2 { margin-bottom: var(--space-sm); }
+.agenda-detail p:last-child { margin-bottom: 0; }
+
 /* ---------- Rows (the agenda row is the signature component) ---------- */
 
 .rows { list-style: none; margin: 0; padding: 0; background: var(--sheet); }

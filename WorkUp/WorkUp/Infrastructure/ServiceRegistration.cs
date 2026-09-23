@@ -105,6 +105,10 @@ public static class ServiceRegistration
         services.AddScoped<PrivateAppointmentLinkService>();
         services.AddScoped<OwnerAppointmentLinksService>();
 
+        // Owner agenda (T11)
+        services.AddScoped<IOwnerAgendaRepository, SqlOwnerAgendaRepository>();
+        services.AddScoped<OwnerAgendaService>();
+
         return services;
     }
 }
