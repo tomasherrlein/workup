@@ -1,0 +1,88 @@
+@model WorkUp.Areas.Owner.Models.Agenda.AgendaBookingFormViewModel
+@{
+    ViewData["Title"] = "Anotar turno";
+    var form = Model.Form;
+}
+<div class="page-header">
+    <div>
+        <h1>Anotar turno individual</h1>
+        <p>Elegí un servicio, una trabajadora, un día y un horario disponible.</p>
+    </div>
+    <a class="btn" asp-action="Index">Volver a la agenda</a>
+</div>
+
+<form method="get" asp-action="NewBooking" class="agenda-filters" aria-label="Elegir disponibilidad">
+    <div class="field">
+        <label for="serviceId">Servicio</label>
+        <select id="serviceId" name="serviceId">
+            <option value="">Elegí un servicio</option>
+            @foreach (var service in form.Catalog.Services)
+            {
+                <option value="@service.Id" selected="@(Model.Input.ServiceId == service.Id)">@service.Name · @Formatting.Money(service.Price)</option>
+            }
+        </select>
+    </div>
+    <div class="field">
+        <label for="workerId">Trabajadora</label>
+        <select id="workerId" name="workerId">
+            <option value="">Elegí una trabajadora</option>
+            @foreach (var worker in form.Workers)
+            {
+                <option value="@worker.Id" selected="@(Model.Input.WorkerId == worker.Id)">@worker.FullName</option>
+            }
+        </select>
+    </div>
+    <div class="field">
+        <label for="date">Día</label>
+        <input id="date" name="date" type="date" value="@form.Date.ToString("yyyy-MM-dd")" />
+    </div>
+    <button type="submit" class="btn">Ver horarios</button>
+</form>
+<div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+
+@if (form.ServiceId is not null && form.WorkerId is not null)
+{
+    @if (form.AvailableStartTimes.Count == 0)
+    {
+        <div class="empty-state"><p>No hay horarios disponibles para esa selección y ese día.</p></div>
+    }
+    else
+    {
+        <form asp-action="CreateBooking" method="post" class="form" novalidate>
+            <input asp-for="Input.ServiceId" type="hidden" />
+            <input asp-for="Input.WorkerId" type="hidden" />
+            <input asp-for="Input.Date" type="hidden" />
+            <div class="field">
+                <label asp-for="Input.StartTime">Horario disponible</label>
+                <select asp-for="Input.StartTime">
+                    <option value="">Elegí un horario</option>
+                    @foreach (var startTime in form.AvailableStartTimes)
+                    {
+                        <option value="@startTime.ToString("HH:mm")">@Formatting.Time(form.Date.ToDateTime(startTime))</option>
+                    }
+                </select>
+                <span asp-validation-for="Input.StartTime"></span>
+            </div>
+            <div class="field">
+                <label asp-for="Input.Email">Email</label>
+                <input asp-for="Input.Email" type="email" autocomplete="email" />
+                <span asp-validation-for="Input.Email"></span>
+            </div>
+            <div class="field">
+                <label asp-for="Input.FirstName">Nombre</label>
+                <input asp-for="Input.FirstName" autocomplete="given-name" />
+                <span asp-validation-for="Input.FirstName"></span>
+            </div>
+            <div class="field">
+                <label asp-for="Input.LastName">Apellido</label>
+                <input asp-for="Input.LastName" autocomplete="family-name" />
+                <span asp-validation-for="Input.LastName"></span>
+            </div>
+            <button type="submit" class="btn-primary">Reservar turno</button>
+        </form>
+    }
+}
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

@@ -3,11 +3,16 @@ using WorkUp.Areas.Owner.Models.Agenda;
 using WorkUp.BusinessLogic.Abstractions;
 using WorkUp.BusinessLogic.Scheduling;
 using WorkUp.Domain.Enums;
+using WorkUp.Infrastructure;
+using WorkUp.Infrastructure.Auth;
 
 namespace WorkUp.Areas.Owner.Controllers;
 
-/// <summary>Read-only owner agenda. Tenant identity comes exclusively from OwnerControllerBase.</summary>
-public sealed class AgendaController(OwnerAgendaService agendaService, IClock clock) : OwnerControllerBase
+/// <summary>Tenant-scoped owner agenda and individual booking actions.</summary>
+public sealed class AgendaController(
+    OwnerAgendaService agendaService,
+    OwnerBookingActionsService bookingActionsService,
+    IClock clock) : OwnerControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> Index(
@@ -44,6 +49,81 @@ public sealed class AgendaController(OwnerAgendaService agendaService, IClock cl
 
         ViewData["Title"] = "Detalle del turno";
         return View(new AgendaBookingDetailViewModel(booking));
+    }
+
+    [HttpGet]
+    public Task<IActionResult> NewBooking(
+        int? serviceId = null,
+        int? workerId = null,
+        DateOnly? date = null,
+        CancellationToken ct = default)
+    {
+        SetPrivateResponseHeaders();
+        var input = new OwnerBookingCreateInput
+        {
+            ServiceId = serviceId,
+            WorkerId = workerId,
+            Date = date ?? DateOnly.FromDateTime(clock.Now)
+        };
+        return BuildBookingFormAsync(input, ct);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> CreateBooking(
+        [Bind(Prefix = "Input")] OwnerBookingCreateInput input,
+        CancellationToken ct = default)
+    {
+        SetPrivateResponseHeaders();
+        if (!ModelState.IsValid)
+            return await BuildBookingFormAsync(input, ct);
+
+        var attempt = await bookingActionsService.BookIndividualAsync(BusinessId, new BookIndividualAppointmentRequest(
+            input.ServiceId!.Value,
+            input.WorkerId!.Value,
+            input.Date!.Value,
+            input.StartTime!.Value,
+            input.Email,
+            input.FirstName,
+            input.LastName), ct);
+        if (!attempt.Succeeded)
+        {
+            ModelState.AddModelError(string.Empty, attempt.Error!.Message);
+            return await BuildBookingFormAsync(input, ct);
+        }
+
+        this.Flash("Turno reservado.");
+        return RedirectToAction(nameof(Detail), new { id = attempt.Confirmation.BookingId });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Cancel(int id, CancellationToken ct = default)
+    {
+        var result = await bookingActionsService.CancelIndividualBookingAsync(BusinessId, id, ct);
+        if (result.Error?.Code == "owner_booking_not_found")
+            return NotFound();
+
+        this.Flash(
+            result.Succeeded ? "Turno cancelado." : "No se pudo cancelar este turno. Revisá su estado e intentá de nuevo.",
+            result.Succeeded ? FlashType.Success : FlashType.Error);
+        return RedirectToAction(nameof(Detail), new { id });
+    }
+
+    private async Task<IActionResult> BuildBookingFormAsync(OwnerBookingCreateInput input, CancellationToken ct)
+    {
+        var form = await bookingActionsService.GetBookingFormAsync(
+            BusinessId,
+            User.GetBusinessSlug(),
+            input.ServiceId,
+            input.WorkerId,
+            input.Date,
+            ct);
+        if (form is null)
+            return NotFound();
+
+        ViewData["Title"] = "Anotar turno";
+        return View("NewBooking", new AgendaBookingFormViewModel(form, input));
     }
 
     private void SetPrivateResponseHeaders()

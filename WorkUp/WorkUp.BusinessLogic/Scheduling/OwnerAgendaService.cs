@@ -30,11 +30,34 @@ public sealed class OwnerAgendaService(IOwnerAgendaRepository repository, IClock
         return new OwnerAgendaResult(selectedDate, rangeStart, rangeEndExclusive, workers, entries);
     }
 
-    public Task<OwnerAgendaBookingDetail?> GetIndividualBookingAsync(
-        int businessId, int bookingId, CancellationToken ct = default) =>
-        businessId <= 0 || bookingId <= 0
-            ? Task.FromResult<OwnerAgendaBookingDetail?>(null)
-            : repository.GetIndividualBookingAsync(businessId, bookingId, ct);
+    public async Task<OwnerAgendaBookingDetail?> GetIndividualBookingAsync(
+        int businessId, int bookingId, CancellationToken ct = default)
+    {
+        if (businessId <= 0 || bookingId <= 0)
+            return null;
+
+        var booking = await repository.GetIndividualBookingAsync(businessId, bookingId, ct);
+        if (booking is null)
+            return null;
+
+        var cancellationState = new OwnerBookingCancellationState(
+            booking.BookingId,
+            booking.AppointmentId,
+            booking.StartsAt,
+            booking.AppointmentKind,
+            booking.AppointmentStatus,
+            booking.Origin,
+            booking.MaxCapacity,
+            booking.BookingStatus,
+            null,
+            null,
+            booking.ConfirmedAt,
+            booking.CancelledAt,
+            booking.CancelledBy,
+            booking.AttendanceRecordedAt,
+            booking.AbsenceSource);
+        return booking with { CanCancel = OwnerBookingActionsService.CanCancel(cancellationState, clock.Now) };
+    }
 
     private static DateOnly MondayOf(DateOnly date) => date.AddDays(-(((int)date.DayOfWeek + 6) % 7));
 }

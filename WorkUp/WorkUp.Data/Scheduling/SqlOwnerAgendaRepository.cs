@@ -62,7 +62,9 @@ public sealed class SqlOwnerAgendaRepository(DbSession session) : SqlRepositoryB
         QuerySingleOrDefaultAsync(
             """
             SELECT b.Id AS BookingId, a.Id AS AppointmentId, a.StartsAt, a.EndsAt,
-                   a.Status AS AppointmentStatus, a.Origin, b.Status AS BookingStatus,
+                   a.Kind AS AppointmentKind, a.MaxCapacity, a.Status AS AppointmentStatus, a.Origin,
+                   b.Status AS BookingStatus, b.ConfirmedAt, b.CancelledAt, b.CancelledBy,
+                   b.AttendanceRecordedAt, b.AbsenceSource,
                    s.Name AS ServiceName, CONCAT(w.FirstName, N' ', w.LastName) AS WorkerName,
                    CONCAT(c.FirstName, N' ', c.LastName) AS ClientName, c.Email AS ClientEmail,
                    c.Phone AS ClientPhone, b.AgreedPrice
@@ -108,5 +110,12 @@ public sealed class SqlOwnerAgendaRepository(DbSession session) : SqlRepositoryB
         reader.Get<string>("ClientName"),
         reader.Get<string>("ClientEmail"),
         reader.GetNullableString("ClientPhone"),
-        reader.GetNullable<decimal>("AgreedPrice"));
+        reader.GetNullable<decimal>("AgreedPrice"),
+        reader.GetEnum<AppointmentKind>("AppointmentKind"),
+        reader.Get<int>("MaxCapacity"),
+        reader.GetNullable<DateTime>("ConfirmedAt"),
+        reader.GetNullable<DateTime>("CancelledAt"),
+        reader.GetNullableEnum<CancelledBy>("CancelledBy"),
+        reader.GetNullable<DateTime>("AttendanceRecordedAt"),
+        reader.GetNullableEnum<AbsenceSource>("AbsenceSource"));
 }

@@ -46,7 +46,15 @@ public sealed record OwnerAgendaBookingDetail(
     string ClientName,
     string ClientEmail,
     string? ClientPhone,
-    decimal? AgreedPrice);
+    decimal? AgreedPrice,
+    AppointmentKind AppointmentKind = AppointmentKind.Individual,
+    int MaxCapacity = 1,
+    DateTime? ConfirmedAt = null,
+    DateTime? CancelledAt = null,
+    CancelledBy? CancelledBy = null,
+    DateTime? AttendanceRecordedAt = null,
+    AbsenceSource? AbsenceSource = null,
+    bool CanCancel = false);
 
 public sealed record OwnerAgendaResult(
     DateOnly SelectedDate,
