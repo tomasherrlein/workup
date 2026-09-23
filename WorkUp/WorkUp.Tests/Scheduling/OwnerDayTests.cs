@@ -13,6 +13,18 @@ namespace WorkUp.Tests.Scheduling;
 public sealed class OwnerDayTests
 {
     [Fact]
+    public async Task Day_exposes_agreed_price_for_owner_charge_without_exposing_private_notes()
+    {
+        var date = new DateOnly(2026, 3, 10);
+        var repository = new FakeOwnerDayRepository();
+        repository.Rows.Add(Row(1, 42, date, new TimeOnly(9, 0), new TimeOnly(10, 0),
+            BookingStatus.Pending, OwnerDayPaymentState.Pending) with { AgreedPrice = 120m });
+        var day = await new OwnerDayService(repository, new FakeClock { Now = date.ToDateTime(new TimeOnly(11, 0)) })
+            .GetDayAsync(7, date);
+        Assert.Equal(120m, Assert.Single(Assert.Single(day.Finished).Attendees).AgreedPrice);
+    }
+
+    [Fact]
     public async Task Today_groups_ongoing_earliest_ties_later_and_finished_items()
     {
         var today = new DateOnly(2026, 3, 10);
@@ -175,7 +187,9 @@ public sealed class OwnerDayTests
         var selected = new DateOnly(2026, 3, 12);
         var repository = new FakeOwnerDayRepository();
         var service = new OwnerDayService(repository, new FakeClock());
-        var controller = new DayController(service, new FakeClock())
+        var controller = new DayController(service,
+            new OwnerDayActionsService(new FakeOwnerDayActionsRepository(), new FakeUnitOfWork(), new FakeClock()),
+            new FakeClock())
         {
             ControllerContext = new ControllerContext
             {

@@ -110,6 +110,8 @@ public static class ServiceRegistration
         services.AddScoped<OwnerAgendaService>();
         services.AddScoped<IOwnerDayRepository, SqlOwnerDayRepository>();
         services.AddScoped<OwnerDayService>();
+        services.AddScoped<IOwnerDayActionsRepository, SqlOwnerDayActionsRepository>();
+        services.AddScoped<OwnerDayActionsService>();
         services.AddScoped<IOwnerBookingActionsRepository, SqlOwnerBookingActionsRepository>();
         services.AddScoped<OwnerBookingActionsService>();
         services.AddScoped<IOwnerRescheduleRepository, SqlOwnerRescheduleRepository>();

@@ -22,7 +22,7 @@ public sealed class SqlOwnerDayRepository(DbSession session) : SqlRepositoryBase
                    s.Name AS ServiceName, CONCAT(w.FirstName, N' ', w.LastName) AS WorkerName,
                    b.Id AS BookingId,
                    CASE WHEN c.Id IS NULL THEN NULL ELSE CONCAT(c.FirstName, N' ', c.LastName) END AS ClientName,
-                   b.Status AS BookingStatus,
+                   b.Status AS BookingStatus, b.AgreedPrice,
                    CASE
                        WHEN b.Id IS NULL OR b.Status = @cancelled THEN @notApplicable
                        WHEN a.Status = @suspended THEN @notApplicable
@@ -117,5 +117,6 @@ public sealed class SqlOwnerDayRepository(DbSession session) : SqlRepositoryBase
         reader.GetNullable<int>("BookingId"),
         reader.GetNullableString("ClientName"),
         reader.GetNullableEnum<BookingStatus>("BookingStatus"),
-        reader.GetEnum<OwnerDayPaymentState>("PaymentState"));
+        reader.GetEnum<OwnerDayPaymentState>("PaymentState"),
+        reader.GetNullable<decimal>("AgreedPrice"));
 }

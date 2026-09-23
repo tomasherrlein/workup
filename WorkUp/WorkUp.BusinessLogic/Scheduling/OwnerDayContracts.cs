@@ -30,13 +30,15 @@ public sealed record OwnerDayRow(
     int? BookingId,
     string? ClientName,
     BookingStatus? BookingStatus,
-    OwnerDayPaymentState PaymentState);
+    OwnerDayPaymentState PaymentState,
+    decimal? AgreedPrice = null);
 
 public sealed record OwnerDayAttendee(
     int BookingId,
     string ClientName,
     BookingStatus Status,
-    OwnerDayPaymentState PaymentState);
+    OwnerDayPaymentState PaymentState,
+    decimal? AgreedPrice = null);
 
 public sealed record OwnerDayItem(
     int AppointmentId,

@@ -78,7 +78,8 @@ public sealed class OwnerDayService(IOwnerDayRepository repository, IClock clock
                 row.BookingStatus!.Value,
                 first.AppointmentStatus == AppointmentStatus.Suspended
                     ? OwnerDayPaymentState.NotApplicable
-                    : row.PaymentState))
+                    : row.PaymentState,
+                row.AgreedPrice))
             .ToArray();
 
         return new OwnerDayItem(

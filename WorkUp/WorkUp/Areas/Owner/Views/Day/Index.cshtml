@@ -4,6 +4,8 @@
 @model WorkUp.Areas.Owner.Models.Day.DayIndexViewModel
 @{
     ViewData["Title"] = "Jornada";
+    var now = Model.Now; // Visibility is advisory; the service revalidates state and time.
+    var selectedDate = Model.Day.SelectedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     var sections = new[]
     {
         (Id: "now", Title: "Ahora", Empty: "No hay atenciones en curso.", Items: Model.Day.Now),
@@ -97,6 +99,36 @@
                                                         <partial name="_StatusTag" model="StatusTag.PendingPayment" />
                                                     }
                                                 </span>
+                                                @if (item.Kind == AppointmentKind.Individual && item.AppointmentStatus == AppointmentStatus.Scheduled &&
+                                                    item.Origin is (AppointmentOrigin.Reserved or AppointmentOrigin.WalkIn))
+                                                {
+                                                    var canAttend = item.StartsAt <= now && attendee.Status is (BookingStatus.Pending or BookingStatus.Confirmed);
+                                                    var canCharge = attendee.PaymentState == OwnerDayPaymentState.Pending && attendee.Status is not (BookingStatus.Cancelled or BookingStatus.Absent);
+                                                    if (canAttend)
+                                                    {
+                                                        <form asp-area="Owner" asp-controller="Day" asp-action="Finish" asp-route-id="@attendee.BookingId" method="post" class="owner-day-action">
+                                                            <input type="hidden" name="date" value="@selectedDate" />
+                                                            <div class="field"><label for="finish-amount-@attendee.BookingId">Cobro opcional @if (attendee.AgreedPrice is { } agreed) { <text>(acordado: @Formatting.Money(agreed))</text> }</label>
+                                                                <input id="finish-amount-@attendee.BookingId" name="amount" type="number" min="0.01" max="9999999999.99" step="0.01" placeholder="Sin cobro" /></div>
+                                                            <div class="field"><label for="note-@attendee.BookingId">Observación para la próxima atención (opcional, solo dueña)</label>
+                                                                <textarea id="note-@attendee.BookingId" name="nextVisitNote" maxlength="1000"></textarea></div>
+                                                            <button class="btn" type="submit">Finalizar atención</button>
+                                                        </form>
+                                                        <form asp-area="Owner" asp-controller="Day" asp-action="MarkAbsent" asp-route-id="@attendee.BookingId" method="post" class="owner-day-action">
+                                                            <input type="hidden" name="date" value="@selectedDate" />
+                                                            <button class="btn" type="submit">Marcar ausente</button>
+                                                        </form>
+                                                    }
+                                                    if (canCharge)
+                                                    {
+                                                        <form asp-area="Owner" asp-controller="Day" asp-action="Charge" asp-route-id="@attendee.BookingId" method="post" class="owner-day-action">
+                                                            <input type="hidden" name="date" value="@selectedDate" />
+                                                            <div class="field"><label for="charge-amount-@attendee.BookingId">Importe a cobrar @if (attendee.AgreedPrice is { } agreedCharge) { <text>(acordado: @Formatting.Money(agreedCharge))</text> }</label>
+                                                                <input id="charge-amount-@attendee.BookingId" name="amount" type="number" min="0.01" max="9999999999.99" step="0.01" required value="@attendee.AgreedPrice?.ToString(CultureInfo.InvariantCulture)" /></div>
+                                                            <button class="btn" type="submit">Registrar cobro</button>
+                                                        </form>
+                                                    }
+                                                }
                                             </li>
                                         }
                                     </ul>
