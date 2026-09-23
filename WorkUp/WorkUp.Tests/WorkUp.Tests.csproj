@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\WorkUp.BusinessLogic\WorkUp.BusinessLogic.csproj" />
     <ProjectReference Include="..\WorkUp.Domain\WorkUp.Domain.csproj" />
+    <ProjectReference Include="..\WorkUp\WorkUp.csproj" />
   </ItemGroup>
 
 </Project>

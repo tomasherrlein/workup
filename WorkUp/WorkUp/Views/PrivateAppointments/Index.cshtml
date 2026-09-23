@@ -1,0 +1,49 @@
+@model WorkUp.Models.PrivateAppointments.PrivateAppointmentPageViewModel
+@{
+    Layout = "_PublicLayout";
+    ViewData["Title"] = "Ver mi turno";
+    var token = ViewContext.RouteData.Values["token"];
+}
+<section class="public-booking" aria-labelledby="private-appointment-title">
+    <h1 id="private-appointment-title">Ver mi turno</h1>
+    @if (Model.Appointment is null)
+    {
+        <p>Este enlace ya no está disponible. Contactá al negocio.</p>
+    }
+    else
+    {
+        <dl class="details public-booking-summary">
+            <dt>Día</dt><dd>@Formatting.LongDate(Model.Appointment.StartsAt)</dd>
+            <dt>Horario</dt><dd>@Formatting.Time(Model.Appointment.StartsAt)</dd>
+            <dt>Servicio</dt><dd>@Model.Appointment.ServiceName</dd>
+            <dt>Trabajadora</dt><dd>@Model.Appointment.WorkerName</dd>
+        </dl>
+
+        @if (Model.Appointment.CanConfirm || Model.Appointment.CanCancel || Model.Appointment.CanReportAbsence)
+        {
+            <div class="actions">
+                @if (Model.Appointment.CanConfirm)
+                {
+                    <form asp-action="Confirm" asp-route-token="@token" method="post">
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="btn btn-primary">Confirmar que voy a asistir</button>
+                    </form>
+                }
+                @if (Model.Appointment.CanCancel)
+                {
+                    <form asp-action="Cancel" asp-route-token="@token" method="post">
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="btn">Cancelar turno</button>
+                    </form>
+                }
+                @if (Model.Appointment.CanReportAbsence)
+                {
+                    <form asp-action="ReportAbsence" asp-route-token="@token" method="post">
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="btn">No voy a asistir</button>
+                    </form>
+                }
+            </div>
+        }
+    }
+</section>

@@ -97,6 +97,13 @@ public static class ServiceRegistration
         services.AddScoped<IPublicBookingBrowseRepository>(sp => sp.GetRequiredService<SqlPublicBookingRepository>());
         services.AddScoped<BookingService>();
         services.AddScoped<PublicBookingBrowseService>();
+        services.AddScoped<SqlPrivateAppointmentLinkRepository>();
+        services.AddScoped<IPrivateAppointmentLinkRepository>(sp =>
+            sp.GetRequiredService<SqlPrivateAppointmentLinkRepository>());
+        services.AddScoped<IOwnerPrivateAppointmentRepository>(sp =>
+            sp.GetRequiredService<SqlPrivateAppointmentLinkRepository>());
+        services.AddScoped<PrivateAppointmentLinkService>();
+        services.AddScoped<OwnerAppointmentLinksService>();
 
         return services;
     }

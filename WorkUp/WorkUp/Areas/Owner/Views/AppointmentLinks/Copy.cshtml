@@ -1,0 +1,22 @@
+@model WorkUp.Areas.Owner.Models.AppointmentLinks.AppointmentLinkCopyViewModel
+@{
+    ViewData["Title"] = "Copiar enlace privado";
+}
+<div class="page-header">
+    <div>
+        <h1>Copiar enlace privado</h1>
+        <p>Compartilo solo con la persona titular del turno. El enlace vence el @Formatting.LongDate(Model.ExpiresAt), a las @Formatting.Time(Model.ExpiresAt).</p>
+    </div>
+</div>
+
+<div class="form">
+    <div class="field">
+        <label for="private-url">Enlace privado</label>
+        <input id="private-url" type="text" value="@Model.Url" readonly autocomplete="off" />
+    </div>
+    <p>Si el navegador no permite copiar, seleccioná el campo y copialo a mano.</p>
+    <div class="actions">
+        <button class="btn btn-primary" type="button" data-copy="@Model.Url">@Icons.Svg("copy") Copiar enlace</button>
+        <a class="btn" asp-action="Index">Volver a enlaces privados</a>
+    </div>
+</div>

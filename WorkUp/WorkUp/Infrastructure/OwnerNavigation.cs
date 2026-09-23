@@ -15,6 +15,7 @@ public static class OwnerNavigation
         new("Clases", "Classes", "grid", InBottomBar: true),
         new("Abonos", "Enrollments", "repeat"),
         new("Clientes", "Clients", "users"),
+        new("Enlaces privados", "AppointmentLinks", "link"),
         new("Cobros", "Payments", "coin"),
         new("Gastos", "Expenses", "receipt"),
         new("Insumos", "Supplies", "box"),

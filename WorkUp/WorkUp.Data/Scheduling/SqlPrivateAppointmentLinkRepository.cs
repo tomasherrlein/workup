@@ -7,7 +7,7 @@ namespace WorkUp.Data.Scheduling;
 
 /// <summary>SQL persistence for private-link lookups, guarded actions, and owner token rotation.</summary>
 public sealed class SqlPrivateAppointmentLinkRepository(DbSession session)
-    : SqlRepositoryBase(session), IPrivateAppointmentLinkRepository
+    : SqlRepositoryBase(session), IPrivateAppointmentLinkRepository, IOwnerPrivateAppointmentRepository
 {
     private const string PublicActionFrom = """
         FROM Bookings AS b WITH (UPDLOCK, ROWLOCK)
@@ -27,9 +27,7 @@ public sealed class SqlPrivateAppointmentLinkRepository(DbSession session)
     private const string ConfirmPendingSql = """
         UPDATE b
            SET Status = @confirmed, ConfirmedAt = @now
-        """ + PublicActionFrom + """
-        WHERE
-        """ + PublicLinkValidity + " AND a.StartsAt > @now " +
+        """ + "\n" + PublicActionFrom + "\nWHERE\n" + PublicLinkValidity + "\nAND a.StartsAt > @now " +
         "AND b.Status = @pending AND b.ConfirmedAt IS NULL " +
         "AND b.CancelledAt IS NULL AND b.CancelledBy IS NULL " +
         "AND b.AttendanceRecordedAt IS NULL AND b.AbsenceSource IS NULL";
@@ -37,9 +35,7 @@ public sealed class SqlPrivateAppointmentLinkRepository(DbSession session)
     private const string ConfirmAlreadyRecordedSql = """
         SELECT CASE WHEN EXISTS (
             SELECT 1
-        """ + PublicActionFrom + """
-            WHERE
-        """ + PublicLinkValidity + " AND a.StartsAt > @now " +
+        """ + "\n" + PublicActionFrom + "\nWHERE\n" + PublicLinkValidity + "\nAND a.StartsAt > @now " +
         "AND b.Status = @confirmed AND b.ConfirmedAt IS NOT NULL " +
         "AND b.CancelledAt IS NULL AND b.CancelledBy IS NULL " +
         "AND b.AttendanceRecordedAt IS NULL AND b.AbsenceSource IS NULL " +
@@ -48,9 +44,7 @@ public sealed class SqlPrivateAppointmentLinkRepository(DbSession session)
     private const string CancelSql = """
         UPDATE b
            SET Status = @cancelled, CancelledBy = @client, CancelledAt = @now
-        """ + PublicActionFrom + """
-        WHERE
-        """ + PublicLinkValidity + " AND a.StartsAt > @now " +
+        """ + "\n" + PublicActionFrom + "\nWHERE\n" + PublicLinkValidity + "\nAND a.StartsAt > @now " +
         "AND b.Status IN (@pending, @confirmed) " +
         "AND b.CancelledAt IS NULL AND b.CancelledBy IS NULL " +
         "AND b.AttendanceRecordedAt IS NULL AND b.AbsenceSource IS NULL " +
@@ -60,9 +54,7 @@ public sealed class SqlPrivateAppointmentLinkRepository(DbSession session)
     private const string ReportAbsenceSql = """
         UPDATE b
            SET Status = @absent, AbsenceSource = @clientLink
-        """ + PublicActionFrom + """
-        WHERE
-        """ + PublicLinkValidity + " AND a.StartsAt <= @now " +
+        """ + "\n" + PublicActionFrom + "\nWHERE\n" + PublicLinkValidity + "\nAND a.StartsAt <= @now " +
         "AND b.Status IN (@pending, @confirmed) " +
         "AND b.CancelledAt IS NULL AND b.CancelledBy IS NULL " +
         "AND b.AttendanceRecordedAt IS NULL AND b.AbsenceSource IS NULL " +
@@ -141,6 +133,33 @@ public sealed class SqlPrivateAppointmentLinkRepository(DbSession session)
             p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId)
                 .AddValue("@individual", AppointmentKind.Individual).AddValue("@reserved", AppointmentOrigin.Reserved),
             ct) > 0;
+
+    public async Task<IReadOnlyList<OwnerPrivateAppointmentSummary>> ListRecentIndividualBookingsAsync(
+        int businessId, DateTime now, CancellationToken ct = default) =>
+        await QueryAsync(
+            """
+            SELECT TOP (50) b.Id AS BookingId, a.Id AS AppointmentId, a.StartsAt,
+                   s.Name AS ServiceName, CONCAT(w.FirstName, N' ', w.LastName) AS WorkerName,
+                   activeLinks.ActiveLinkCount,
+                   CASE WHEN activeLinks.ActiveLinkCount = 1 THEN activeLinks.LatestExpiresAt END AS ActiveLinkExpiresAt
+              FROM Bookings AS b
+              JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
+              JOIN Services AS s ON s.Id = a.ServiceId AND s.BusinessId = a.BusinessId
+              JOIN Workers AS w ON w.Id = a.WorkerId AND w.BusinessId = a.BusinessId
+              OUTER APPLY (
+                  SELECT COUNT(*) AS ActiveLinkCount, MAX(l.ExpiresAt) AS LatestExpiresAt
+                    FROM AppointmentLinks AS l
+                   WHERE l.BookingId = b.Id AND l.RevokedAt IS NULL AND l.ExpiresAt > @now
+              ) AS activeLinks
+             WHERE b.BusinessId = @businessId AND a.BusinessId = @businessId
+               AND a.Kind = @individual AND a.Origin = @reserved AND a.MaxCapacity = 1
+               AND b.Modality IS NULL AND b.EnrollmentId IS NULL
+             ORDER BY a.StartsAt DESC, b.Id DESC
+            """,
+            MapOwnerSummary,
+            p => p.AddValue("@businessId", businessId).AddValue("@now", now)
+                .AddValue("@individual", AppointmentKind.Individual).AddValue("@reserved", AppointmentOrigin.Reserved),
+            ct);
 
     public async Task<IReadOnlyList<OwnerPrivateAppointmentLinkRecord>> GetActiveOwnerLinksAsync(
         int businessId, int bookingId, DateTime now, CancellationToken ct = default) =>
@@ -223,6 +242,15 @@ public sealed class SqlPrivateAppointmentLinkRepository(DbSession session)
         reader.GetNullable<DateTime>("AttendanceRecordedAt"),
         reader.GetNullableEnum<AbsenceSource>("AbsenceSource"),
         reader.GetNullableEnum<CancelledBy>("CancelledBy"));
+
+    private static OwnerPrivateAppointmentSummary MapOwnerSummary(SqlDataReader reader) => new(
+        reader.Get<int>("BookingId"),
+        reader.Get<int>("AppointmentId"),
+        reader.Get<DateTime>("StartsAt"),
+        reader.Get<string>("ServiceName"),
+        reader.Get<string>("WorkerName"),
+        reader.Get<int>("ActiveLinkCount"),
+        reader.GetNullable<DateTime>("ActiveLinkExpiresAt"));
 
     private static OwnerPrivateAppointmentLinkRecord MapOwnerLink(SqlDataReader reader) => new(
         reader.Get<int>("Id"),
