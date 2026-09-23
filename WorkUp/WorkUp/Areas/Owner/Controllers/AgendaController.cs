@@ -91,7 +91,10 @@ public sealed class AgendaController(
             BusinessId, id, new OwnerRescheduleRequest(booking.WorkerId, startsAt), ct);
         if (!attempt.Succeeded)
         {
-            ModelState.AddModelError(string.Empty, RescheduleErrorMessage);
+            if (RevealableRescheduleErrorCodes.Contains(attempt.Error!.Code))
+                ModelState.AddBusinessError(attempt.Error);
+            else
+                ModelState.AddModelError(string.Empty, RescheduleErrorMessage);
             return await BuildRescheduleFormWithOptionsAsync(booking, input, ct);
         }
 
@@ -187,6 +190,18 @@ public sealed class AgendaController(
 
     private const string RescheduleErrorMessage =
         "No se pudo reprogramar el turno. El horario puede haberse ocupado o el turno ya no admite cambios. Revisá los datos e intentá de nuevo.";
+
+    /// <summary>
+    /// Business-rule codes safe to show verbatim: they describe an invalid choice on the owner's own booking, not
+    /// whether it exists. Not-found/unauthorized codes (<c>owner_booking_not_found</c>, <c>owner_booking_unavailable</c>)
+    /// stay behind <see cref="RescheduleErrorMessage"/> so a stale or cross-tenant request never leaks existence.
+    /// </summary>
+    private static readonly HashSet<string> RevealableRescheduleErrorCodes = new(StringComparer.Ordinal)
+    {
+        "owner_reschedule_invalid_time",
+        "owner_reschedule_same_slot",
+        "owner_reschedule_slot_unavailable"
+    };
 
     private async Task<IActionResult> BuildBookingFormAsync(
         OwnerBookingCreateInput input, CancellationToken ct, DateTime? conflictAlternative = null)

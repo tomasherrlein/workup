@@ -61,7 +61,7 @@
             <option value="WalkIn" selected="@(Model.Origin == AppointmentOrigin.WalkIn)">Sin reserva</option>
         </select>
     </div>
-    <button type="submit" class="btn-primary">Aplicar filtros</button>
+    <button type="submit" class="btn">Aplicar filtros</button>
 </form>
 
 @if (Model.HasFilters)
@@ -70,15 +70,16 @@
         @if (Model.WorkerId is not null)
         {
             <li>
-                <a class="btn-link" asp-action="Index" asp-all-route-data="Model.Query(keepWorker: false)">
+                <a class="btn-link" asp-action="Index" asp-all-route-data="Model.Query(keepWorker: false)" aria-label="Quitar filtro: @Model.WorkerName">
                     @Icons.Svg("cross") @Model.WorkerName
                 </a>
             </li>
         }
         @if (Model.BookingStatus is not null)
         {
+            var statusLabel = StatusTag.For(Model.BookingStatus.Value).Label;
             <li>
-                <a class="btn-link" asp-action="Index" asp-all-route-data="Model.Query(keepStatus: false)">
+                <a class="btn-link" asp-action="Index" asp-all-route-data="Model.Query(keepStatus: false)" aria-label="Quitar filtro: @statusLabel">
                     @Icons.Svg("cross") <partial name="_StatusTag" model="StatusTag.For(Model.BookingStatus.Value)" />
                 </a>
             </li>
@@ -87,7 +88,7 @@
         {
             var originLabel = Model.Origin == AppointmentOrigin.Reserved ? "Reservado" : "Sin reserva";
             <li>
-                <a class="btn-link" asp-action="Index" asp-all-route-data="Model.Query(keepOrigin: false)">
+                <a class="btn-link" asp-action="Index" asp-all-route-data="Model.Query(keepOrigin: false)" aria-label="Quitar filtro: @originLabel">
                     @Icons.Svg("cross") @originLabel
                 </a>
             </li>

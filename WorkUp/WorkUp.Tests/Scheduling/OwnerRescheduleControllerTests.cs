@@ -150,7 +150,7 @@ public sealed class OwnerRescheduleControllerTests
     }
 
     [Fact]
-    public async Task Occupied_slot_keeps_the_form_and_original_reservation_with_a_generic_error()
+    public async Task Occupied_slot_keeps_the_form_and_original_reservation_with_the_specific_business_error()
     {
         var fixture = CreateFixture();
         fixture.RescheduleRepository.Snapshot = fixture.RescheduleRepository.Snapshot with
@@ -174,10 +174,49 @@ public sealed class OwnerRescheduleControllerTests
         var view = Assert.IsType<ViewResult>(result);
         var model = Assert.IsType<AgendaBookingRescheduleViewModel>(view.Model);
         Assert.Same(submitted, model.Input);
+        // "slot_unavailable" is a business-rule outcome on the owner's own booking, not an existence leak, so it
+        // shows the specific message instead of the generic reschedule error (finding 5).
         Assert.Contains(view.ViewData.ModelState.Values.SelectMany(value => value.Errors), error =>
+            error.ErrorMessage.Contains("Ese horario no está disponible", StringComparison.Ordinal));
+        Assert.DoesNotContain(view.ViewData.ModelState.Values.SelectMany(value => value.Errors), error =>
             error.ErrorMessage.Contains("No se pudo reprogramar", StringComparison.Ordinal));
         Assert.Equal(OriginalStart, fixture.RescheduleRepository.Booking!.StartsAt);
         Assert.Equal(BookingStatus.Pending, fixture.RescheduleRepository.Booking.BookingStatus);
+        Assert.Equal(0, fixture.UnitOfWork.CommitCount);
+    }
+
+    [Fact]
+    public async Task Choosing_the_same_slot_shows_its_specific_business_message()
+    {
+        var fixture = CreateFixture();
+        var controller = fixture.CreateController(businessId: 7);
+        var sameSlot = new OwnerRescheduleInput
+        {
+            Date = DateOnly.FromDateTime(OriginalStart),
+            StartTime = TimeOnly.FromDateTime(OriginalStart)
+        };
+
+        var result = await controller.Reschedule(40, sameSlot);
+
+        var view = Assert.IsType<ViewResult>(result);
+        Assert.Contains(view.ViewData.ModelState.Values.SelectMany(value => value.Errors), error =>
+            error.ErrorMessage == "Elegí un horario distinto al actual.");
+        Assert.Equal(0, fixture.UnitOfWork.CommitCount);
+    }
+
+    [Fact]
+    public async Task A_reschedule_that_no_longer_finds_the_booking_keeps_the_generic_error()
+    {
+        var fixture = CreateFixture();
+        fixture.RescheduleRepository.Booking = null;
+        var controller = fixture.CreateController(businessId: 7);
+        var submitted = ValidInput();
+
+        var result = await controller.Reschedule(40, submitted);
+
+        var view = Assert.IsType<ViewResult>(result);
+        Assert.Contains(view.ViewData.ModelState.Values.SelectMany(value => value.Errors), error =>
+            error.ErrorMessage.Contains("No se pudo reprogramar", StringComparison.Ordinal));
         Assert.Equal(0, fixture.UnitOfWork.CommitCount);
     }
 
