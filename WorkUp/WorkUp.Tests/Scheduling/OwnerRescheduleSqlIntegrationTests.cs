@@ -39,7 +39,11 @@ public sealed class OwnerRescheduleSqlIntegrationTests(ITestOutputHelper output)
             return;
         }
 
-        var target = ValidateTarget(suppliedConnectionString);
+        // Suffixed so this test and the race test below each derive their own fresh database from the single
+        // configured WORKUP_T11_SQL_CONNECTION; sharing one database name would make the second test's
+        // "must be new" preflight fail once the first test's migration has created it, breaking a one-command run
+        // of the whole class.
+        var target = ValidateTarget(suppliedConnectionString, "_Reschedule");
         output.WriteLine($"SQL Server LocalDB target: {target.DatabaseName}");
 
         var exists = await DatabaseExistsViaSqlcmdAsync(target.DatabaseName);
@@ -120,7 +124,8 @@ public sealed class OwnerRescheduleSqlIntegrationTests(ITestOutputHelper output)
             return;
         }
 
-        var target = ValidateTarget(suppliedConnectionString);
+        // See the reschedule test above: each opt-in test gets its own suffix so the class runs in one command.
+        var target = ValidateTarget(suppliedConnectionString, "_Race");
         output.WriteLine($"SQL Server LocalDB target: {target.DatabaseName}");
 
         var exists = await DatabaseExistsViaSqlcmdAsync(target.DatabaseName);
@@ -133,14 +138,24 @@ public sealed class OwnerRescheduleSqlIntegrationTests(ITestOutputHelper output)
         var clock = new FakeClock { Now = FixedNow };
         var ids = await SeedRaceDataAsync(target.ConnectionString, clock);
 
-        async Task<OwnerRescheduleAttempt> RescheduleAsync(int bookingId)
+        // A bare Task.WhenAll over two async local functions does not force real overlap: each call runs
+        // synchronously on the calling thread up to its first await, so the first reschedule can reach and release
+        // its worker lock before the second one is even started, leaving nothing to serialize. The barrier forces
+        // both reschedules onto separate thread-pool threads (Task.Run) and holds each one immediately before it
+        // opens its transaction and asks for the per-worker UPDLOCK, releasing both at the same instant. This is
+        // what actually proves the README's per-worker UPDLOCK/ROWLOCK convention serializes concurrent owner
+        // reschedules: without it, both could read the target slot as free and both would succeed (double booking).
+        using var startGate = new Barrier(participantCount: 2);
+
+        Task<OwnerRescheduleAttempt> RescheduleAsync(int bookingId) => Task.Run(async () =>
         {
             await using var session = new DbSession(target.ConnectionString);
             var repository = new SqlOwnerRescheduleRepository(session);
             var service = new OwnerRescheduleService(repository, session, clock);
+            startGate.SignalAndWait();
             return await service.RescheduleIndividualAsync(
                 ids.BusinessId, bookingId, new OwnerRescheduleRequest(ids.WorkerId, RaceTargetStart));
-        }
+        });
 
         var results = await Task.WhenAll(
             RescheduleAsync(ids.FirstBookingId),
@@ -212,7 +227,12 @@ public sealed class OwnerRescheduleSqlIntegrationTests(ITestOutputHelper output)
 
     private sealed record RaceIds(int BusinessId, int WorkerId, int FirstBookingId, int SecondBookingId);
 
-    private static SqlTarget ValidateTarget(string suppliedConnectionString)
+    /// <summary>
+    /// Validates the supplied connection and derives this test's own database name by appending
+    /// <paramref name="testSuffix"/> to the configured database, so every opt-in test in this class gets a fresh,
+    /// distinct target from one WORKUP_T11_SQL_CONNECTION value and the whole class can run in a single command.
+    /// </summary>
+    private static SqlTarget ValidateTarget(string suppliedConnectionString, string testSuffix)
     {
         SqlConnectionStringBuilder supplied;
         try
@@ -224,7 +244,7 @@ public sealed class OwnerRescheduleSqlIntegrationTests(ITestOutputHelper output)
             throw new InvalidOperationException("WORKUP_T11_SQL_CONNECTION could not be parsed; no SQL connection was opened.");
         }
 
-        var databaseName = supplied.InitialCatalog;
+        var databaseName = supplied.InitialCatalog + testSuffix;
         var safeName = databaseName.Length <= 128
             && databaseName.StartsWith(RequiredDatabasePrefix, StringComparison.Ordinal)
             && SafeDatabaseName.IsMatch(databaseName);
