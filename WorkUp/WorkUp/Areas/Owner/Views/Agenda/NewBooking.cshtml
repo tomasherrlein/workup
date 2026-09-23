@@ -40,11 +40,36 @@
 </form>
 <div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
 
-@if (form.ServiceId is not null && form.WorkerId is not null)
+@if (form.IsPastDate)
 {
+    <div class="notice notice-warning"><p>Elegiste un día que ya pasó. Elegí un día futuro para ver horarios.</p></div>
+}
+else if (form.ServiceId is not null && form.WorkerId is not null)
+{
+    @if (Model.ConflictAlternative is { } conflictAlternative)
+    {
+        <div class="notice notice-warning">
+            <p>Ese horario se ocupó justo ahora. Tus datos se conservaron; elegí otro horario o probá el más cercano:</p>
+            <a class="btn" asp-action="NewBooking"
+               asp-route-serviceId="@form.ServiceId" asp-route-workerId="@form.WorkerId"
+               asp-route-date="@DateOnly.FromDateTime(conflictAlternative).ToString("yyyy-MM-dd")">
+                @Formatting.LongDate(DateOnly.FromDateTime(conflictAlternative)), @Formatting.Time(conflictAlternative)
+            </a>
+        </div>
+    }
     @if (form.AvailableStartTimes.Count == 0)
     {
-        <div class="empty-state"><p>No hay horarios disponibles para esa selección y ese día.</p></div>
+        <div class="empty-state">
+            <p>No hay horarios disponibles para esa selección y ese día.</p>
+            @if (form.NearestAlternative is { } nearestAlternative)
+            {
+                <a class="btn-primary" asp-action="NewBooking"
+                   asp-route-serviceId="@form.ServiceId" asp-route-workerId="@form.WorkerId"
+                   asp-route-date="@DateOnly.FromDateTime(nearestAlternative).ToString("yyyy-MM-dd")">
+                    Horario más cercano: @Formatting.LongDate(DateOnly.FromDateTime(nearestAlternative)), @Formatting.Time(nearestAlternative)
+                </a>
+            }
+        </div>
     }
     else
     {

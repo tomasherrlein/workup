@@ -58,6 +58,37 @@ public sealed class OwnerRescheduleControllerTests
     }
 
     [Fact]
+    public async Task Reschedule_get_offers_the_available_options_of_the_selected_day()
+    {
+        var fixture = CreateFixture();
+        var controller = fixture.CreateController(businessId: 7);
+
+        var result = Assert.IsType<ViewResult>(await controller.Reschedule(40));
+        var model = Assert.IsType<AgendaBookingRescheduleViewModel>(result.Model);
+
+        Assert.Equal(DateOnly.FromDateTime(OriginalStart), model.Input.Date);
+        Assert.NotNull(model.Options);
+        Assert.Equal(DateOnly.FromDateTime(OriginalStart), model.Options!.Date);
+        Assert.DoesNotContain(TimeOnly.FromDateTime(OriginalStart), model.Options.AvailableStartTimes);
+        Assert.Contains(new TimeOnly(9, 0), model.Options.AvailableStartTimes);
+    }
+
+    [Fact]
+    public async Task Reschedule_get_navigates_to_a_requested_day_and_keeps_it_on_the_form()
+    {
+        var fixture = CreateFixture();
+        var controller = fixture.CreateController(businessId: 7);
+        var requestedDate = DateOnly.FromDateTime(NewStart);
+
+        var result = Assert.IsType<ViewResult>(await controller.Reschedule(40, requestedDate));
+        var model = Assert.IsType<AgendaBookingRescheduleViewModel>(result.Model);
+
+        Assert.Equal(requestedDate, model.Input.Date);
+        Assert.Equal(requestedDate, model.Options!.Date);
+        Assert.Contains(TimeOnly.FromDateTime(NewStart), model.Options.AvailableStartTimes);
+    }
+
+    [Fact]
     public async Task Successful_owner_reschedule_uses_business_claim_and_redirects_to_detail()
     {
         var fixture = CreateFixture();
@@ -198,7 +229,8 @@ public sealed class OwnerRescheduleControllerTests
         var detail = new OwnerAgendaBookingDetail(
             40, 30, OriginalStart, OriginalStart.AddMinutes(45), AppointmentStatus.Scheduled,
             AppointmentOrigin.Reserved, BookingStatus.Pending, "Corte", "Ana", "Sol Gómez",
-            "sol@example.invalid", null, 12000m, AppointmentKind.Individual, 1);
+            "sol@example.invalid", null, 12000m, AppointmentKind.Individual, 1,
+            WorkerId: 2);
         var agendaRepository = new FakeOwnerAgendaRepository();
         agendaRepository.BookingDetails.Add((7, detail));
         agendaRepository.Entries.Add((7, new OwnerAgendaRow(

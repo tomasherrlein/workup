@@ -49,18 +49,20 @@ public sealed class AgendaController(
             return NotFound();
 
         ViewData["Title"] = "Detalle del turno";
-        return View(new AgendaBookingDetailViewModel(booking, CanReschedule(booking, clock.Now)));
+        return View(new AgendaBookingDetailViewModel(booking));
     }
 
     [HttpGet]
-    public async Task<IActionResult> Reschedule(int id, CancellationToken ct = default)
+    public async Task<IActionResult> Reschedule(int id, DateOnly? date = null, CancellationToken ct = default)
     {
         SetPrivateResponseHeaders();
         var booking = await agendaService.GetIndividualBookingAsync(BusinessId, id, ct);
-        if (booking is null || !CanReschedule(booking, clock.Now))
+        if (booking is null || !booking.CanReschedule)
             return NotFound();
 
-        return BuildRescheduleForm(booking, new OwnerRescheduleInput());
+        var selectedDate = date ?? DateOnly.FromDateTime(booking.StartsAt);
+        var options = await rescheduleService.GetOptionsAsync(BusinessId, id, selectedDate, ct);
+        return BuildRescheduleForm(booking, new OwnerRescheduleInput { Date = selectedDate }, options);
     }
 
     [HttpPost]
@@ -75,32 +77,22 @@ public sealed class AgendaController(
         if (booking is null)
             return NotFound();
 
-        if (!CanReschedule(booking, clock.Now))
+        if (!booking.CanReschedule)
         {
             ModelState.AddModelError(string.Empty, RescheduleErrorMessage);
-            return BuildRescheduleForm(booking, input);
+            return await BuildRescheduleFormWithOptionsAsync(booking, input, ct);
         }
 
         if (!ModelState.IsValid)
-            return BuildRescheduleForm(booking, input);
+            return await BuildRescheduleFormWithOptionsAsync(booking, input, ct);
 
-        var date = input.Date!.Value;
-        var startsAt = date.ToDateTime(input.StartTime!.Value);
-        var agenda = await agendaService.GetAgendaAsync(BusinessId, new OwnerAgendaFilter(DateOnly.FromDateTime(booking.StartsAt)), ct);
-        var originalEntry = agenda.Entries.SingleOrDefault(entry =>
-            entry.BookingId == id && entry.Kind == AppointmentKind.Individual && entry.Origin == AppointmentOrigin.Reserved);
-        if (originalEntry is null)
-        {
-            ModelState.AddModelError(string.Empty, RescheduleErrorMessage);
-            return BuildRescheduleForm(booking, input);
-        }
-
+        var startsAt = input.Date!.Value.ToDateTime(input.StartTime!.Value);
         var attempt = await rescheduleService.RescheduleIndividualAsync(
-            BusinessId, id, new OwnerRescheduleRequest(originalEntry.WorkerId, startsAt), ct);
+            BusinessId, id, new OwnerRescheduleRequest(booking.WorkerId, startsAt), ct);
         if (!attempt.Succeeded)
         {
             ModelState.AddModelError(string.Empty, RescheduleErrorMessage);
-            return BuildRescheduleForm(booking, input);
+            return await BuildRescheduleFormWithOptionsAsync(booking, input, ct);
         }
 
         this.Flash("Turno reprogramado.");
@@ -145,7 +137,7 @@ public sealed class AgendaController(
         if (!attempt.Succeeded)
         {
             ModelState.AddModelError(string.Empty, attempt.Error!.Message);
-            return await BuildBookingFormAsync(input, ct);
+            return await BuildBookingFormAsync(input, ct, attempt.AlternativeStart);
         }
 
         this.Flash("Turno reservado.");
@@ -166,29 +158,27 @@ public sealed class AgendaController(
         return RedirectToAction(nameof(Detail), new { id });
     }
 
-    private IActionResult BuildRescheduleForm(OwnerAgendaBookingDetail booking, OwnerRescheduleInput input)
+    private async Task<IActionResult> BuildRescheduleFormWithOptionsAsync(
+        OwnerAgendaBookingDetail booking, OwnerRescheduleInput input, CancellationToken ct)
     {
-        ViewData["Title"] = "Reprogramar turno";
-        return View("Reschedule", new AgendaBookingRescheduleViewModel(booking, input));
+        var date = input.Date ?? DateOnly.FromDateTime(booking.StartsAt);
+        input.Date = date;
+        var options = await rescheduleService.GetOptionsAsync(BusinessId, booking.BookingId, date, ct);
+        return BuildRescheduleForm(booking, input, options);
     }
 
-    private static bool CanReschedule(OwnerAgendaBookingDetail booking, DateTime now) =>
-        booking.AppointmentKind == AppointmentKind.Individual &&
-        booking.Origin == AppointmentOrigin.Reserved &&
-        booking.MaxCapacity == 1 &&
-        booking.AppointmentStatus == AppointmentStatus.Scheduled &&
-        booking.StartsAt > now &&
-        booking.CancelledAt is null &&
-        booking.CancelledBy is null &&
-        booking.AttendanceRecordedAt is null &&
-        booking.AbsenceSource is null &&
-        ((booking.BookingStatus == BookingStatus.Pending && booking.ConfirmedAt is null) ||
-         (booking.BookingStatus == BookingStatus.Confirmed && booking.ConfirmedAt is not null));
+    private IActionResult BuildRescheduleForm(
+        OwnerAgendaBookingDetail booking, OwnerRescheduleInput input, OwnerRescheduleOptions? options = null)
+    {
+        ViewData["Title"] = "Reprogramar turno";
+        return View("Reschedule", new AgendaBookingRescheduleViewModel(booking, input, options));
+    }
 
     private const string RescheduleErrorMessage =
         "No se pudo reprogramar el turno. El horario puede haberse ocupado o el turno ya no admite cambios. Revisá los datos e intentá de nuevo.";
 
-    private async Task<IActionResult> BuildBookingFormAsync(OwnerBookingCreateInput input, CancellationToken ct)
+    private async Task<IActionResult> BuildBookingFormAsync(
+        OwnerBookingCreateInput input, CancellationToken ct, DateTime? conflictAlternative = null)
     {
         var form = await bookingActionsService.GetBookingFormAsync(
             BusinessId,
@@ -201,7 +191,7 @@ public sealed class AgendaController(
             return NotFound();
 
         ViewData["Title"] = "Anotar turno";
-        return View("NewBooking", new AgendaBookingFormViewModel(form, input));
+        return View("NewBooking", new AgendaBookingFormViewModel(form, input, conflictAlternative));
     }
 
     private void SetPrivateResponseHeaders()
