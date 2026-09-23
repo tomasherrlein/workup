@@ -14,6 +14,8 @@ public sealed class OwnerRescheduleService(
     IUnitOfWork unitOfWork,
     IClock clock)
 {
+    private const int AlternativeSearchDays = 30;
+
     public async Task<OwnerRescheduleAttempt> RescheduleIndividualAsync(
         int businessId,
         int bookingId,
@@ -40,6 +42,8 @@ public sealed class OwnerRescheduleService(
             return NotFound();
         if (booking.WorkerId != workerId.Value || booking.WorkerId != request.WorkerId || !CanReschedule(booking))
             return Unavailable();
+        if (request.NewStartsAt == booking.StartsAt)
+            return Failed("owner_reschedule_same_slot", "Elegí un horario distinto al actual.");
 
         var stateCheckTime = clock.Now;
         if (booking.StartsAt <= stateCheckTime || request.NewStartsAt <= stateCheckTime || booking.ServiceDurationMinutes <= 0)
@@ -64,15 +68,7 @@ public sealed class OwnerRescheduleService(
         // current reservation does not conflict with its replacement; every other scheduled appointment still does.
         var snapshot = await repository.GetAvailabilitySnapshotAsync(
             businessId, booking.WorkerId, DateOnly.FromDateTime(request.NewStartsAt), ct);
-        var service = new Service
-        {
-            BusinessId = businessId,
-            Id = 0,
-            Name = booking.ServiceName,
-            DurationMinutes = booking.ServiceDurationMinutes,
-            MaxCapacity = 1,
-            IsActive = true
-        };
+        var service = ServiceFor(booking);
         var otherAppointments = snapshot.Appointments.Where(appointment => appointment.Id != booking.AppointmentId).ToArray();
         var availableSlots = AvailabilityCalculator.GetAvailableSlots(
             booking.WorkerId,
@@ -124,6 +120,59 @@ public sealed class OwnerRescheduleService(
         return new OwnerRescheduleAttempt(Result<OwnerRescheduleConfirmation>.Success(
             new OwnerRescheduleConfirmation(bookingId, booking.AppointmentId, request.NewStartsAt, newEndsAt)));
     }
+
+    /// <summary>
+    /// Unlocked preview of the same worker's free starts on <paramref name="date"/> (RF-09 step 3). The original
+    /// appointment does not block its own move and its current start is not offered. When the day has no option,
+    /// the nearest free start of the same worker in the following 30 days is suggested. Saving revalidates under lock.
+    /// </summary>
+    public async Task<OwnerRescheduleOptions?> GetOptionsAsync(
+        int businessId, int bookingId, DateOnly date, CancellationToken ct = default)
+    {
+        if (businessId <= 0 || bookingId <= 0 || date.DayNumber >= DateOnly.MaxValue.DayNumber - AlternativeSearchDays)
+            return null;
+
+        var booking = await repository.GetOwnerBookingAsync(businessId, bookingId, ct);
+        var now = clock.Now;
+        if (booking is null || booking.BusinessId != businessId || booking.BookingId != bookingId ||
+            !CanReschedule(booking) || booking.StartsAt <= now || booking.ServiceDurationMinutes <= 0)
+            return null;
+
+        var today = DateOnly.FromDateTime(now);
+        var searchStart = date < today ? today : date;
+        var searchEnd = searchStart.AddDays(AlternativeSearchDays);
+        var fetched = await repository.GetAvailabilitySnapshotAsync(businessId, booking.WorkerId, searchStart, searchEnd, ct);
+        var snapshot = fetched with
+        {
+            Appointments = fetched.Appointments.Where(appointment => appointment.Id != booking.AppointmentId).ToArray()
+        };
+        var service = ServiceFor(booking);
+        bool IsOffered(DateTime slot) => slot > now && slot != booking.StartsAt;
+
+        IReadOnlyList<TimeOnly> startTimes = date < today
+            ? []
+            : AvailabilityCalculator.GetAvailableSlots(
+                    booking.WorkerId, date, service, snapshot.Schedules, snapshot.Breaks, snapshot.Appointments, snapshot.Bookings)
+                .Where(IsOffered)
+                .Select(TimeOnly.FromDateTime)
+                .ToArray();
+        var nearest = startTimes.Count == 0
+            ? NearestSlotSearch.Find(
+                booking.WorkerId, searchStart, searchEnd, searchStart.ToDateTime(new TimeOnly(12, 0)), service, snapshot, IsOffered)
+            : null;
+
+        return new OwnerRescheduleOptions(date, booking.StartsAt, startTimes, nearest);
+    }
+
+    private static Service ServiceFor(OwnerRescheduleBooking booking) => new()
+    {
+        BusinessId = booking.BusinessId,
+        Id = 0,
+        Name = booking.ServiceName,
+        DurationMinutes = booking.ServiceDurationMinutes,
+        MaxCapacity = 1,
+        IsActive = true
+    };
 
     private static bool CanReschedule(OwnerRescheduleBooking booking) =>
         booking.AppointmentKind == AppointmentKind.Individual &&

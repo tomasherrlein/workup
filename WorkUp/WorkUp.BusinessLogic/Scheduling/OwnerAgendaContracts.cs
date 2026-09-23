@@ -54,7 +54,9 @@ public sealed record OwnerAgendaBookingDetail(
     CancelledBy? CancelledBy = null,
     DateTime? AttendanceRecordedAt = null,
     AbsenceSource? AbsenceSource = null,
-    bool CanCancel = false);
+    bool CanCancel = false,
+    bool CanReschedule = false,
+    int WorkerId = 0);
 
 public sealed record OwnerAgendaResult(
     DateOnly SelectedDate,

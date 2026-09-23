@@ -56,8 +56,8 @@ public sealed class BookingService(
             worker.Id, request.Date, service, snapshot.Schedules, snapshot.Breaks, snapshot.Appointments, snapshot.Bookings);
         if (!availableSlots.Contains(startsAt))
         {
-            var alternative = FindNearestFutureSlot(
-                worker.Id, startsAt, now, request.Date, searchEndDate, service, snapshot);
+            var alternative = NearestSlotSearch.Find(
+                worker.Id, request.Date, searchEndDate, startsAt, service, snapshot, slot => slot > now);
             return Failed("slot_unavailable", "Ese horario no está disponible. Elegí otro.", nameof(request.StartTime), alternative);
         }
 
@@ -192,38 +192,6 @@ public sealed class BookingService(
             return new BusinessError("booking_start_in_past", "Elegí un horario futuro.", nameof(request.StartTime));
 
         return null;
-    }
-
-    private static DateTime? FindNearestFutureSlot(
-        int workerId,
-        DateTime requestedStart,
-        DateTime now,
-        DateOnly searchStartDate,
-        DateOnly searchEndDate,
-        Service service,
-        BookingAvailabilitySnapshot snapshot)
-    {
-        DateTime? nearest = null;
-        var nearestDistance = long.MaxValue;
-        for (var date = searchStartDate; ; date = date.AddDays(1))
-        {
-            foreach (var slot in AvailabilityCalculator.GetAvailableSlots(
-                         workerId, date, service, snapshot.Schedules, snapshot.Breaks, snapshot.Appointments, snapshot.Bookings))
-            {
-                if (slot <= now)
-                    continue;
-
-                var distance = Math.Abs(slot.Ticks - requestedStart.Ticks);
-                if (distance < nearestDistance || (distance == nearestDistance && (nearest is null || slot < nearest.Value)))
-                {
-                    nearest = slot;
-                    nearestDistance = distance;
-                }
-            }
-
-            if (date == searchEndDate)
-                return nearest;
-        }
     }
 
     private static string BuildEmailBody(

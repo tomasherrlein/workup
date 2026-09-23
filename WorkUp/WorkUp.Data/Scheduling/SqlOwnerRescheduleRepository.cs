@@ -33,34 +33,52 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
             p => p.AddValue("@businessId", businessId).AddValue("@workerId", workerId),
             ct) > 0;
 
+    private const string SelectBookingSql =
+        """
+        SELECT b.BusinessId, b.Id AS BookingId, a.Id AS AppointmentId, a.WorkerId,
+               a.Kind AS AppointmentKind, a.Status AS AppointmentStatus, a.Origin, a.MaxCapacity,
+               b.Modality, b.EnrollmentId, b.Status AS BookingStatus,
+               a.StartsAt, a.EndsAt, b.ConfirmedAt, b.CancelledAt, b.CancelledBy,
+               b.AttendanceRecordedAt, b.AbsenceSource, s.DurationMinutes,
+               bus.Name AS BusinessName, c.FirstName AS ClientFirstName, c.Email AS ClientEmail,
+               s.Name AS ServiceName, CONCAT(w.FirstName, N' ', w.LastName) AS WorkerName
+          FROM Bookings AS b {0}
+          JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
+          JOIN Services AS s ON s.Id = a.ServiceId AND s.BusinessId = a.BusinessId
+          JOIN Workers AS w ON w.Id = a.WorkerId AND w.BusinessId = a.BusinessId
+          JOIN Businesses AS bus ON bus.Id = b.BusinessId
+          JOIN Clients AS c ON c.Id = b.ClientId AND c.BusinessId = b.BusinessId
+         WHERE b.BusinessId = @businessId AND b.Id = @bookingId
+        """;
+
+    private static readonly string LockBookingSql = string.Format(SelectBookingSql, "WITH (UPDLOCK, ROWLOCK)");
+    private static readonly string ReadBookingSql = string.Format(SelectBookingSql, "");
+
     public Task<OwnerRescheduleBooking?> LockOwnerBookingAsync(
         int businessId, int bookingId, CancellationToken ct = default) =>
         QuerySingleOrDefaultAsync(
-            """
-            SELECT b.BusinessId, b.Id AS BookingId, a.Id AS AppointmentId, a.WorkerId,
-                   a.Kind AS AppointmentKind, a.Status AS AppointmentStatus, a.Origin, a.MaxCapacity,
-                   b.Modality, b.EnrollmentId, b.Status AS BookingStatus,
-                   a.StartsAt, a.EndsAt, b.ConfirmedAt, b.CancelledAt, b.CancelledBy,
-                   b.AttendanceRecordedAt, b.AbsenceSource, s.DurationMinutes,
-                   bus.Name AS BusinessName, c.FirstName AS ClientFirstName, c.Email AS ClientEmail,
-                   s.Name AS ServiceName, CONCAT(w.FirstName, N' ', w.LastName) AS WorkerName
-              FROM Bookings AS b WITH (UPDLOCK, ROWLOCK)
-              JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
-              JOIN Services AS s ON s.Id = a.ServiceId AND s.BusinessId = a.BusinessId
-              JOIN Workers AS w ON w.Id = a.WorkerId AND w.BusinessId = a.BusinessId
-              JOIN Businesses AS bus ON bus.Id = b.BusinessId
-              JOIN Clients AS c ON c.Id = b.ClientId AND c.BusinessId = b.BusinessId
-             WHERE b.BusinessId = @businessId AND b.Id = @bookingId
-            """,
+            LockBookingSql,
             MapBooking,
             p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId),
             ct);
 
+    public Task<OwnerRescheduleBooking?> GetOwnerBookingAsync(
+        int businessId, int bookingId, CancellationToken ct = default) =>
+        QuerySingleOrDefaultAsync(
+            ReadBookingSql,
+            MapBooking,
+            p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId),
+            ct);
+
+    public Task<BookingAvailabilitySnapshot> GetAvailabilitySnapshotAsync(
+        int businessId, int workerId, DateOnly date, CancellationToken ct = default) =>
+        GetAvailabilitySnapshotAsync(businessId, workerId, date, date, ct);
+
     public async Task<BookingAvailabilitySnapshot> GetAvailabilitySnapshotAsync(
-        int businessId, int workerId, DateOnly date, CancellationToken ct = default)
+        int businessId, int workerId, DateOnly startDate, DateOnly endDate, CancellationToken ct = default)
     {
-        var rangeStart = date.ToDateTime(TimeOnly.MinValue);
-        var rangeEnd = date.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        var rangeStart = startDate.ToDateTime(TimeOnly.MinValue);
+        var rangeEnd = endDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
         var parameters = new Action<SqlParameterCollection>(p =>
             p.AddValue("@businessId", businessId).AddValue("@workerId", workerId)
                 .AddDateTime2("@rangeStart", rangeStart).AddDateTime2("@rangeEnd", rangeEnd));

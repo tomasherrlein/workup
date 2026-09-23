@@ -61,7 +61,7 @@ public sealed class SqlOwnerAgendaRepository(DbSession session) : SqlRepositoryB
         int businessId, int bookingId, CancellationToken ct = default) =>
         QuerySingleOrDefaultAsync(
             """
-            SELECT b.Id AS BookingId, a.Id AS AppointmentId, a.StartsAt, a.EndsAt,
+            SELECT b.Id AS BookingId, a.Id AS AppointmentId, a.StartsAt, a.EndsAt, a.WorkerId,
                    a.Kind AS AppointmentKind, a.MaxCapacity, a.Status AS AppointmentStatus, a.Origin,
                    b.Status AS BookingStatus, b.ConfirmedAt, b.CancelledAt, b.CancelledBy,
                    b.AttendanceRecordedAt, b.AbsenceSource,
@@ -117,5 +117,6 @@ public sealed class SqlOwnerAgendaRepository(DbSession session) : SqlRepositoryB
         reader.GetNullable<DateTime>("CancelledAt"),
         reader.GetNullableEnum<CancelledBy>("CancelledBy"),
         reader.GetNullable<DateTime>("AttendanceRecordedAt"),
-        reader.GetNullableEnum<AbsenceSource>("AbsenceSource"));
+        reader.GetNullableEnum<AbsenceSource>("AbsenceSource"),
+        WorkerId: reader.Get<int>("WorkerId"));
 }

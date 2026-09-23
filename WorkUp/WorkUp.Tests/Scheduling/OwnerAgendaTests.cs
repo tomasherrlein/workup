@@ -125,7 +125,7 @@ public sealed class OwnerAgendaTests
         var found = await service.GetIndividualBookingAsync(7, 10);
         var crossTenant = await service.GetIndividualBookingAsync(8, 10);
 
-        Assert.Equal(detail with { CanCancel = true }, found);
+        Assert.Equal(detail with { CanCancel = true, CanReschedule = true }, found);
         Assert.Null(crossTenant);
         Assert.Equal([(7, 10), (8, 10)], repository.BookingRequests);
         var fields = typeof(OwnerAgendaBookingDetail).GetProperties().Select(property => property.Name);
@@ -159,7 +159,7 @@ public sealed class OwnerAgendaTests
     }
 
     [Fact]
-    public async Task Booking_detail_hides_cancellation_at_start_and_for_non_reserved_or_non_scheduled_appointments()
+    public async Task Booking_detail_hides_cancellation_and_reschedule_at_start_and_for_non_reserved_or_non_scheduled_appointments()
     {
         var now = new DateTime(2026, 9, 22, 9, 0, 0);
         foreach (var detail in new[]
@@ -176,7 +176,33 @@ public sealed class OwnerAgendaTests
             var found = await service.GetIndividualBookingAsync(7, detail.BookingId);
 
             Assert.False(found!.CanCancel);
+            Assert.False(found.CanReschedule);
         }
+    }
+
+    [Theory]
+    [InlineData(BookingStatus.Pending, true)]
+    [InlineData(BookingStatus.Confirmed, true)]
+    [InlineData(BookingStatus.Attended, false)]
+    [InlineData(BookingStatus.Absent, false)]
+    [InlineData(BookingStatus.Cancelled, false)]
+    public async Task Booking_detail_only_offers_rescheduling_for_active_individual_bookings_before_start(
+        BookingStatus status, bool canReschedule)
+    {
+        var detail = Detail(10) with
+        {
+            BookingStatus = status,
+            ConfirmedAt = status == BookingStatus.Confirmed ? new DateTime(2026, 9, 21, 12, 0, 0) : null,
+            CancelledAt = status == BookingStatus.Cancelled ? new DateTime(2026, 9, 21, 12, 0, 0) : null,
+            CancelledBy = status == BookingStatus.Cancelled ? CancelledBy.Owner : null
+        };
+        var repository = new FakeOwnerAgendaRepository();
+        repository.BookingDetails.Add((7, detail));
+        var service = new OwnerAgendaService(repository, new FakeClock { Now = new DateTime(2026, 9, 21, 12, 0, 0) });
+
+        var found = await service.GetIndividualBookingAsync(7, 10);
+
+        Assert.Equal(canReschedule, found!.CanReschedule);
     }
 
     [Fact]

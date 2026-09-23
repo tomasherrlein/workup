@@ -111,7 +111,8 @@ public sealed class PublicBookingBrowseService(
             .Where(slot => slot > now)
             .Select(TimeOnly.FromDateTime)
             .ToArray();
-        var nearest = FindNearestFutureSlot(workerId, date, searchEndDate, service!, now, snapshot);
+        var nearest = NearestSlotSearch.Find(
+            workerId, date, searchEndDate, date.ToDateTime(new TimeOnly(12, 0)), service!, snapshot, slot => slot > now);
 
         return new PublicBookingAvailability(
             ToPublicBusiness(business),
@@ -120,39 +121,6 @@ public sealed class PublicBookingBrowseService(
             date,
             slots,
             nearest);
-    }
-
-    private static DateTime? FindNearestFutureSlot(
-        int workerId,
-        DateOnly startDate,
-        DateOnly endDate,
-        Service service,
-        DateTime now,
-        BookingAvailabilitySnapshot snapshot)
-    {
-        var requestedStart = startDate.ToDateTime(new TimeOnly(12, 0));
-        DateTime? nearest = null;
-        var nearestDistance = long.MaxValue;
-
-        for (var date = startDate; ; date = date.AddDays(1))
-        {
-            foreach (var slot in AvailabilityCalculator.GetAvailableSlots(
-                         workerId, date, service, snapshot.Schedules, snapshot.Breaks, snapshot.Appointments, snapshot.Bookings))
-            {
-                if (slot <= now)
-                    continue;
-
-                var distance = Math.Abs(slot.Ticks - requestedStart.Ticks);
-                if (distance < nearestDistance || (distance == nearestDistance && (nearest is null || slot < nearest.Value)))
-                {
-                    nearest = slot;
-                    nearestDistance = distance;
-                }
-            }
-
-            if (date == endDate)
-                return nearest;
-        }
     }
 
     private static bool IsUsable(Service? service, int businessId, int serviceId) =>

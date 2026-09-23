@@ -48,6 +48,13 @@ public sealed record OwnerRescheduleBooking(
 
 public sealed record OwnerRescheduleCurrentLink(int LinkId, DateTime ExpiresAt);
 
+/// <summary>Unlocked preview of the same worker's free start times for one day; the save revalidates under lock.</summary>
+public sealed record OwnerRescheduleOptions(
+    DateOnly Date,
+    DateTime CurrentStartsAt,
+    IReadOnlyList<TimeOnly> AvailableStartTimes,
+    DateTime? NearestAlternative);
+
 /// <summary>Transaction-bound persistence for owner reprogramming of an individual reserved appointment.</summary>
 public interface IOwnerRescheduleRepository
 {
@@ -63,6 +70,13 @@ public interface IOwnerRescheduleRepository
     /// <summary>Reloads the worker's current schedules, breaks, appointments, and bookings after both locks.</summary>
     Task<BookingAvailabilitySnapshot> GetAvailabilitySnapshotAsync(
         int businessId, int workerId, DateOnly date, CancellationToken ct = default);
+
+    /// <summary>Non-locking tenant-scoped read used only for the reschedule preview.</summary>
+    Task<OwnerRescheduleBooking?> GetOwnerBookingAsync(int businessId, int bookingId, CancellationToken ct = default);
+
+    /// <summary>Reads the worker's schedules, breaks, appointments, and bookings for an inclusive date range.</summary>
+    Task<BookingAvailabilitySnapshot> GetAvailabilitySnapshotAsync(
+        int businessId, int workerId, DateOnly startDate, DateOnly endDate, CancellationToken ct = default);
 
     /// <summary>Returns up to two unrevoked, unexpired links; more than one makes the operation fail closed.</summary>
     Task<IReadOnlyList<OwnerRescheduleCurrentLink>> GetCurrentLinksAsync(

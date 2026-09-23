@@ -10,7 +10,9 @@ public sealed record OwnerBookingForm(
     int? ServiceId,
     int? WorkerId,
     DateOnly Date,
-    IReadOnlyList<TimeOnly> AvailableStartTimes);
+    IReadOnlyList<TimeOnly> AvailableStartTimes,
+    DateTime? NearestAlternative = null,
+    bool IsPastDate = false);
 
 public sealed record OwnerBookingCancellationState(
     int BookingId,
@@ -67,7 +69,10 @@ public sealed class OwnerBookingActionsService(
         if (catalog is null || catalog.Business.Id != businessId)
             return null;
 
-        var selectedDate = date ?? DateOnly.FromDateTime(clock.Now);
+        var today = DateOnly.FromDateTime(clock.Now);
+        var selectedDate = date ?? today;
+        var isPastDate = selectedDate < today;
+        DateTime? nearestAlternative = null;
         var selectedServiceId = catalog.Services.Any(service => service.Id == serviceId) ? serviceId : null;
         IReadOnlyList<PublicBookingWorkerOption> workers = [];
         int? selectedWorkerId = null;
@@ -81,7 +86,7 @@ public sealed class OwnerBookingActionsService(
             {
                 workers = validSelection.Workers.Where(worker => worker.Id > 0).ToArray();
                 selectedWorkerId = workers.Any(worker => worker.Id == workerId) ? workerId : null;
-                if (selectedWorkerId is { } validWorkerId)
+                if (selectedWorkerId is { } validWorkerId && !isPastDate)
                 {
                     var availability = await browseService.GetAvailabilityAsync(
                         businessSlug, validServiceId, validWorkerId, selectedDate, ct);
@@ -90,7 +95,11 @@ public sealed class OwnerBookingActionsService(
                         validAvailability.Service.Id == validServiceId &&
                         validAvailability.Worker.Id == validWorkerId &&
                         validAvailability.Date == selectedDate)
+                    {
                         availableStartTimes = validAvailability.AvailableStartTimes;
+                        if (availableStartTimes.Count == 0)
+                            nearestAlternative = validAvailability.NearestFutureAlternative;
+                    }
                     else
                         selectedWorkerId = null;
                 }
@@ -101,7 +110,9 @@ public sealed class OwnerBookingActionsService(
             }
         }
 
-        return new OwnerBookingForm(catalog, workers, selectedServiceId, selectedWorkerId, selectedDate, availableStartTimes);
+        return new OwnerBookingForm(
+            catalog, workers, selectedServiceId, selectedWorkerId, selectedDate, availableStartTimes,
+            nearestAlternative, isPastDate);
     }
 
     /// <summary>Uses the exact public booking transaction, worker lock, availability recheck, link, and outbox path.</summary>

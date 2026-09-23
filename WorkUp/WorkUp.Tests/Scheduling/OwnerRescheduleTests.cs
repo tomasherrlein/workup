@@ -373,6 +373,109 @@ public sealed class OwnerRescheduleTests
         Assert.Equal(0, unitOfWork.CommitCount);
     }
 
+    [Fact]
+    public async Task Rejects_rescheduling_to_the_current_start_without_writing()
+    {
+        var repository = CreateRepository();
+        var unitOfWork = new RescheduleUnitOfWork(repository);
+        var service = CreateService(repository, unitOfWork, new FakeClock { Now = Now });
+
+        var result = await service.RescheduleIndividualAsync(7, 40, Request(OriginalStart));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("owner_reschedule_same_slot", result.Error!.Code);
+        Assert.DoesNotContain("apply-reschedule", repository.Calls);
+        Assert.Empty(repository.Notifications);
+        Assert.Equal(0, unitOfWork.CommitCount);
+    }
+
+    [Fact]
+    public async Task Options_list_free_slots_of_the_same_worker_without_the_current_start_or_locks()
+    {
+        var repository = CreateRepository();
+        repository.Snapshot = repository.Snapshot with
+        {
+            Appointments =
+            [
+                Appointment(30, OriginalStart, 45),
+                Appointment(99, new DateTime(2026, 3, 11, 12, 0, 0), 30)
+            ],
+            Bookings =
+            [
+                new Booking { Id = 40, BusinessId = 7, AppointmentId = 30, Status = BookingStatus.Pending },
+                new Booking { Id = 100, BusinessId = 7, AppointmentId = 99, Status = BookingStatus.Pending }
+            ]
+        };
+        var service = CreateService(repository, new RescheduleUnitOfWork(repository), new FakeClock { Now = Now });
+
+        var options = await service.GetOptionsAsync(7, 40, DateOnly.FromDateTime(OriginalStart));
+
+        Assert.NotNull(options);
+        Assert.Equal(DateOnly.FromDateTime(OriginalStart), options.Date);
+        Assert.Equal(OriginalStart, options.CurrentStartsAt);
+        Assert.Contains(new TimeOnly(9, 0), options.AvailableStartTimes);
+        Assert.Contains(new TimeOnly(10, 15), options.AvailableStartTimes);
+        Assert.DoesNotContain(new TimeOnly(10, 0), options.AvailableStartTimes);
+        Assert.DoesNotContain(new TimeOnly(11, 30), options.AvailableStartTimes);
+        Assert.DoesNotContain(new TimeOnly(12, 0), options.AvailableStartTimes);
+        Assert.Null(options.NearestAlternative);
+        Assert.DoesNotContain("lock-worker", repository.Calls);
+        Assert.DoesNotContain("lock-booking", repository.Calls);
+    }
+
+    [Fact]
+    public async Task Options_offer_the_nearest_slot_of_the_same_worker_when_the_day_is_full()
+    {
+        var repository = CreateRepository();
+        repository.Snapshot = repository.Snapshot with
+        {
+            Schedules =
+            [
+                new WorkerSchedule
+                {
+                    WorkerId = 2, DayOfWeek = DayOfWeek.Friday, StartTime = new TimeOnly(9, 0), EndTime = new TimeOnly(17, 0)
+                }
+            ]
+        };
+        var service = CreateService(repository, new RescheduleUnitOfWork(repository), new FakeClock { Now = Now });
+
+        var options = await service.GetOptionsAsync(7, 40, new DateOnly(2026, 3, 11));
+
+        Assert.NotNull(options);
+        Assert.Empty(options.AvailableStartTimes);
+        Assert.Equal(new DateTime(2026, 3, 13, 9, 0, 0), options.NearestAlternative);
+    }
+
+    [Fact]
+    public async Task Options_hide_past_times_of_today_and_are_unavailable_from_the_start_or_for_inactive_bookings()
+    {
+        var repository = CreateRepository();
+        var service = CreateService(repository, new RescheduleUnitOfWork(repository), new FakeClock { Now = Now });
+
+        var today = await service.GetOptionsAsync(7, 40, DateOnly.FromDateTime(Now));
+        Assert.NotNull(today);
+        Assert.DoesNotContain(new TimeOnly(9, 0), today.AvailableStartTimes);
+        Assert.Contains(new TimeOnly(9, 15), today.AvailableStartTimes);
+
+        Assert.Null(await service.GetOptionsAsync(8, 40, DateOnly.FromDateTime(NewStart)));
+
+        var started = CreateService(repository, new RescheduleUnitOfWork(repository), new FakeClock { Now = OriginalStart });
+        Assert.Null(await started.GetOptionsAsync(7, 40, DateOnly.FromDateTime(NewStart)));
+
+        repository.Booking = repository.Booking! with
+        {
+            BookingStatus = BookingStatus.Cancelled, CancelledAt = Now, CancelledBy = CancelledBy.Owner
+        };
+        Assert.Null(await service.GetOptionsAsync(7, 40, DateOnly.FromDateTime(NewStart)));
+    }
+
+    private static Appointment Appointment(int id, DateTime startsAt, int minutes) => new()
+    {
+        Id = id, BusinessId = 7, WorkerId = 2, ServiceId = 3,
+        Kind = AppointmentKind.Individual, Origin = AppointmentOrigin.Reserved,
+        Status = AppointmentStatus.Scheduled, StartsAt = startsAt, EndsAt = startsAt.AddMinutes(minutes)
+    };
+
     private static FakeOwnerRescheduleRepository CreateRepository()
     {
         var repository = new FakeOwnerRescheduleRepository

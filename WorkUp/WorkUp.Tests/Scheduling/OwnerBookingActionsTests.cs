@@ -243,6 +243,65 @@ public sealed class OwnerBookingActionsTests
         Assert.Equal(0, unitOfWork.CommitCount);
     }
 
+    [Fact]
+    public async Task Owner_booking_form_offers_the_nearest_slot_of_the_same_worker_when_the_day_is_full()
+    {
+        var fixture = await CreateFormFixtureAsync(workingDay: DayOfWeek.Friday);
+
+        var form = await fixture.Service.GetBookingFormAsync(
+            fixture.BusinessId, "salon", 3, 2, new DateOnly(2026, 3, 11));
+
+        Assert.NotNull(form);
+        Assert.Empty(form.AvailableStartTimes);
+        Assert.Equal(2, form.WorkerId);
+        Assert.Equal(new DateTime(2026, 3, 13, 9, 0, 0), form.NearestAlternative);
+        Assert.False(form.IsPastDate);
+    }
+
+    [Fact]
+    public async Task Owner_booking_form_keeps_the_selection_and_flags_a_past_day_instead_of_hiding_it()
+    {
+        var fixture = await CreateFormFixtureAsync(workingDay: null);
+
+        var form = await fixture.Service.GetBookingFormAsync(
+            fixture.BusinessId, "salon", 3, 2, new DateOnly(2026, 3, 9));
+
+        Assert.NotNull(form);
+        Assert.True(form.IsPastDate);
+        Assert.Equal(3, form.ServiceId);
+        Assert.Equal(2, form.WorkerId);
+        Assert.Empty(form.AvailableStartTimes);
+        Assert.Null(form.NearestAlternative);
+    }
+
+    private static async Task<(OwnerBookingActionsService Service, int BusinessId)> CreateFormFixtureAsync(DayOfWeek? workingDay)
+    {
+        var businesses = new FakeBusinessRepository();
+        var businessId = await businesses.InsertAsync(new Business { Name = "Salón", Slug = "salon" });
+        var browseRepository = new FakeOwnerBookingBrowseRepository();
+        browseRepository.Services.Add(new Service
+        {
+            Id = 3, BusinessId = businessId, Name = "Corte", Price = 5000m,
+            DurationMinutes = 30, MaxCapacity = 1, IsActive = true
+        });
+        browseRepository.Workers.Add(new PublicBookingWorkerOption(2, "Ana Pérez"));
+        var days = workingDay is { } day ? new[] { day } : Enum.GetValues<DayOfWeek>();
+        var publicRepository = new FakeBookingRepository
+        {
+            Worker = new Worker { Id = 2, BusinessId = businessId, FirstName = "Ana", LastName = "Pérez", IsActive = true },
+            Service = browseRepository.Services[0],
+            Snapshot = new BookingAvailabilitySnapshot(
+                days.Select(workDay => new WorkerSchedule
+                {
+                    WorkerId = 2, DayOfWeek = workDay, StartTime = new TimeOnly(9, 0), EndTime = new TimeOnly(17, 0)
+                }).ToArray(), [], [], [])
+        };
+        var clock = new FakeClock { Now = Now };
+        var browseService = new PublicBookingBrowseService(businesses, browseRepository, publicRepository, clock);
+        return (new OwnerBookingActionsService(
+            browseService, null!, new FakeOwnerBookingActionsRepository(), new FakeUnitOfWork(), clock), businessId);
+    }
+
     private static OwnerBookingActionsService CreateService(
         FakeOwnerBookingActionsRepository repository, FakeUnitOfWork unitOfWork, FakeClock clock) =>
         new(null!, null!, repository, unitOfWork, clock);

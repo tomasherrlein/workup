@@ -49,6 +49,20 @@ public sealed class FakeOwnerRescheduleRepository : IOwnerRescheduleRepository
         return Task.FromResult(Snapshot);
     }
 
+    public Task<OwnerRescheduleBooking?> GetOwnerBookingAsync(
+        int businessId, int bookingId, CancellationToken ct = default)
+    {
+        Calls.Add("read-booking");
+        return Task.FromResult(Booking?.BusinessId == businessId && Booking.BookingId == bookingId ? Booking : null);
+    }
+
+    public Task<BookingAvailabilitySnapshot> GetAvailabilitySnapshotAsync(
+        int businessId, int workerId, DateOnly startDate, DateOnly endDate, CancellationToken ct = default)
+    {
+        Calls.Add("availability-range");
+        return Task.FromResult(Snapshot);
+    }
+
     public Task<IReadOnlyList<OwnerRescheduleCurrentLink>> GetCurrentLinksAsync(
         int businessId, int bookingId, DateTime now, CancellationToken ct = default)
     {

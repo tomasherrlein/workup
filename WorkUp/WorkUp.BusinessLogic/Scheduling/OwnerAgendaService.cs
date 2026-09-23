@@ -56,7 +56,13 @@ public sealed class OwnerAgendaService(IOwnerAgendaRepository repository, IClock
             booking.CancelledBy,
             booking.AttendanceRecordedAt,
             booking.AbsenceSource);
-        return booking with { CanCancel = OwnerBookingActionsService.CanCancel(cancellationState, clock.Now) };
+        // Cancel and reschedule share one precondition: an active reserved individual booking before its start.
+        var isActiveBeforeStart = OwnerBookingActionsService.CanCancel(cancellationState, clock.Now);
+        return booking with
+        {
+            CanCancel = isActiveBeforeStart,
+            CanReschedule = isActiveBeforeStart
+        };
     }
 
     private static DateOnly MondayOf(DateOnly date) => date.AddDays(-(((int)date.DayOfWeek + 6) % 7));
