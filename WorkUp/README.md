@@ -15,6 +15,33 @@ dotnet run --project WorkUp/WorkUp --launch-profile https
 - Configurá `WorkUp:PublicBaseUrl` con la URL absoluta y confiable que se incluirá en los enlaces privados. Fuera de `Development` debe ser HTTPS y no puede apuntar a loopback; por ejemplo, definí `WorkUp__PublicBaseUrl=https://reservas.example.com` en el entorno del despliegue. En `Development` se permite `localhost` por HTTP o HTTPS. La aplicación valida esto al iniciar y nunca deriva el dominio del encabezado `Host` de la solicitud.
 - Pruebas: `dotnet test WorkUp/WorkUp.sln`.
 
+#### Aislamiento del llavero de DataProtection para verificación local (T12)
+
+Por defecto la aplicación usa `services.AddDataProtection()` sin cambios: el llavero sale del perfil compartido del usuario (`%LOCALAPPDATA%\ASP.NET\DataProtection-Keys` en Windows) y ninguna configuración lo altera. Eso es lo correcto para correr la app, pero una verificación HTTP sintética necesita su propio llavero para no leer ni escribir las claves compartidas.
+
+Solo para desarrollo local existe una opción explícita: la clave de configuración `WorkUp:Development:DataProtectionKeysPath`. Cuando está ausente, el comportamiento es exactamente el de siempre. Cuando está presente, el arranque valida la ruta y **falla si algo no se cumple**, sin leer, crear ni escribir nada:
+
+- el entorno tiene que ser `Development`;
+- la ruta tiene que ser absoluta y quedar dentro del directorio temporal del sistema operativo;
+- el último segmento tiene que empezar con `WorkUpDemoT12Keys`, para que nunca apunte al llavero compartido ni a una ruta pública.
+
+En Windows las claves se protegen en reposo con DPAPI al persistirlas. Fuera de Windows la opción se rechaza al iniciar en lugar de guardar claves sin cifrar. El directorio se conserva: **no borres claves anteriores**. Los dos procesos del recorrido HTTP comparten el llavero durante **una** corrida; para repetir la prueba opt-in se exige un directorio y una base **nuevos**. Usá siempre destinos exclusivos de la verificación sintética.
+
+Ejemplo en PowerShell, desde la raíz del repositorio:
+
+```powershell
+$env:ASPNETCORE_ENVIRONMENT = 'Development'
+$env:WorkUp__Development__DataProtectionKeysPath = Join-Path ([IO.Path]::GetTempPath()) 'WorkUpDemoT12KeysLocal'
+try {
+    dotnet run --project WorkUp/WorkUp --launch-profile https
+}
+finally {
+    Remove-Item Env:WorkUp__Development__DataProtectionKeysPath, Env:ASPNETCORE_ENVIRONMENT
+}
+```
+
+El valor también se puede dejar en `WorkUp/appsettings.Development.json` para una máquina de desarrollo dedicada. No lo configures fuera de `Development`: el arranque lo rechaza.
+
 ### Semilla local de datos de demostración (T07)
 
 La semilla es una operación independiente y explícita; **nunca** corre al iniciar la aplicación, en una migración ni por activar DevTools. Solo funciona con las tres protecciones a la vez: argumento `--seed-demo-data`, entorno `Development` y configuración `WorkUp:DemoData:Enabled=true`. También requiere `WORKUP_DEMO_PASSWORD` en el entorno del proceso; no hay una contraseña incluida en el código ni en este documento. Las dos cuentas de demo usan esa contraseña elegida localmente y se guarda únicamente su hash con el hasher de Identity.
