@@ -1,0 +1,22 @@
+@using WorkUp.ViewModels.Reservations
+@model PublicDropInConfirmationViewModel
+@{
+    ViewData["Title"] = "Reserva recibida";
+}
+<section class="public-booking" aria-labelledby="drop-in-confirmation-title">
+    <h1 id="drop-in-confirmation-title">Recibimos tu reserva</h1>
+    <div class="notice notice-success" role="status">
+        @Icons.Svg("check")
+        <p>Tu lugar en la clase quedó reservado. Vas a recibir un email con los detalles.</p>
+    </div>
+
+    <dl class="details public-booking-summary">
+        <dt>Estado</dt><dd><partial name="_StatusTag" model="StatusTag.For(BookingStatus.Pending)" /></dd>
+        <dt>Clase</dt><dd>@Model.ServiceName</dd>
+        <dt>Profesora</dt><dd>@Model.TeacherName</dd>
+        <dt>Día</dt><dd>@Formatting.LongDate(Model.Date)</dd>
+        <dt>Horario</dt><dd>@Formatting.Time(Model.StartTime)</dd>
+    </dl>
+    <p class="muted">Es una clase suelta: no necesitás abono. Guardá el día y el horario.</p>
+    <a class="btn btn-secondary" asp-action="Classes" asp-route-slug="@Model.Business.Slug">Volver a las clases</a>
+</section>

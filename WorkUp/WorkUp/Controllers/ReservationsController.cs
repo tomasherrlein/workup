@@ -1,9 +1,15 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WorkUp.BusinessLogic.Abstractions;
+using WorkUp.BusinessLogic.Businesses;
+using WorkUp.BusinessLogic.Catalog;
+using WorkUp.BusinessLogic.Classes;
 using WorkUp.BusinessLogic.Scheduling;
+using WorkUp.BusinessLogic.Staff;
+using WorkUp.Domain.Entities;
 using WorkUp.Infrastructure;
 using WorkUp.Models.Reservations;
+using WorkUp.ViewModels.Reservations;
 
 namespace WorkUp.Controllers;
 
@@ -12,8 +18,19 @@ namespace WorkUp.Controllers;
 public sealed class ReservationsController(
     PublicBookingBrowseService browseService,
     BookingService bookingService,
+    ClassDropInService dropInService,
+    IBusinessRepository businesses,
+    CatalogService catalogService,
+    StaffService staffService,
     IClock clock) : Controller
 {
+    /// <summary>
+    /// Forward window of the public drop-in offer (RF-22): today plus the next 30 days. The business service keeps
+    /// only the sessions that are <c>Programado</c>, still in the future and with a free place, so the screen never
+    /// shows a suspended, started or full class.
+    /// </summary>
+    private const int DropInWindowDays = 30;
+
     [HttpGet("")]
     public async Task<IActionResult> Index(string slug, CancellationToken ct)
     {
@@ -118,6 +135,104 @@ public sealed class ReservationsController(
         return View("Contact", model);
     }
 
+    [HttpGet("clases")]
+    public async Task<IActionResult> Classes(string slug, int? session, CancellationToken ct)
+    {
+        var business = await businesses.GetBySlugAsync(slug, ct);
+        if (business is null)
+            return NotFound();
+
+        var model = await BuildDropInListAsync(business, ct);
+
+        // The form only opens for a session that is actually offered: an id from the query string never becomes a
+        // form for a class the business does not publish.
+        if (session is { } selected && model.Sessions.Any(option => option.AppointmentId == selected))
+            model.OpenAppointmentId = selected;
+
+        SetPublicLayout(ToPublicBusiness(business));
+        return View("Classes", model);
+    }
+
+    /// <summary>
+    /// Books the public drop-in (RF-07 cupo &gt; 1). The offer is read before booking so the confirmation can name the
+    /// class and its teacher, and so a rejected booking re-renders the same screen with the typed values. The list is
+    /// a read: a rejected request never reaches the guarded insert, so it never writes.
+    /// </summary>
+    [HttpPost("clases/reservar")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> BookDropIn(string slug, PublicDropInListViewModel model, CancellationToken ct)
+    {
+        var business = await businesses.GetBySlugAsync(slug, ct);
+        if (business is null)
+            return NotFound();
+
+        var publicBusiness = ToPublicBusiness(business);
+        SetPublicLayout(publicBusiness);
+
+        var list = await BuildDropInListAsync(business, ct);
+        var selected = list.Sessions.FirstOrDefault(option => option.AppointmentId == model.AppointmentId);
+
+        var attempt = await dropInService.BookPublicAsync(
+            business.Id,
+            new DropInBookingRequest(model.AppointmentId, model.Email, model.FirstName, model.LastName, model.Phone),
+            ct);
+
+        if (attempt.Succeeded)
+        {
+            return View("DropIn", new PublicDropInConfirmationViewModel(
+                publicBusiness,
+                attempt.Value.Date,
+                attempt.Value.StartTime,
+                selected?.ServiceName ?? "",
+                selected?.TeacherName ?? ""));
+        }
+
+        // The service owns the stable codes; mapping them onto the same field names the form posted keeps the
+        // message next to the right control and, because the whole model comes back, keeps what the person typed.
+        ModelState.AddBusinessError(attempt.Error!);
+        list.OpenAppointmentId = model.AppointmentId;
+        list.AppointmentId = model.AppointmentId;
+        list.Email = model.Email;
+        list.FirstName = model.FirstName;
+        list.LastName = model.LastName;
+        list.Phone = model.Phone;
+        return View("Classes", list);
+    }
+
+    /// <summary>
+    /// Builds the public offer: the bookable sessions of the forward window, with the class and teacher names of the
+    /// ids the offer carries. A failed listing (an impossible range or a business without id) degrades to an empty
+    /// offer instead of breaking the public screen.
+    /// </summary>
+    private async Task<PublicDropInListViewModel> BuildDropInListAsync(Business business, CancellationToken ct)
+    {
+        var today = DateOnly.FromDateTime(clock.Now);
+        var options = await dropInService.ListOptionsAsync(
+            business.Id, today, today.AddDays(DropInWindowDays), serviceId: null, ct);
+
+        if (!options.Succeeded)
+            return new PublicDropInListViewModel { Business = ToPublicBusiness(business) };
+
+        var services = await catalogService.ListAsync(business.Id, ct);
+        var workers = await staffService.ListAsync(business.Id, ct);
+        var serviceNames = services.ToDictionary(service => service.Id, service => service.Name);
+        var teacherNames = workers.ToDictionary(worker => worker.Id, worker => worker.FullName);
+
+        return new PublicDropInListViewModel
+        {
+            Business = ToPublicBusiness(business),
+            Sessions = options.Value
+                .Select(option => new PublicDropInSession(
+                    option.AppointmentId,
+                    option.Date,
+                    option.StartTime,
+                    serviceNames.GetValueOrDefault(option.ServiceId, ""),
+                    teacherNames.GetValueOrDefault(option.WorkerId, ""),
+                    option.RemainingPlaces))
+                .ToArray()
+        };
+    }
+
     private async Task<IActionResult> RenderAvailabilityAsync(
         string slug,
         int serviceId,
@@ -165,6 +280,9 @@ public sealed class ReservationsController(
         model.Service = availability.Service;
         model.Worker = availability.Worker;
     }
+
+    private static PublicBookingBusiness ToPublicBusiness(Business business) =>
+        new(business.Id, business.Name, business.Slug);
 
     private void SetPublicLayout(PublicBookingBusiness business)
     {

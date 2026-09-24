@@ -1,0 +1,95 @@
+@using WorkUp.ViewModels.Reservations
+@model PublicDropInListViewModel
+@{
+    ViewData["Title"] = "Clases sueltas";
+    var days = Model.Sessions
+        .GroupBy(session => session.Date)
+        .OrderBy(group => group.Key)
+        .ToArray();
+}
+<section class="public-booking" aria-labelledby="drop-in-title">
+    <h1 id="drop-in-title">Clases sueltas</h1>
+    <p>Elegí una clase con lugar y anotate. Es una clase suelta: no necesitás abono.</p>
+
+    <div asp-validation-summary="All" class="notice notice-error" role="alert"></div>
+
+    @if (Model.Sessions.Count == 0)
+    {
+        <div class="empty-state public-empty-state">
+            <p>Por ahora no hay clases con lugar para anotarse en los próximos 30 días.</p>
+            <p><a class="btn btn-secondary" asp-action="Index" asp-route-slug="@Model.Business.Slug">Volver a los servicios</a></p>
+        </div>
+    }
+    else
+    {
+        @foreach (var day in days)
+        {
+            var headingId = "drop-in-day-" + day.Key.ToString("yyyyMMdd");
+            <section class="section" aria-labelledby="@headingId">
+                <div class="section-header"><h2 id="@headingId">@Formatting.LongDate(day.Key)</h2></div>
+                <ul class="rows" aria-label="Clases del @Formatting.LongDate(day.Key)">
+                    @foreach (var session in day.OrderBy(session => session.StartTime))
+                    {
+                        var placesId = "drop-in-places-" + session.AppointmentId;
+                        <li class="row">
+                            <div class="row-time">@Formatting.Time(session.StartTime)</div>
+                            <div class="row-main">
+                                <div class="row-title"><strong>@session.ServiceName</strong></div>
+                                <div class="row-sub">@session.TeacherName</div>
+                                <div class="row-sub" id="@placesId">
+                                    @(session.RemainingPlaces == 1
+                                        ? "Queda 1 lugar"
+                                        : $"Quedan {session.RemainingPlaces} lugares")
+                                </div>
+                                @if (Model.OpenAppointmentId == session.AppointmentId)
+                                {
+                                    <form asp-action="BookDropIn" asp-route-slug="@Model.Business.Slug" method="post"
+                                          class="form" aria-labelledby="@placesId">
+                                        <input type="hidden" name="AppointmentId" value="@session.AppointmentId" />
+                                        <div class="field">
+                                            <label asp-for="Email">Email</label>
+                                            <input asp-for="Email" type="email" autocomplete="email" maxlength="254" required />
+                                            <span asp-validation-for="Email"></span>
+                                        </div>
+                                        <div class="field">
+                                            <label asp-for="FirstName">Nombre</label>
+                                            <input asp-for="FirstName" autocomplete="given-name" maxlength="60" required />
+                                            <span asp-validation-for="FirstName"></span>
+                                        </div>
+                                        <div class="field">
+                                            <label asp-for="LastName">Apellido</label>
+                                            <input asp-for="LastName" autocomplete="family-name" maxlength="60" required />
+                                            <span asp-validation-for="LastName"></span>
+                                        </div>
+                                        <div class="field">
+                                            <label asp-for="Phone">Teléfono (opcional)</label>
+                                            <input asp-for="Phone" type="tel" autocomplete="tel" maxlength="30" />
+                                            <span asp-validation-for="Phone"></span>
+                                        </div>
+                                        <div class="actions">
+                                            <button class="btn btn-primary" type="submit">Anotarme en esta clase</button>
+                                            <a class="btn btn-secondary" asp-action="Classes" asp-route-slug="@Model.Business.Slug">Elegir otra clase</a>
+                                        </div>
+                                    </form>
+                                }
+                                else
+                                {
+                                    <div class="row-actions">
+                                        <a class="btn" asp-action="Classes" asp-route-slug="@Model.Business.Slug"
+                                           asp-route-session="@session.AppointmentId" aria-describedby="@placesId">Anotarme</a>
+                                    </div>
+                                }
+                            </div>
+                        </li>
+                    }
+                </ul>
+            </section>
+        }
+        <p class="actions">
+            <a class="btn btn-secondary" asp-action="Index" asp-route-slug="@Model.Business.Slug">Volver a los servicios</a>
+        </p>
+    }
+</section>
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

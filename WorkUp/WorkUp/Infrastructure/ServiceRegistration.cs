@@ -131,6 +131,10 @@ public static class ServiceRegistration
         services.AddScoped<IOwnerRescheduleRepository, SqlOwnerRescheduleRepository>();
         services.AddScoped<OwnerRescheduleService>();
 
+        // Public drop-in reservations (T14)
+        services.AddScoped<IClassDropInRepository, SqlClassDropInRepository>();
+        services.AddScoped<ClassDropInService>();
+
         return services;
     }
 
