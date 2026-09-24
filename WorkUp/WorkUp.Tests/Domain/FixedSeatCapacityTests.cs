@@ -4,10 +4,12 @@ using WorkUp.Domain.Rules;
 namespace WorkUp.Tests.Domain;
 
 // T15 (RF-05, RF-20, D-16, D-21, D-23): the permanent seat of a grid class is held by a fixed-class assignment whose
-// enrollment still holds places (`Pendiente de pago` or `Vigente`, never annulled or terminated) and whose validity
-// window covers the reference date. The permanent capacity is the service's `MaxCapacity`, the same number the dated
-// sessions are generated with, so the permanent seats of a grid class can never exceed a session's places. The rule is
-// pure: the caller reads the assignment rows and their enrollment statuses from storage.
+// enrollment still holds places (`Pendiente de pago` or `Vigente`, never annulled or terminated) and whose validity has
+// not already ended relative to the reference date. The place is retained from the moment the enrollment is registered,
+// so the start of the validity window never releases it (Regla 23, D-21) and the reference date is the registration
+// instant, not the enrollment's effective date. The permanent capacity is the service's `MaxCapacity`, the same number
+// the dated sessions are generated with, so the permanent seats of a grid class can never exceed a session's places.
+// The rule is pure: the caller reads the assignment rows and their enrollment statuses from storage.
 public class FixedSeatCapacityTests
 {
     [Theory]
@@ -76,14 +78,23 @@ public class FixedSeatCapacityTests
     }
 
     [Fact]
-    public void The_validity_window_is_inclusive_on_both_ends()
+    public void The_start_of_the_window_does_not_gate_the_seat_and_an_ended_window_releases_it()
     {
-        var assignments = new[] { Seat(1, validFrom: D(2026, 3, 10), validTo: D(2026, 3, 20)) };
+        // The place is retained from registration (Regla 23, D-21), so an assignment whose validity starts after the
+        // reference date still holds it: an enrollment registered today for a future effective date already blocks its
+        // grid class. Only an already ended validity releases the seat, and the end of the window is inclusive.
+        var startsLater = new[] { Seat(1, validFrom: D(2026, 3, 20)) };
+        var alreadyEnded = new[] { Seat(1, validFrom: D(2026, 2, 1), validTo: D(2026, 3, 9)) };
 
-        Assert.Equal(0, FixedSeatCapacity.SeatsTaken(2, assignments, D(2026, 3, 9)));
-        Assert.Equal(1, FixedSeatCapacity.SeatsTaken(2, assignments, D(2026, 3, 10)));
-        Assert.Equal(1, FixedSeatCapacity.SeatsTaken(2, assignments, D(2026, 3, 20)));
-        Assert.Equal(0, FixedSeatCapacity.SeatsTaken(2, assignments, D(2026, 3, 21)));
+        Assert.Equal(1, FixedSeatCapacity.SeatsTaken(2, startsLater, D(2026, 3, 10)));
+        Assert.Equal(1, FixedSeatCapacity.SeatsTaken(2, startsLater, D(2026, 3, 19)));
+        Assert.Equal(1, FixedSeatCapacity.SeatsTaken(2, startsLater, D(2026, 3, 20)));
+        Assert.False(FixedSeatCapacity.HasSeat(1, startsLater, D(2026, 3, 10)));
+
+        Assert.Equal(0, FixedSeatCapacity.SeatsTaken(2, alreadyEnded, D(2026, 3, 10)));
+        Assert.Equal(1, FixedSeatCapacity.SeatsTaken(2, alreadyEnded, D(2026, 3, 9)));
+        Assert.Equal(0, FixedSeatCapacity.SeatsTaken(2, alreadyEnded, D(2026, 3, 11)));
+        Assert.True(FixedSeatCapacity.HasSeat(1, alreadyEnded, D(2026, 3, 10)));
     }
 
     [Fact]
@@ -99,12 +110,15 @@ public class FixedSeatCapacityTests
     {
         // A schedule change (RF-21) closes the previous row the day before the effective date and opens a new one, so
         // the same enrollment can legitimately own two rows of one grid class. Counting rows would block a seat twice.
+        // Before the new row starts, both rows retain the place at once: the closed one because its validity has not
+        // ended yet, and the new one because the place is retained from registration. The seat is still one.
         var assignments = new[]
         {
             Seat(7, validFrom: D(2026, 3, 1), validTo: D(2026, 3, 9)),
             Seat(7, validFrom: D(2026, 3, 10))
         };
 
+        Assert.Equal(1, FixedSeatCapacity.SeatsTaken(3, assignments, D(2026, 3, 5)));
         Assert.Equal(1, FixedSeatCapacity.SeatsTaken(3, assignments, D(2026, 3, 10)));
     }
 

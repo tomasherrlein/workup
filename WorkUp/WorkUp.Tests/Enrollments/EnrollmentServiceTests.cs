@@ -398,6 +398,32 @@ public class EnrollmentServiceTests
     }
 
     [Fact]
+    public async Task A_pending_enrollment_for_a_future_date_retains_the_seat_from_registration()
+    {
+        // The reported regression: with capacity 1, an enrollment registered today for a future effective date must
+        // already retain the place, so a second enrollment with an earlier start cannot slip into the grid class. The
+        // place is held from registration (Regla 23, D-21), never from the start of its validity window.
+        AddClient(clientId: 100);
+        AddClient(clientId: 200, fullName: "Beto Diaz");
+        AddPrice();
+        AddGridClass(maxCapacity: 1);
+
+        var future = await _service.CreatePendingAsync(
+            1, CreateRequest(clientId: 100, effectiveFrom: D(2026, 4, 1)));
+        var earlier = await _service.CreatePendingAsync(
+            1, CreateRequest(clientId: 200, effectiveFrom: D(2026, 3, 15)));
+
+        Assert.True(future.Succeeded);
+        Assert.False(earlier.Succeeded);
+        Assert.Equal("enrollment_no_seat", earlier.Error!.Code);
+        Assert.Single(_repository.Enrollments);
+        // Only the first insert ran: the refused enrollment never reached the guarded insert.
+        Assert.Equal(1, _repository.TryInsertCallCount);
+        Assert.Equal(1, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
+    [Fact]
     public async Task Create_rejects_a_grid_class_whose_permanent_seats_are_taken()
     {
         AddClient(clientId: 100);
@@ -430,6 +456,27 @@ public class EnrollmentServiceTests
         var created = await _service.CreatePendingAsync(1, CreateRequest(clientId: 200));
 
         Assert.True(annulled.Succeeded);
+        Assert.True(created.Succeeded);
+        Assert.Equal(2, _repository.Enrollments.Count);
+        Assert.Equal(2, _repository.FixedClasses.Count);
+        Assert.Equal(2, _unitOfWork.CommitCount);
+    }
+
+    [Fact]
+    public async Task A_terminated_enrollment_releases_its_seat_without_removing_any_row()
+    {
+        AddClient(clientId: 100);
+        AddClient(clientId: 200, fullName: "Beto Diaz");
+        AddPrice();
+        AddGridClass(maxCapacity: 1);
+        var holder = StoreEnrollment(clientId: 100, status: EnrollmentStatus.Active, referenceDay: 1);
+        StoreFixedClass(holder, 10, D(2026, 3, 1));
+
+        var terminated = await _service.TerminateAsync(
+            1, new TerminateEnrollmentRequest(holder.Id, D(2026, 3, 10)));
+        var created = await _service.CreatePendingAsync(1, CreateRequest(clientId: 200));
+
+        Assert.True(terminated.Succeeded);
         Assert.True(created.Succeeded);
         Assert.Equal(2, _repository.Enrollments.Count);
         Assert.Equal(2, _repository.FixedClasses.Count);
@@ -1196,21 +1243,24 @@ public class EnrollmentServiceTests
     }
 
     [Fact]
-    public async Task Create_ignores_a_fixed_assignment_that_is_not_valid_on_the_effective_date()
+    public async Task Create_accepts_a_grid_class_whose_assignment_already_ended()
     {
-        // A seat only blocks what its validity window covers: an assignment that starts later does not close the grid
-        // class today (RF-21 closes the previous row the day before the new one opens).
+        // An ended assignment keeps its row for history but releases its place (RF-20, RF-21): judged on the
+        // registration instant, an assignment whose validity ended before it holds no seat, even when the requested
+        // effective date still fell inside that window.
         AddClient(clientId: 100);
         AddClient(clientId: 200, fullName: "Beto Diaz");
         AddPrice();
         AddGridClass(maxCapacity: 1);
         var holder = StoreEnrollment(clientId: 100, status: EnrollmentStatus.Active, referenceDay: 20);
-        StoreFixedClass(holder, 10, D(2026, 3, 20));
+        StoreFixedClass(holder, 10, D(2026, 2, 1), D(2026, 3, 9));
 
-        var result = await _service.CreatePendingAsync(1, CreateRequest(clientId: 200));
+        var result = await _service.CreatePendingAsync(
+            1, CreateRequest(clientId: 200, effectiveFrom: D(2026, 3, 1)));
 
         Assert.True(result.Succeeded);
         Assert.Equal(2, _repository.Enrollments.Count);
+        Assert.Equal(1, _unitOfWork.CommitCount);
     }
 
     [Fact]

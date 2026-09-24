@@ -51,8 +51,10 @@ public sealed class EnrollmentService(
     /// <summary>
     /// Registers the pending enrollment of a student of the business (RF-05 steps 1-3). The agreed price defaults to
     /// the monthly price configured for the weekly frequency and any other amount needs a reason (D-20); the chosen
-    /// grid classes must belong to the business, be active and still hold a free permanent seat on the effective date,
-    /// judged under the lock the guarded insert also uses.
+    /// grid classes must belong to the business, be active and still retain a free permanent seat when the enrollment
+    /// is registered, judged under the lock the guarded insert also uses. The requested effective date only decides
+    /// from when the fixed classes are valid, never whether the place is free: the place is retained from registration
+    /// (Regla 23, D-21), so an enrollment registered for a future date already blocks its grid class.
     /// </summary>
     public async Task<Result<PendingEnrollmentOutcome>> CreatePendingAsync(
         int businessId, CreateEnrollmentRequest request, CancellationToken ct = default)
@@ -90,8 +92,11 @@ public sealed class EnrollmentService(
                 "Elegí al menos una clase fija, hasta la frecuencia semanal.",
                 nameof(request.GridClassIds));
 
-        // The single clock read of the operation: the registered instant.
+        // The single clock read of the operation: the registered instant. The seat reference date is that same
+        // instant, because a place is retained from registration (Regla 23, D-21) and the requested effective date only
+        // decides from when the fixed classes are valid.
         var now = clock.Now;
+        var today = DateOnly.FromDateTime(now);
 
         await using var tx = await unitOfWork.BeginAsync(ct: ct);
 
@@ -133,9 +138,12 @@ public sealed class EnrollmentService(
 
         foreach (var gridClass in lockedGridClasses)
         {
+            // The reference date is today and not the requested effective date: an enrollment registered today for a
+            // future start already retains its place, so a second enrollment with an earlier start cannot slip into
+            // the grid class. The read stays under the grid class lock taken above.
             var seats = await repository.ListFixedSeatsAsync(
-                businessId, gridClass.GridClassId, request.EffectiveFrom, ct);
-            if (!FixedSeatCapacity.HasSeat(gridClass.MaxCapacity, seats, request.EffectiveFrom))
+                businessId, gridClass.GridClassId, today, ct);
+            if (!FixedSeatCapacity.HasSeat(gridClass.MaxCapacity, seats, today))
                 return Result<PendingEnrollmentOutcome>.Failure(
                     NoSeatCode, "No queda lugar fijo en alguna de las clases elegidas.");
         }
