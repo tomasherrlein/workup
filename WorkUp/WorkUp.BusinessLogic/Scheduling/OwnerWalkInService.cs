@@ -37,6 +37,6 @@ public sealed class OwnerWalkInService(IOwnerWalkInRepository repository, IUnitO
             start, end, price, context.ListPrice, request.PriceReason, request.CollectPayment, request.NextVisitNote?.Trim());
         var ids = await repository.InsertAsync(entry, ct);
         await tx.CommitAsync(ct);
-        return Result<OwnerWalkInOutcome>.Success(new(ids.AppointmentId, ids.BookingId, overlap));
+        return Result<OwnerWalkInOutcome>.Success(new(ids.AppointmentId, ids.BookingId, overlap, start));
     }
 }

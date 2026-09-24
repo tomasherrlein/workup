@@ -1,0 +1,27 @@
+@model WorkUp.Areas.Owner.Models.Day.WalkInViewModel
+@* Shared at-arrival form (RF-11). Rendered inline on the Jornada view and on the standalone deep link.
+   The business comes from the owner claim and the start time from the business clock, never from the request. *@
+<form asp-area="Owner" asp-controller="Day" asp-action="WalkIn" method="post" class="form owner-walk-in-form">
+    <div asp-validation-summary="ModelOnly" class="validation-summary-errors"></div>
+    <div class="field">
+        <label asp-for="ClientId">Cliente</label>
+        <select asp-for="ClientId" required><option value="">Elegí un cliente</option>@foreach (var client in Model.Clients) { <option value="@client.Id">@client.Name</option> }</select>
+        <span asp-validation-for="ClientId"></span>
+        <a asp-area="Owner" asp-controller="Clients" asp-action="Create">Crear ficha de cliente</a>
+    </div>
+    <div class="field">
+        <label asp-for="ServiceId">Servicio individual</label>
+        <select asp-for="ServiceId" required><option value="">Elegí un servicio</option>@foreach (var service in Model.Services) { <option value="@service.Id">@service.Name</option> }</select>
+        <span asp-validation-for="ServiceId"></span>
+    </div>
+    <div class="field">
+        <label asp-for="WorkerId">Trabajadora</label>
+        <select asp-for="WorkerId" required><option value="">Elegí una trabajadora</option>@foreach (var worker in Model.Workers) { <option value="@worker.Id">@worker.Name</option> }</select>
+        <span asp-validation-for="WorkerId"></span>
+    </div>
+    <div class="field"><label asp-for="AgreedPrice">Precio acordado (opcional; sin completar se usa el tarifario)</label><input asp-for="AgreedPrice" type="number" min="0.01" max="9999999999.99" step="0.01" /><span asp-validation-for="AgreedPrice"></span></div>
+    <div class="field"><label asp-for="PriceReason">Motivo del precio acordado (opcional)</label><input asp-for="PriceReason" maxlength="200" /><span asp-validation-for="PriceReason"></span></div>
+    <div class="field"><label asp-for="NextVisitNote">Observación para la próxima atención (opcional, solo dueña)</label><textarea asp-for="NextVisitNote" maxlength="1000"></textarea><span asp-validation-for="NextVisitNote"></span></div>
+    <div class="field"><label><input asp-for="CollectPayment" type="checkbox" /> Registrar cobro ahora</label><span asp-validation-for="CollectPayment"></span></div>
+    <div class="actions"><button type="submit" class="btn btn-primary">Registrar atención</button></div>
+</form>

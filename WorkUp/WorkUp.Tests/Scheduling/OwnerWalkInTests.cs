@@ -37,6 +37,21 @@ public sealed class OwnerWalkInTests
         Assert.Equal(new DateTime(2026, 3, 10, 10, 5, 7), repo.Inserted!.StartsAt);
     }
 
+    [Fact]
+    public async Task OwnerWalkIn_outcome_reports_the_saved_start_from_the_single_clock_read()
+    {
+        var repo = new FakeOwnerWalkInRepository();
+        var clock = new AdvancingClock(new DateTime(2026, 3, 10, 10, 5, 7, 400));
+
+        var result = await new OwnerWalkInService(repo, new FakeUnitOfWork(), clock).RegisterAsync(7, new(20, 30, 40));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, clock.ReadCount);
+        Assert.Equal(new DateTime(2026, 3, 10, 10, 5, 7), result.Value.StartsAt);
+        Assert.Equal(repo.Inserted!.StartsAt, result.Value.StartsAt);
+        Assert.Equal(repo.Inserted.EndsAt, result.Value.StartsAt.AddMinutes(30));
+    }
+
     private sealed class AdvancingClock(DateTime first) : IClock
     {
         public int ReadCount { get; private set; }

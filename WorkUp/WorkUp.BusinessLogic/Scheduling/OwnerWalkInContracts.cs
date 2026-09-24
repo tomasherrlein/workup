@@ -3,7 +3,7 @@ namespace WorkUp.BusinessLogic.Scheduling;
 public sealed record OwnerWalkInRequest(int ClientId, int ServiceId, int WorkerId,
     decimal? AgreedPrice = null, string? PriceReason = null, bool CollectPayment = false, string? NextVisitNote = null);
 
-public sealed record OwnerWalkInOutcome(int AppointmentId, int BookingId, bool HasOverlap);
+public sealed record OwnerWalkInOutcome(int AppointmentId, int BookingId, bool HasOverlap, DateTime StartsAt);
 
 public sealed record OwnerWalkInContext(bool AllowsWalkIns, bool ClientExists, bool WorkerActive,
     bool ServiceActive, int DurationMinutes, int MaxCapacity, decimal ListPrice);

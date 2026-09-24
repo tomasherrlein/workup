@@ -6,6 +6,9 @@
     ViewData["Title"] = "Jornada";
     var now = Model.Now; // Visibility is advisory; the service revalidates state and time.
     var selectedDate = Model.Day.SelectedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    var walkIn = Model.WalkIn;
+    // Stay on the Jornada after an invalid submission so the errors and the typed input remain visible.
+    var walkInOpen = !ViewData.ModelState.IsValid;
     var sections = new[]
     {
         (Id: "now", Title: "Ahora", Empty: "No hay atenciones en curso.", Items: Model.Day.Now),
@@ -21,6 +24,15 @@
         <p>@Formatting.LongDate(Model.Day.SelectedDate)</p>
     </div>
 </div>
+
+@if (Model.AllowsWalkIns && walkIn is not null)
+{
+    <details class="owner-walk-in"@(walkInOpen ? " open" : "")>
+        <summary>Registrar atención sin turno</summary>
+        <p class="owner-walk-in-note">Se registra con la fecha y hora actuales del negocio, sin importar la fecha que estés mirando. Si se superpone con otra atención, se guarda igual y te avisamos.</p>
+        <partial name="_WalkInForm" model="walkIn" />
+    </details>
+}
 
 <form method="get" class="owner-day-date-picker" aria-label="Elegir fecha de la jornada">
     <div class="field">
