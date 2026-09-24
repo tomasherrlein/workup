@@ -9,6 +9,7 @@ public sealed class FakePrivateLinkRepository : IPrivateAppointmentLinkRepositor
 {
     private readonly List<LinkRow> _rows = [];
     private readonly Dictionary<(string Token, PrivateAppointmentLinkAction Action), int> _transitions = [];
+    private readonly object _revokeGate = new();
     private TaskCompletionSource? _ownerReadBarrier;
     private int _ownerReadCount;
     private int _nextLinkId = 1;
@@ -137,12 +138,24 @@ public sealed class FakePrivateLinkRepository : IPrivateAppointmentLinkRepositor
     public Task<bool> RevokeOwnerLinkAsync(
         int businessId, int bookingId, int linkId, DateTime now, CancellationToken ct = default)
     {
-        var row = _rows.SingleOrDefault(candidate => candidate.BusinessId == businessId &&
-            candidate.BookingId == bookingId && candidate.Link.Id == linkId && candidate.Link.IsUsable(now));
-        if (row is null)
+        // Mirrors the production statement (SqlPrivateAppointmentLinkRepository.RevokeOwnerLinkAsync): the usability
+        // check and the revoke are one atomic step, so only the first of two concurrent revocations of the same active
+        // link reports a row affected. The hook runs outside the gate so a callback can never deadlock on it.
+        bool revoked;
+        lock (_revokeGate)
+        {
+            var row = _rows.SingleOrDefault(candidate => candidate.BusinessId == businessId &&
+                candidate.BookingId == bookingId && candidate.Link.Id == linkId && candidate.Link.IsUsable(now));
+            revoked = row is not null;
+            if (revoked)
+            {
+                row!.Link.RevokedAt = now;
+                RevokeCount++;
+            }
+        }
+
+        if (!revoked)
             return Task.FromResult(false);
-        row.Link.RevokedAt = now;
-        RevokeCount++;
         AfterOwnerLinkRevoke?.Invoke();
         return Task.FromResult(true);
     }
