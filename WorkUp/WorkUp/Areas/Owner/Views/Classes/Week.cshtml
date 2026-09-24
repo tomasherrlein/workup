@@ -1,0 +1,136 @@
+@using System.Globalization
+@model WeekPreviewViewModel
+@{
+    ViewData["Title"] = "Generar semana";
+    var selectedDate = Model.SelectedDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+}
+
+<div class="page-header">
+    <div>
+        <h1>Generar semana</h1>
+        <p>Elegí una fecha para ver la semana completa, de lunes a domingo, antes de generarla. Confirmar no borra lo que ya existe: solo agrega las clases y las alumnas fijas que falten.</p>
+    </div>
+</div>
+
+<form method="get" class="owner-day-date-picker" aria-label="Elegir fecha de la semana">
+    <div class="field">
+        <label for="week-date">Fecha</label>
+        <input id="week-date" name="date" type="date" value="@selectedDate" />
+    </div>
+    <button class="btn" type="submit">Ver semana</button>
+</form>
+
+<nav aria-label="Atajos de semana">
+    <ul class="nav-inline">
+        @if (Model.CurrentWeekStart is { } currentWeekStart)
+        {
+            <li>
+                <a class="btn-link" asp-action="Week" asp-route-date="@currentWeekStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)">
+                    @Icons.Svg("calendar") Esta semana
+                </a>
+            </li>
+        }
+        @if (Model.NextWeekStart is { } nextWeekStart)
+        {
+            <li>
+                <a class="btn-link" asp-action="Week" asp-route-date="@nextWeekStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)">
+                    @Icons.Svg("arrow-right") Próxima semana
+                </a>
+            </li>
+        }
+    </ul>
+</nav>
+
+<div class="section-header">
+    <h2>Semana del @Formatting.LongDate(Model.WeekStart) al @Formatting.LongDate(Model.WeekEnd)</h2>
+    <span class="count">@Model.Sessions.Count</span>
+</div>
+
+<div class="summary-band" aria-label="Resumen de la semana">
+    <div>
+        <span class="label">Clases nuevas</span>
+        <strong class="figure">@Model.NewSessionCount</strong>
+    </div>
+    <div>
+        <span class="label">Ya generadas</span>
+        <strong class="figure-sm">@Model.ExistingSessionCount</strong>
+    </div>
+    <div>
+        <span class="label">Alumnas fijas</span>
+        <strong class="figure-sm">@Model.FixedStudentCount</strong>
+    </div>
+</div>
+
+@if (!Model.HasActiveGridClasses)
+{
+    <div class="empty-state">
+        <p>Todavía no hay clases en la grilla. Agregá la primera para poder generar una semana.</p>
+        <a class="btn btn-primary" asp-action="Index">@Icons.Svg("grid") Ir a la grilla</a>
+    </div>
+}
+else
+{
+    <form asp-action="ConfirmWeek" method="post" class="actions">
+        <input type="hidden" name="date" value="@selectedDate" />
+        <button type="submit" class="btn btn-primary">@Icons.Svg("check-double") Confirmar semana</button>
+    </form>
+
+    <section class="section">
+        <table class="data-table">
+            <caption>Semana del @Formatting.LongDate(Model.WeekStart) al @Formatting.LongDate(Model.WeekEnd)</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Día</th>
+                    <th scope="col">Horario</th>
+                    <th scope="col">Clase</th>
+                    <th scope="col">Profesora</th>
+                    <th scope="col">Estado</th>
+                    <th scope="col">Alumnas fijas</th>
+                </tr>
+            </thead>
+            @foreach (var day in Model.Sessions.GroupBy(session => session.Date))
+            {
+                var daySessions = day.ToList();
+                <tbody>
+                    @for (var index = 0; index < daySessions.Count; index++)
+                    {
+                        var session = daySessions[index];
+                        <tr>
+                            @if (index == 0)
+                            {
+                                <th scope="rowgroup" rowspan="@daySessions.Count">@Formatting.LongDate(day.Key)</th>
+                            }
+                            <td>@Formatting.Time(session.StartTime)</td>
+                            <td>@session.ServiceName</td>
+                            <td>@session.WorkerName</td>
+                            <td>
+                                <partial name="_StatusTag" model="session.StatusTag" />
+                            </td>
+                            <td>
+                                @if (session.FixedStudents.Count == 0)
+                                {
+                                    <span class="row-sub">Sin alumnas fijas.</span>
+                                }
+                                else
+                                {
+                                    <ul class="owner-day-attendees" aria-label="Alumnas fijas de la clase">
+                                        @foreach (var student in session.FixedStudents)
+                                        {
+                                            <li>
+                                                <span class="owner-day-attendee-name">@student.ClientName</span>
+                                                <span class="row-tags">
+                                                    <partial name="_StatusTag" model="student.StateTag" />
+                                                    <partial name="_StatusTag" model="student.AnnotationTag" />
+                                                </span>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            }
+        </table>
+    </section>
+}

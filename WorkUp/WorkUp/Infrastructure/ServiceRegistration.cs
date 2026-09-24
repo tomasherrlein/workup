@@ -89,6 +89,8 @@ public static class ServiceRegistration
         // Classes (T04)
         services.AddScoped<IGridClassRepository, SqlGridClassRepository>();
         services.AddScoped<ClassesService>();
+        services.AddScoped<IWeekGenerationRepository, SqlWeekGenerationRepository>();
+        services.AddScoped<WeekGenerationService>();
 
         // Clients (T05)
         services.AddScoped<IClientRepository, SqlClientRepository>();

@@ -3,13 +3,14 @@ using WorkUp.BusinessLogic.Abstractions;
 using WorkUp.BusinessLogic.Catalog;
 using WorkUp.BusinessLogic.Classes;
 using WorkUp.BusinessLogic.Staff;
+using WorkUp.Domain.Rules;
 using WorkUp.Infrastructure;
 using WorkUp.ViewModels.Classes;
 
 namespace WorkUp.Areas.Owner.Controllers;
 
-/// <summary>Grilla semanal de clases (RF-04). Reachable once the business has a class-type service (Settings shortcut and navigation hide it otherwise).</summary>
-public class ClassesController(ClassesService classesService, CatalogService catalogService, StaffService staffService, IClock clock) : OwnerControllerBase
+/// <summary>Grilla semanal de clases (RF-04) y generación de la semana (RF-06). Reachable once the business has a class-type service (Settings shortcut and navigation hide it otherwise).</summary>
+public class ClassesController(ClassesService classesService, CatalogService catalogService, StaffService staffService, WeekGenerationService weekGenerationService, IClock clock) : OwnerControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> Index(DayOfWeek? day, CancellationToken ct)
@@ -125,6 +126,84 @@ public class ClassesController(ClassesService classesService, CatalogService cat
         var result = await classesService.SetActiveAsync(BusinessId, id, isActive: true, ct);
         this.Flash(result.Succeeded ? "Clase reactivada." : result.Error!.Message, result.Succeeded ? FlashType.Success : FlashType.Error);
         return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Read-only preview of the Monday-to-Sunday week that contains <paramref name="date"/>, or the next week when it
+    /// is omitted (RF-06). GET never writes: it only shows what a confirm would generate.
+    /// </summary>
+    [HttpGet]
+    public async Task<IActionResult> Week(DateOnly? date, CancellationToken ct)
+    {
+        ViewData["Title"] = "Generar semana";
+
+        var result = await weekGenerationService.PreviewAsync(BusinessId, date, ct);
+        if (!result.Succeeded)
+        {
+            this.Flash(result.Error!.Message, FlashType.Error);
+            return RedirectToAction(nameof(Index));
+        }
+
+        var preview = result.Value;
+        // Same name resolution as Index: the preview carries ids, the owner reads names.
+        var servicesById = (await catalogService.ListAsync(BusinessId, ct)).ToDictionary(s => s.Id);
+        var workersById = (await staffService.ListAsync(BusinessId, ct)).ToDictionary(w => w.Id);
+
+        var sessions = preview.Sessions
+            .Select(session => new WeekPreviewSessionViewModel(
+                session.Date,
+                session.StartTime,
+                servicesById.TryGetValue(session.ServiceId, out var service) ? service.Name : string.Empty,
+                workersById.TryGetValue(session.WorkerId, out var worker) ? worker.FullName : string.Empty,
+                session.IsNew,
+                session.Suspended,
+                session.FixedStudents
+                    .Select(student => new WeekPreviewFixedStudentViewModel(
+                        student.EnrollmentId, student.ClientName, student.State, student.AlreadyBooked, student.Cancelled))
+                    .ToList()))
+            .ToList();
+
+        var today = clock.Today;
+        return View(new WeekPreviewViewModel
+        {
+            SelectedDate = date,
+            WeekStart = preview.WeekStart,
+            WeekEnd = preview.WeekEnd,
+            Sessions = sessions,
+            CurrentWeekStart = WeekCalendar.TryGetWeek(today, out var currentWeekStart, out _) ? currentWeekStart : null,
+            NextWeekStart = WeekCalendar.NextMonday(today)
+        });
+    }
+
+    /// <summary>
+    /// Confirms the week that contains <paramref name="date"/>, then redirects back to its preview (POST/redirect/GET)
+    /// so the owner immediately sees the regenerated week instead of a stale page.
+    /// </summary>
+    [HttpPost]
+    public async Task<IActionResult> ConfirmWeek(DateOnly? date, CancellationToken ct)
+    {
+        var result = await weekGenerationService.ConfirmAsync(BusinessId, date, ct);
+        this.Flash(result.Succeeded ? ConfirmationMessage(result.Value) : result.Error!.Message,
+            result.Succeeded ? FlashType.Success : FlashType.Error);
+        return RedirectToAction(nameof(Week), new { date });
+    }
+
+    private static string ConfirmationMessage(WeekGenerationConfirmation confirmation)
+    {
+        var createdSessions = confirmation.CreatedSessions == 1
+            ? "1 clase nueva"
+            : $"{confirmation.CreatedSessions} clases nuevas";
+        var createdAnnotations = confirmation.CreatedFixedBookings == 1
+            ? "1 anotación fija nueva"
+            : $"{confirmation.CreatedFixedBookings} anotaciones fijas nuevas";
+        var existingSessions = confirmation.ExistingSessions switch
+        {
+            0 => "No había clases ya generadas.",
+            1 => "1 clase ya existía.",
+            _ => $"{confirmation.ExistingSessions} clases ya existían."
+        };
+
+        return $"Semana generada: {createdSessions} y {createdAnnotations}. {existingSessions}";
     }
 
     private async Task<GridClassFormViewModel> BuildFormAsync(GridClassFormViewModel model, CancellationToken ct)
