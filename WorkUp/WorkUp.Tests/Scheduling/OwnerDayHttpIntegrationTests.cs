@@ -14,13 +14,16 @@ using Xunit.Abstractions;
 namespace WorkUp.Tests.Scheduling;
 
 /// <summary>
-/// Opt-in, reusable HTTP integration harness for the owner Jornada (RF-11/RF-15). It drives the real MVC host
-/// over loopback with cookies and antiforgery, then verifies the persisted rows with ADO.NET:
-/// owner login, one synthetic client through the owner form, GET /panel/Day, a walk-in with an exact agreed
-/// price plus immediate payment and next-visit note, a second overlapping walk-in saved with a warning, and the
-/// anti-CSRF rejection. It replaces manual scratch scripts: the same test is the smoke it used to need.
+/// Opt-in, reusable HTTP integration harness for the owner panel. It drives the real MVC host over loopback with
+/// cookies and antiforgery, then verifies the persisted rows with ADO.NET, and it covers two independent flows.
+/// The Jornada (RF-11/RF-15): owner login, one synthetic client through the owner form, GET /panel/Day, a walk-in with
+/// an exact agreed price plus immediate payment and next-visit note, a second overlapping walk-in saved with a
+/// warning, and the anti-CSRF rejection. The week generation (RF-06): yoga owner login, the first real render of
+/// GET /panel/Classes/Week, the default-week confirm that sends no date, the SQL shape of the generated sessions,
+/// the idempotent second confirm, the anti-CSRF rejection and the past-week gate. It replaces manual scratch scripts:
+/// the same test is the smoke it used to need.
 ///
-/// Without <c>WORKUP_T12_HTTP_CONNECTION</c> the test logs N/A and returns before any SQL connection or HTTP
+/// Without <c>WORKUP_T12_HTTP_CONNECTION</c> each test logs N/A and returns before any SQL connection or HTTP
 /// request, so the default suite is unaffected. With it set, the harness refuses to run unless it can prove the
 /// runtime is isolated first: Windows DPAPI, integrated <c>(localdb)\MSSQLLocalDB</c>, a fresh
 /// <c>WorkUpDemoT12Http*</c> database, a fresh encrypted keyring folder under the OS temp directory with no
@@ -86,6 +89,60 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
             Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
             output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
             await RunOwnerWalkInFlowAsync(host.BaseUrl, plan, password);
+        }
+        finally
+        {
+            await StopWebHostAsync(host.Process);
+        }
+
+        output.WriteLine("All HTTP/SQL checkpoints passed; the isolated database and encrypted keyring stay in place (no DROP or DELETE).");
+    }
+
+    [Fact]
+    public async Task Week_generation_previews_and_confirms_a_week_on_an_isolated_http_host()
+    {
+        var suppliedConnection = Environment.GetEnvironmentVariable(ConnectionVariable);
+        if (string.IsNullOrWhiteSpace(suppliedConnection))
+        {
+            output.WriteLine($"N/A: {ConnectionVariable} is not set; no SQL connection, database, or HTTP host was used.");
+            return;
+        }
+
+        // Preflight runs before any SQL connection: an unsafe assistant or a reused target stops the run here.
+        var plan = PlanHarness(suppliedConnection);
+        output.WriteLine($"Runtime: database '{plan.DatabaseName}', isolated keyring '{plan.KeysPath}', next free port {plan.Port}.");
+
+        await CreateDatabaseAsync(plan);
+
+        // The demo password exists only in memory and is never written to output or to any log.
+        var password = "T13-" + Guid.NewGuid().ToString("N") + "!aA1";
+
+        // First owned host migrates the fresh database and materializes the isolated encrypted keyring.
+        var migrations = StartWebHost(plan, plan.Port);
+        try
+        {
+            await WaitUntilReadyAsync(migrations);
+            Assert.False(migrations.Process.HasExited, "The owned migration host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned migration host (pid {migrations.Process.Id}) became ready on {migrations.BaseUrl}.");
+        }
+        finally
+        {
+            await StopWebHostAsync(migrations.Process);
+        }
+        AssertKeyringCreated(plan.KeysPath);
+
+        // The explicit T07 seed into the migrated, dedicated database, reusing the real hasher and clock.
+        await SeedDemoAsync(plan.ConnectionString, password);
+        output.WriteLine("SQL: T07 demo seeded (marina.demo and lucia.demo) into the isolated database.");
+
+        // Second owned host serves the authenticated owner flow with a brand-new loopback port.
+        var host = StartWebHost(plan, FindFreeLoopbackPort());
+        try
+        {
+            await WaitUntilReadyAsync(host);
+            Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
+            await RunWeekGenerationFlowAsync(host.BaseUrl, plan, password);
         }
         finally
         {
@@ -199,6 +256,124 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
         Assert.Equal(secondNote, await ScalarStringAsync(connection, "SELECT Text FROM ClientNotes WHERE AppointmentId = @id", ("@id", secondAppointmentId)));
         await AssertWalkInRowAsync(connection, businessId, firstAppointmentId, clientId, firstNote);
         output.WriteLine("SQL: walk-in #1 appointment Scheduled/WalkIn, booking Attended with an exact 100.25 agreed price, payment WalkIn with an exact 100.25 amount, note and same BusinessId asserted.");
+    }
+
+    /// <summary>
+    /// Week generation flow (RF-06) over the real host. This T13 smoke deliberately reuses the T12 harness variables
+    /// (<c>WORKUP_T12_HTTP_CONNECTION</c>, <c>WORKUP_T12_HTTP_KEYS_PATH</c>) and the <c>WorkUpDemoT12Http*</c> database
+    /// prefix instead of duplicating the isolation harness: both facts are opt-in and each run gets a fresh database
+    /// and keyring, so reusing the names never shares state between flows.
+    /// </summary>
+    private async Task RunWeekGenerationFlowAsync(string baseUrl, HarnessPlan plan, string password)
+    {
+        using var handler = new HttpClientHandler { CookieContainer = new CookieContainer(), AllowAutoRedirect = false };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(30) };
+
+        // Login as the yoga owner: the hairdresser demo has no grid classes, so its week page would be empty.
+        var (loginStatus, loginHtml) = await GetHtmlAsync(client, "/panel/Account/Login");
+        Assert.Equal(HttpStatusCode.OK, loginStatus);
+        var loginResponse = await client.PostAsync("/panel/Account/Login", Form(new Dictionary<string, string>
+        {
+            ["Username"] = "lucia.demo",
+            ["Password"] = password,
+            ["__RequestVerificationToken"] = ExtractAntiforgeryToken(loginHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, loginResponse.StatusCode);
+        Assert.True(IsDayRedirect(loginResponse), $"Login did not redirect to the owner Jornada (location '{DescribeRedirect(loginResponse)}').");
+        output.WriteLine("HTTP: yoga owner login accepted with antiforgery; redirected to the owner Jornada (/panel).");
+
+        // First real render of the Classes/Week page: the heading, the summary labels and the confirm submit prove the
+        // view, its partials and its icons rendered, and the absence of the empty state proves it is the grid branch.
+        var (weekStatus, weekHtml) = await GetHtmlAsync(client, "/panel/Classes/Week");
+        Assert.Equal(HttpStatusCode.OK, weekStatus);
+        Assert.Contains("Generar semana", weekHtml, StringComparison.Ordinal);
+        Assert.Contains("Clases nuevas", weekHtml, StringComparison.Ordinal);
+        Assert.Contains("Alumnas fijas", weekHtml, StringComparison.Ordinal);
+        Assert.Contains("Confirmar semana", weekHtml, StringComparison.Ordinal);
+        Assert.Contains("tag-scheduled", weekHtml, StringComparison.Ordinal);
+        Assert.DoesNotContain("no hay clases en la grilla", weekHtml, StringComparison.Ordinal);
+        output.WriteLine("HTTP: GET /panel/Classes/Week -> 200 with the full preview render (heading, summary, confirm and status tags).");
+
+        await using var connection = new SqlConnection(plan.ConnectionString);
+        await connection.OpenAsync();
+        var businessId = await ScalarIntAsync(connection, "SELECT Id FROM Businesses WHERE Slug = 'estudio-yoga-lucia-demo'");
+        var gridClassCount = await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM GridClasses WHERE BusinessId = @businessId AND IsActive = 1",
+            ("@businessId", businessId));
+        Assert.True(gridClassCount > 0, "The yoga demo must expose at least one active grid class or the week smoke proves nothing.");
+        output.WriteLine($"SQL: yoga demo business #{businessId} has {gridClassCount} active grid class(es).");
+
+        // Confirm the default week without sending a date at all: the missing value must bind to null and generate the
+        // next week, then the redirect shows the regenerated week plus the success flash.
+        var firstConfirm = await client.PostAsync("/panel/Classes/ConfirmWeek", Form(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = ExtractAntiforgeryToken(weekHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, firstConfirm.StatusCode);
+        var (firstConfirmStatus, firstConfirmHtml) = await GetHtmlAsync(client, firstConfirm.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, firstConfirmStatus);
+        Assert.Contains("Semana generada", firstConfirmHtml, StringComparison.Ordinal);
+        Assert.Contains($"Semana generada: {gridClassCount} clases nuevas", firstConfirmHtml, StringComparison.Ordinal);
+        // Every session now exists, so the summary reports them as already generated and none as new.
+        Assert.Contains("Ya generadas", firstConfirmHtml, StringComparison.Ordinal);
+        output.WriteLine("HTTP: POST ConfirmWeek with no date -> 302 -> 200 with the generated week and the success flash.");
+
+        // SQL: the confirmed week persists exactly one session per active grid class, with the service-defined shape.
+        var appointmentCount = await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Appointments WHERE BusinessId = @businessId AND GridClassId IS NOT NULL",
+            ("@businessId", businessId));
+        Assert.Equal(gridClassCount, appointmentCount);
+        var shapedSessions = await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM Appointments AS a
+              JOIN Services AS s ON s.Id = a.ServiceId AND s.BusinessId = a.BusinessId
+             WHERE a.BusinessId = @businessId
+               AND a.Kind = @kind
+               AND a.Status = @status
+               AND a.MaxCapacity = s.MaxCapacity
+               AND a.EndsAt = DATEADD(MINUTE, s.DurationMinutes, a.StartsAt)
+            """,
+            ("@businessId", businessId),
+            ("@kind", (byte)AppointmentKind.ClassSession),
+            ("@status", (byte)AppointmentStatus.Scheduled));
+        Assert.Equal(appointmentCount, shapedSessions);
+        // The T07 seed plans no enrollments, so a generated week must not invent a single fixed annotation.
+        var fixedBookings = await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE BusinessId = @businessId AND Modality = @modality",
+            ("@businessId", businessId), ("@modality", (byte)BookingModality.Fixed));
+        Assert.Equal(0, fixedBookings);
+        output.WriteLine($"SQL: {appointmentCount} class session(s) Scheduled/ClassSession with the service capacity and end time, and 0 fixed bookings.");
+
+        // Confirming the same week again must add nothing: the HTTP layer reports zero new classes and SQL is stable.
+        var secondConfirm = await client.PostAsync("/panel/Classes/ConfirmWeek", Form(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = ExtractAntiforgeryToken(firstConfirmHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, secondConfirm.StatusCode);
+        var (secondConfirmStatus, secondConfirmHtml) = await GetHtmlAsync(client, secondConfirm.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, secondConfirmStatus);
+        Assert.Contains("Semana generada: 0 clases nuevas", secondConfirmHtml, StringComparison.Ordinal);
+        Assert.Equal(appointmentCount, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Appointments WHERE BusinessId = @businessId AND GridClassId IS NOT NULL",
+            ("@businessId", businessId)));
+        output.WriteLine("HTTP/SQL: second confirm of the same week -> 302 -> 200 reporting 0 new classes and no extra appointment row.");
+
+        // A POST without the antiforgery token must be rejected before any business logic runs.
+        var rejected = await client.PostAsync("/panel/Classes/ConfirmWeek", Form(new Dictionary<string, string>()));
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        output.WriteLine("HTTP: ConfirmWeek POST without an anti-CSRF token -> 400.");
+
+        // A week that already ended must never offer a confirm that could only fail, while the preview still renders.
+        // The Monday two whole weeks back stays in the past for any time zone the app could run with.
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var mondayOfThisWeek = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
+        var pastMonday = mondayOfThisWeek.AddDays(-14);
+        var (pastStatus, pastHtml) = await GetHtmlAsync(client,
+            "/panel/Classes/Week?date=" + pastMonday.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        Assert.Equal(HttpStatusCode.OK, pastStatus);
+        Assert.Contains("Semana del", pastHtml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Confirmar semana", pastHtml, StringComparison.Ordinal);
+        output.WriteLine("HTTP: past-week preview -> 200 with the week heading and without the confirm submit.");
     }
 
     private static async Task AssertWalkInRowAsync(SqlConnection connection, int businessId, int appointmentId,
