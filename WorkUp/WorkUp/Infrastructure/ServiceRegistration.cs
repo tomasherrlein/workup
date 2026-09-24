@@ -3,6 +3,7 @@ using WorkUp.BusinessLogic.Businesses;
 using WorkUp.BusinessLogic.Catalog;
 using WorkUp.BusinessLogic.Classes;
 using WorkUp.BusinessLogic.Clients;
+using WorkUp.BusinessLogic.Enrollments;
 using WorkUp.BusinessLogic.Staff;
 using WorkUp.BusinessLogic.Expenses;
 using WorkUp.BusinessLogic.Supplies;
@@ -12,6 +13,7 @@ using WorkUp.Data.Businesses;
 using WorkUp.Data.Catalog;
 using WorkUp.Data.Classes;
 using WorkUp.Data.Clients;
+using WorkUp.Data.Enrollments;
 using WorkUp.Data.DemoData;
 using WorkUp.Data.Staff;
 using WorkUp.Data.Expenses;
@@ -134,6 +136,10 @@ public static class ServiceRegistration
         // Public drop-in reservations (T14)
         services.AddScoped<IClassDropInRepository, SqlClassDropInRepository>();
         services.AddScoped<ClassDropInService>();
+
+        // Memberships: enrollments and monthly memberships (T15)
+        services.AddScoped<IEnrollmentRepository, SqlEnrollmentRepository>();
+        services.AddScoped<EnrollmentService>();
 
         return services;
     }

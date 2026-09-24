@@ -1,0 +1,94 @@
+@using WorkUp.ViewModels.Enrollments
+@using WorkUp.BusinessLogic.Enrollments
+@model EnrollmentIndexViewModel
+@{
+    ViewData["Title"] = "Abonos";
+}
+<div class="page-header">
+    <div>
+        <h1>Abonos</h1>
+        <p>Inscripciones a clases fijas y su abono mensual. Los estados se calculan con el vencimiento real de cada abono.</p>
+    </div>
+    <a class="btn btn-primary" asp-action="Create">@Icons.Svg("plus") Nueva inscripción</a>
+</div>
+
+<form method="get" class="agenda-filters" aria-label="Filtros de abonos">
+    <div class="field">
+        <label for="filter">Ver</label>
+        <select id="filter" name="filter">
+            @foreach (var option in Model.Filters)
+            {
+                <option value="@option.Filter" selected="@option.IsSelected">@option.Label</option>
+            }
+        </select>
+    </div>
+    <button type="submit" class="btn">Aplicar filtro</button>
+</form>
+
+@if (!Model.HasItems)
+{
+    <div class="empty-state">
+        <p>@Model.EmptyMessage</p>
+    </div>
+}
+else
+{
+    <ul class="rows" aria-label="Abonos de la vista @Model.Filters.First(f => f.IsSelected).Label">
+        @foreach (var item in Model.Items)
+        {
+            <li class="row row-flat">
+                <div class="row-main">
+                    <div class="row-title">
+                        <strong>@item.ClientName</strong>
+                        <span class="muted">@item.FrequencyLabel</span>
+                    </div>
+                    <div class="row-tags">
+                        <partial name="_StatusTag" model="item.StateTag" />
+                    </div>
+                    @if (item.CurrentPeriodEnd is { } periodEnd)
+                    {
+                        <div class="row-sub">
+                            @(item.IsLapsed ? "Venció el" : "Vence el") @Formatting.ShortDate(periodEnd)
+                        </div>
+                    }
+                    <div class="row-actions">
+                        @if (item.CanCharge)
+                        {
+                            <form asp-action="Charge" asp-route-enrollmentId="@item.EnrollmentId" method="post">
+                                <div class="field">
+                                    <label for="charge-amount-@item.EnrollmentId">Monto a cobrar (vacío: precio acordado)</label>
+                                    <input id="charge-amount-@item.EnrollmentId" name="amount" type="number"
+                                           min="0.01" max="9999999999.99" step="0.01" placeholder="Precio acordado" />
+                                </div>
+                                <div class="field">
+                                    <label for="charge-reason-@item.EnrollmentId">Motivo del monto (opcional)</label>
+                                    <input id="charge-reason-@item.EnrollmentId" name="reason" maxlength="200" />
+                                </div>
+                                <button type="submit" class="btn">Cobrar abono</button>
+                            </form>
+                        }
+                        @if (item.CanAnnul)
+                        {
+                            <form asp-action="Annul" asp-route-enrollmentId="@item.EnrollmentId" method="post"
+                                  data-confirm="¿Anular esta inscripción pendiente? Se liberan sus lugares fijos.">
+                                <button type="submit" class="btn btn-destructive">Anular inscripción</button>
+                            </form>
+                        }
+                        @if (item.CanTerminate)
+                        {
+                            <form asp-action="Terminate" asp-route-enrollmentId="@item.EnrollmentId" method="post"
+                                  data-confirm="¿Dar de baja el abono desde esa fecha? Se liberan los lugares desde ese día.">
+                                <div class="field">
+                                    <label for="terminate-date-@item.EnrollmentId">Dar de baja desde</label>
+                                    <input id="terminate-date-@item.EnrollmentId" name="effectiveFrom" type="date"
+                                           value="@Model.Today.ToString("yyyy-MM-dd")" required />
+                                </div>
+                                <button type="submit" class="btn btn-destructive">Dar de baja</button>
+                            </form>
+                        }
+                    </div>
+                </div>
+            </li>
+        }
+    </ul>
+}
