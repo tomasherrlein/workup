@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Data;
 using System.Diagnostics;
 using System.Globalization;
@@ -48,13 +49,17 @@ public sealed class WeekGenerationSqlIntegrationTests(ITestOutputHelper output)
         // Read scope: the active grid only, the sessions of this week only, no foreign session.
         var snapshot = await repository.GetWeekSnapshotAsync(ids.BusinessA, WeekStart, WeekEnd);
         Assert.Equal(ids.BusinessA, snapshot.BusinessId);
-        Assert.Equal(4, snapshot.GridClasses.Count);
+        Assert.Equal(5, snapshot.GridClasses.Count);
         Assert.DoesNotContain(snapshot.GridClasses, grid => grid.GridClassId == ids.GridClassInactive);
         var mondayGrid = Assert.Single(snapshot.GridClasses, grid => grid.GridClassId == ids.GridClassMonday);
         Assert.Equal(60, mondayGrid.DurationMinutes);
         Assert.Equal(8, mondayGrid.MaxCapacity);
-        Assert.Equal(2, snapshot.Sessions.Count);
+        Assert.Equal(3, snapshot.Sessions.Count);
         Assert.DoesNotContain(snapshot.Sessions, row => row.AppointmentId == ids.BusinessBAppointmentId);
+        // Half-open range in both directions: 00:00 of weekStart is inside the week, 00:00 of the Monday after
+        // weekEnd is outside it.
+        Assert.Contains(snapshot.Sessions, row => row.AppointmentId == ids.BoundaryStartSessionId);
+        Assert.DoesNotContain(snapshot.Sessions, row => row.AppointmentId == ids.BoundaryAfterSessionId);
         Assert.Equal(7, snapshot.FixedAssignments.Count);
         Assert.DoesNotContain(snapshot.FixedAssignments, assignment => assignment.EnrollmentId == ids.En8);
         Assert.Single(Assert.Single(snapshot.FixedAssignments, assignment => assignment.EnrollmentId == ids.En2).Periods);
@@ -77,11 +82,11 @@ public sealed class WeekGenerationSqlIntegrationTests(ITestOutputHelper output)
         Assert.Equal(WeekEnd, first.Value.WeekEnd);
         Assert.Equal(2, first.Value.CreatedSessions);
         Assert.Equal(5, first.Value.CreatedFixedBookings);
-        Assert.Equal(2, first.Value.ExistingSessions);
+        Assert.Equal(3, first.Value.ExistingSessions);
 
         var afterFirst = await ReadStateAsync(target.ConnectionString);
         var sessionsA = afterFirst.Appointments.Where(appointment => appointment.BusinessId == ids.BusinessA).ToArray();
-        Assert.Equal(4, sessionsA.Length);
+        Assert.Equal(6, sessionsA.Length);
         Assert.DoesNotContain(sessionsA, appointment => appointment.GridClassId == ids.GridClassInactive);
 
         var mondaySession = Assert.Single(sessionsA, appointment => appointment.GridClassId == ids.GridClassMonday);
@@ -93,6 +98,14 @@ public sealed class WeekGenerationSqlIntegrationTests(ITestOutputHelper output)
         Assert.Equal(WeekStart.AddDays(1).ToDateTime(new TimeOnly(11, 0)), tuesdaySession.StartsAt);
         Assert.Equal(1, sessionsA.Count(appointment => appointment.GridClassId == ids.GridClassWednesday));
         Assert.Equal(1, sessionsA.Count(appointment => appointment.GridClassId == ids.GridClassThursday));
+        // Both boundaries survive as they were: the weekStart 00:00 session was reused and the Monday-after-weekEnd
+        // one was neither returned by the snapshot nor touched by the confirm, and no extra session was created for
+        // the boundary class.
+        var boundaryStart = Assert.Single(sessionsA, appointment => appointment.Id == ids.BoundaryStartSessionId);
+        Assert.Equal(WeekStart.ToDateTime(TimeOnly.MinValue), boundaryStart.StartsAt);
+        var boundaryAfter = Assert.Single(sessionsA, appointment => appointment.Id == ids.BoundaryAfterSessionId);
+        Assert.Equal(WeekEnd.AddDays(1).ToDateTime(TimeOnly.MinValue), boundaryAfter.StartsAt);
+        Assert.Equal(2, sessionsA.Count(appointment => appointment.GridClassId == ids.GridClassBoundary));
 
         // An existing suspended session keeps its status and capacity and only receives the missing annotation.
         var suspended = Assert.Single(sessionsA, appointment => appointment.Id == ids.SuspendedSessionId);
@@ -143,7 +156,7 @@ public sealed class WeekGenerationSqlIntegrationTests(ITestOutputHelper output)
         Assert.True(second.Succeeded, second.Error?.Code ?? "The repeated week generation failed.");
         Assert.Equal(0, second.Value.CreatedSessions);
         Assert.Equal(0, second.Value.CreatedFixedBookings);
-        Assert.Equal(4, second.Value.ExistingSessions);
+        Assert.Equal(5, second.Value.ExistingSessions);
 
         var afterSecond = await ReadStateAsync(target.ConnectionString);
         Assert.Equal(
@@ -152,14 +165,14 @@ public sealed class WeekGenerationSqlIntegrationTests(ITestOutputHelper output)
         Assert.Equal(
             afterFirst.Bookings.OrderBy(booking => booking.Id).ToArray(),
             afterSecond.Bookings.OrderBy(booking => booking.Id).ToArray());
-        Assert.Equal(4, afterSecond.Appointments.Count(appointment => appointment.BusinessId == ids.BusinessA));
+        Assert.Equal(6, afterSecond.Appointments.Count(appointment => appointment.BusinessId == ids.BusinessA));
         Assert.Equal(7, afterSecond.Bookings.Count(booking => booking.BusinessId == ids.BusinessA));
         Assert.Equal((byte)AppointmentStatus.Suspended,
             Assert.Single(afterSecond.Appointments, appointment => appointment.Id == ids.SuspendedSessionId).Status);
         Assert.Equal((byte)BookingStatus.Cancelled,
             Assert.Single(afterSecond.Bookings, booking => booking.EnrollmentId == ids.En6).Status);
 
-        output.WriteLine("SQL assertions passed: one session per active grid class, five fixed annotations, suspended session and cancelled booking preserved, tenant B untouched, and a repeated confirm created zero rows.");
+        output.WriteLine("SQL assertions passed: one session per active grid class, five fixed annotations, both week range boundaries pinned, suspended session and cancelled booking preserved, tenant B untouched, and a repeated confirm created zero rows.");
     }
 
     /// <summary>
@@ -286,8 +299,7 @@ public sealed class WeekGenerationSqlIntegrationTests(ITestOutputHelper output)
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("sqlcmd preflight unavailable.");
+        using var process = StartSqlCmd(startInfo);
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
@@ -310,6 +322,25 @@ public sealed class WeekGenerationSqlIntegrationTests(ITestOutputHelper output)
 
         var scripts = await new DatabaseMigrator(target.ConnectionString).MigrateAsync();
         return scripts.Count;
+    }
+
+    /// <summary>
+    /// Starts <c>sqlcmd</c>, turning a missing binary into an explicit message instead of an uncaught
+    /// <see cref="Win32Exception"/> that hides which tool is required.
+    /// </summary>
+    private static Process StartSqlCmd(ProcessStartInfo startInfo)
+    {
+        try
+        {
+            return Process.Start(startInfo)
+                ?? throw new InvalidOperationException("sqlcmd preflight unavailable.");
+        }
+        catch (Win32Exception exception)
+        {
+            throw new InvalidOperationException(
+                "sqlcmd could not be started; install the SQL Server command line tools and make sure sqlcmd is on PATH.",
+                exception);
+        }
     }
 
     private static async Task<WeekIds> SeedWeekAsync(string connectionString, FakeClock clock)
@@ -357,6 +388,9 @@ public sealed class WeekGenerationSqlIntegrationTests(ITestOutputHelper output)
         var gridWednesday = await GridClass(businessA, serviceA, workerA, DayOfWeek.Wednesday, new TimeOnly(12, 0), isActive: true);
         var gridThursday = await GridClass(businessA, serviceA, workerA, DayOfWeek.Thursday, new TimeOnly(13, 0), isActive: true);
         var gridInactive = await GridClass(businessA, serviceA, workerA, DayOfWeek.Friday, new TimeOnly(14, 0), isActive: false);
+        // One active Monday 00:00 class hosts both range boundaries: a session exactly at weekStart (inside the week)
+        // and one at the Monday after weekEnd (outside it).
+        var gridBoundary = await GridClass(businessA, serviceA, workerA, DayOfWeek.Monday, new TimeOnly(0, 0), isActive: true);
 
         async Task<int> Enrollment(int clientId, EnrollmentStatus status, int gridClassId, DateOnly validFrom, DateOnly? validTo)
         {
@@ -423,6 +457,13 @@ public sealed class WeekGenerationSqlIntegrationTests(ITestOutputHelper output)
             WeekStart.AddDays(3).ToDateTime(new TimeOnly(13, 0)), AppointmentStatus.Scheduled);
         await FixedBooking(businessA, activeSession, clientsA[5], en6, BookingStatus.Cancelled, now);
 
+        // Range boundaries of the week query: 00:00 of weekStart belongs to the week, 00:00 of the Monday after
+        // weekEnd does not, so an inclusive-end regression cannot pass unnoticed.
+        var boundaryStartSession = await ClassSession(businessA, serviceA, workerA, gridBoundary,
+            WeekStart.ToDateTime(TimeOnly.MinValue), AppointmentStatus.Scheduled);
+        var boundaryAfterSession = await ClassSession(businessA, serviceA, workerA, gridBoundary,
+            WeekEnd.AddDays(1).ToDateTime(TimeOnly.MinValue), AppointmentStatus.Scheduled);
+
         // The other tenant: its own grid class, session and booking, none of which business A may touch.
         var serviceB = await InsertIdAsync(connection, transaction,
             "INSERT INTO Services (BusinessId, Name, Price, DurationMinutes, MaxCapacity) OUTPUT INSERTED.Id VALUES (@businessId, @name, @price, @duration, @capacity)",
@@ -453,9 +494,12 @@ public sealed class WeekGenerationSqlIntegrationTests(ITestOutputHelper output)
             GridClassWednesday: gridWednesday,
             GridClassThursday: gridThursday,
             GridClassInactive: gridInactive,
+            GridClassBoundary: gridBoundary,
             SuspendedSessionId: suspendedSession,
             ActiveSessionId: activeSession,
             BusinessBAppointmentId: appointmentB,
+            BoundaryStartSessionId: boundaryStartSession,
+            BoundaryAfterSessionId: boundaryAfterSession,
             En1: en1, En2: en2, En3: en3, En4: en4, En5: en5, En6: en6, En7: en7, En8: en8,
             Cl1: clientsA[0], Cl8: clientsA[7]);
     }
@@ -605,9 +649,12 @@ public sealed class WeekGenerationSqlIntegrationTests(ITestOutputHelper output)
         int GridClassWednesday,
         int GridClassThursday,
         int GridClassInactive,
+        int GridClassBoundary,
         int SuspendedSessionId,
         int ActiveSessionId,
         int BusinessBAppointmentId,
+        int BoundaryStartSessionId,
+        int BoundaryAfterSessionId,
         int En1, int En2, int En3, int En4, int En5, int En6, int En7, int En8,
         int Cl1, int Cl8);
 

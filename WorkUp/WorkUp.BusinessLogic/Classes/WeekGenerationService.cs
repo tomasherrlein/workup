@@ -28,7 +28,7 @@ public sealed class WeekGenerationService(
             return Result<WeekGenerationPreview>.Failure(
                 "week_generation_invalid_business", "No pudimos identificar el negocio.");
 
-        if (!TryResolveWeek(date, out var weekStart, out var weekEnd))
+        if (!TryResolveWeek(date, clock.Today, out var weekStart, out var weekEnd))
             return Result<WeekGenerationPreview>.Failure(
                 "week_generation_week_out_of_range", "Esa semana queda fuera del calendario. Elegí otra fecha.");
 
@@ -55,13 +55,16 @@ public sealed class WeekGenerationService(
             return Result<WeekGenerationConfirmation>.Failure(
                 "week_generation_invalid_business", "No pudimos identificar el negocio.");
 
-        if (!TryResolveWeek(date, out var weekStart, out var weekEnd))
+        // The single clock read of the whole operation: the default week resolution, the past check and plan.Now all
+        // derive from this one value, so a clock that advances during the call cannot split them.
+        var now = clock.Now;
+        var today = DateOnly.FromDateTime(now);
+
+        if (!TryResolveWeek(date, today, out var weekStart, out var weekEnd))
             return Result<WeekGenerationConfirmation>.Failure(
                 "week_generation_week_out_of_range", "Esa semana queda fuera del calendario. Elegí otra fecha.");
 
-        // One time read for the whole operation: the week bounds, the past check and plan.Now must agree.
-        var now = clock.Now;
-        if (weekEnd < DateOnly.FromDateTime(now))
+        if (weekEnd < today)
             return Result<WeekGenerationConfirmation>.Failure(
                 "week_generation_week_in_the_past", "No se puede generar una semana que ya terminó.");
 
@@ -76,7 +79,7 @@ public sealed class WeekGenerationService(
 
         var projections = ProjectWeek(snapshot, weekStart, weekEnd);
         var sessions = new List<WeekSessionPlan>(projections.Count);
-        var pendingRenewalStudents = 0;
+        var pendingRenewalEnrollments = new HashSet<int>();
         foreach (var projection in projections)
         {
             // An already booked enrollment is not annotated again, and a cancelled one is not resurrected (D-15).
@@ -84,9 +87,14 @@ public sealed class WeekGenerationService(
                 .Where(student => !student.AlreadyBooked && !student.Cancelled)
                 .Select(student => new WeekStudentToAnnotate(student.EnrollmentId, student.ClientId))
                 .ToArray();
-            pendingRenewalStudents += projection.Students.Count(student =>
-                !student.AlreadyBooked && !student.Cancelled &&
-                student.State == WeekFixedStudentState.PendingRenewal);
+
+            // The week total counts distinct students, so a student enrolled in more than one class counts once and
+            // one already annotated still counts: the state belongs to the week, not to what this call writes.
+            foreach (var student in projection.Students)
+            {
+                if (student.State == WeekFixedStudentState.PendingRenewal && !student.Cancelled)
+                    pendingRenewalEnrollments.Add(student.EnrollmentId);
+            }
 
             sessions.Add(new WeekSessionPlan(
                 projection.GridClass.GridClassId,
@@ -107,7 +115,7 @@ public sealed class WeekGenerationService(
             now,
             sessions,
             sessions.Count(session => session.AppointmentId is not null),
-            pendingRenewalStudents);
+            pendingRenewalEnrollments.Count);
 
         var outcome = await repository.ConfirmWeekAsync(plan, ct);
         await tx.CommitAsync(ct);
@@ -122,18 +130,19 @@ public sealed class WeekGenerationService(
     }
 
     /// <summary>
-    /// The week that contains <paramref name="date"/>, or the Monday of the next week when it is omitted. The week is
-    /// only usable when all seven days exist: the incomplete last week of the calendar would need Saturday and Sunday
-    /// that do not exist, and generating it would duplicate sessions on 9999-12-31.
+    /// The week that contains <paramref name="date"/>, or the Monday of the next week after <paramref name="today"/>
+    /// when it is omitted. The caller resolves <paramref name="today"/> once, so the whole operation shares one clock
+    /// read. The week is only usable when all seven days exist: the incomplete last week of the calendar would need
+    /// Saturday and Sunday that do not exist, and generating it would duplicate sessions on 9999-12-31.
     /// </summary>
-    private bool TryResolveWeek(DateOnly? date, out DateOnly weekStart, out DateOnly weekEnd)
+    private bool TryResolveWeek(DateOnly? date, DateOnly today, out DateOnly weekStart, out DateOnly weekEnd)
     {
         DateOnly selected;
         if (date is { } chosen)
         {
             selected = chosen;
         }
-        else if (WeekCalendar.NextMonday(clock.Today) is { } nextMonday)
+        else if (WeekCalendar.NextMonday(today) is { } nextMonday)
         {
             selected = nextMonday;
         }
@@ -195,6 +204,8 @@ public sealed class WeekGenerationService(
         IReadOnlyList<WeekFixedAssignmentRow> fixedAssignments)
     {
         var bookings = existing?.Bookings ?? [];
+        // Read once here, so ToPreview never has to re-dereference Existing.Bookings, which can be absent.
+        var hasCancelledBookings = bookings.Any(booking => booking.Status == BookingStatus.Cancelled);
         var students = fixedAssignments
             .Where(assignment => assignment.GridClassId == gridClass.GridClassId)
             .Where(assignment => assignment.IsValidOn(sessionDate))
@@ -205,7 +216,7 @@ public sealed class WeekGenerationService(
             .Select(assignment => ProjectStudent(assignment, sessionDate, bookings))
             .ToArray();
 
-        return new SessionProjection(gridClass, sessionDate, existing, students);
+        return new SessionProjection(gridClass, sessionDate, existing, students, hasCancelledBookings);
     }
 
     private static SessionStudent ProjectStudent(
@@ -250,7 +261,7 @@ public sealed class WeekGenerationService(
         projection.Existing?.AppointmentId,
         projection.Existing?.Status,
         projection.Existing?.Status == AppointmentStatus.Suspended,
-        projection.Existing?.Bookings.Any(booking => booking.Status == BookingStatus.Cancelled) ?? false,
+        projection.HasCancelledBookings,
         projection.Students
             .Select(student => new WeekFixedStudentPreview(
                 student.EnrollmentId, student.ClientId, student.ClientName,
@@ -271,5 +282,6 @@ public sealed class WeekGenerationService(
         WeekGridClassRow GridClass,
         DateOnly Date,
         WeekSessionRow? Existing,
-        IReadOnlyList<SessionStudent> Students);
+        IReadOnlyList<SessionStudent> Students,
+        bool HasCancelledBookings);
 }

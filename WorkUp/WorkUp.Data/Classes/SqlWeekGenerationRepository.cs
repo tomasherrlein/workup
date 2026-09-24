@@ -7,9 +7,10 @@ using WorkUp.Domain.Enums;
 namespace WorkUp.Data.Classes;
 
 /// <summary>
-/// SQL Server persistence for week generation (RF-06, D-16, D-23). The snapshot is read-only and every statement is
-/// scoped by <c>BusinessId</c>; the confirm flow joins the caller's ambient transaction, never commits or rolls back,
-/// never modifies an existing session and creates only what the unique session identity
+/// SQL Server persistence for week generation (RF-06, D-16, D-23). The snapshot read statements are read-only and
+/// scoped by <c>BusinessId</c>; the write guards rely on the unique session/grid identity instead, because they must
+/// probe the exact slot the unique indexes protect. The confirm flow joins the caller's ambient transaction, never
+/// commits or rolls back, never modifies an existing session and creates only what the unique session identity
 /// (UX_Appointments_GridSession) and the unique fixed annotation (UX_Bookings_FixedPerSession) allow.
 /// </summary>
 public sealed class SqlWeekGenerationRepository(DbSession session)
@@ -26,7 +27,8 @@ public sealed class SqlWeekGenerationRepository(DbSession session)
         """;
 
     /// <summary>
-    /// Sessions of the week, suspended ones included. The range is half open (<c>StartsAt &gt;= @weekStart</c> and
+    /// Sessions of the week, suspended ones included. Only sessions of active grid classes are read, so a deactivated
+    /// class never contributes noise. The range is half open (<c>StartsAt &gt;= @weekStart</c> and
     /// <c>StartsAt &lt; @dayAfterWeekEnd</c>) so the filter never has to reason about the last second of a day and
     /// never uses <c>BETWEEN</c> on a date.
     /// </summary>
@@ -35,26 +37,27 @@ public sealed class SqlWeekGenerationRepository(DbSession session)
                CAST(a.StartsAt AS date) AS [Date], CAST(a.StartsAt AS time) AS StartTime,
                a.Status
           FROM Appointments AS a
+          JOIN GridClasses AS g ON g.Id = a.GridClassId AND g.BusinessId = a.BusinessId AND g.IsActive = 1
          WHERE a.BusinessId = @businessId
-           AND a.GridClassId IS NOT NULL
            AND a.StartsAt >= @weekStart
            AND a.StartsAt < @dayAfterWeekEnd
          ORDER BY a.StartsAt, a.Id
         """;
 
     /// <summary>
-    /// Bookings of those same sessions, cancelled ones included so the preview keeps them visible. A drop-in booking
-    /// has no enrollment; it is projected as enrollment 0, which never matches a real identity value, because the
-    /// fixed annotation rows carry a non-nullable enrollment.
+    /// Bookings of those same sessions, cancelled ones included so the preview keeps them visible. Only sessions of
+    /// active grid classes are read, matching the session query above. A drop-in booking has no enrollment; it is
+    /// projected as enrollment 0, which never matches a real identity value, because the fixed annotation rows carry a
+    /// non-nullable enrollment.
     /// </summary>
     private const string SessionBookingsSql = """
         SELECT b.Id AS BookingId, b.AppointmentId, COALESCE(b.EnrollmentId, 0) AS EnrollmentId,
                b.ClientId, CONCAT(c.FirstName, N' ', c.LastName) AS ClientName, b.Status
           FROM Bookings AS b
           JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
+          JOIN GridClasses AS g ON g.Id = a.GridClassId AND g.BusinessId = a.BusinessId AND g.IsActive = 1
           JOIN Clients AS c ON c.Id = b.ClientId AND c.BusinessId = b.BusinessId
          WHERE b.BusinessId = @businessId
-           AND a.GridClassId IS NOT NULL
            AND a.StartsAt >= @weekStart
            AND a.StartsAt < @dayAfterWeekEnd
          ORDER BY b.AppointmentId, b.Id
@@ -103,9 +106,9 @@ public sealed class SqlWeekGenerationRepository(DbSession session)
 
     /// <summary>
     /// Inserts the dated session only when the unique session identity is still free, and reports it through
-    /// <c>OUTPUT</c>. The <c>UPDLOCK, HOLDLOCK</c> probe over the filtered index takes the key range lock that
-    /// serializes two concurrent confirms of the same week, so a competing insert waits instead of failing on
-    /// UX_Appointments_GridSession.
+    /// <c>OUTPUT</c>. The <c>UPDLOCK, HOLDLOCK</c> probe over the filtered index is the intended serialization of two
+    /// concurrent confirms of the same week; UX_Appointments_GridSession remains the backstop that rejects any insert
+    /// the probe lets through.
     /// </summary>
     private const string InsertSessionSql = """
         INSERT INTO Appointments
@@ -123,12 +126,12 @@ public sealed class SqlWeekGenerationRepository(DbSession session)
         """;
 
     /// <summary>
-    /// Reuses the session a competing confirm created while this one was waiting for the lock. GridClassId identifies
-    /// exactly one grid class, which belongs to exactly one business, so this pair can only resolve to the current
-    /// tenant's own session.
+    /// Reuses the session a competing confirm created while this one was waiting for the lock. The lookup repeats the
+    /// tenant filter on <c>BusinessId</c>, so a slot that only exists for another tenant fails loudly instead of
+    /// reusing another tenant's appointment.
     /// </summary>
     private const string SelectSessionIdBySlotSql =
-        "SELECT Id FROM Appointments WHERE GridClassId = @gridClassId AND StartsAt = @startsAt";
+        "SELECT Id FROM Appointments WHERE GridClassId = @gridClassId AND StartsAt = @startsAt AND BusinessId = @businessId";
 
     /// <summary>
     /// Inserts the fixed annotation only when neither unique index is already satisfied: the fixed annotation per
@@ -262,6 +265,7 @@ public sealed class SqlWeekGenerationRepository(DbSession session)
                     var reused = await ScalarAsync<int>(
                         SelectSessionIdBySlotSql,
                         p => p
+                            .AddValue("@businessId", plan.BusinessId)
                             .AddValue("@gridClassId", session.GridClassId)
                             .AddDateTime2("@startsAt", startsAt),
                         ct);

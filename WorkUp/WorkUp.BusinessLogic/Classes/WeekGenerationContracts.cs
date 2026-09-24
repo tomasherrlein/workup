@@ -104,7 +104,10 @@ public sealed record WeekSessionPreview(
     public bool IsNew => Kind == WeekSessionKind.New;
 }
 
-/// <summary>Read-only preview of a Monday-to-Sunday week. Confirming it is a later unit of work (T13).</summary>
+/// <summary>
+/// Read-only preview of a Monday-to-Sunday week. <see cref="WeekGenerationService.ConfirmAsync"/> confirms exactly
+/// this projection, so the preview never disagrees with what a confirm would write.
+/// </summary>
 public sealed record WeekGenerationPreview(
     DateOnly WeekStart,
     DateOnly WeekEnd,
@@ -137,8 +140,9 @@ public sealed record WeekSessionPlan(
 
 /// <summary>
 /// Everything one confirm call writes, resolved from a single read of the week. <see cref="ExistingSessionCount"/> counts
-/// the sessions that already exist, and <see cref="PendingRenewalStudentCount"/> the annotated students whose derived
-/// state is "Pendiente de renovación" (D-23); that state is counted for the owner, never persisted.
+/// the sessions that already exist, and <see cref="PendingRenewalStudentCount"/> the distinct students of the week whose
+/// derived state is "Pendiente de renovación": a student enrolled in more than one class counts once, an already
+/// annotated one still counts, and the state itself is never persisted (D-23).
 /// </summary>
 public sealed record WeekGenerationPlan(
     int BusinessId,
@@ -152,7 +156,11 @@ public sealed record WeekGenerationPlan(
 /// <summary>What the write actually created, so a retried generation reports zero instead of failing.</summary>
 public sealed record WeekGenerationWriteOutcome(int CreatedSessions, int CreatedFixedBookings);
 
-/// <summary>Result shown to the owner after confirming a week: the bounds, what was created and what was reused.</summary>
+/// <summary>
+/// Result of confirming a week: the bounds, what was created and what was reused.
+/// <see cref="PendingRenewalStudents"/> is the week total of distinct students pending renewal (D-23), derived and
+/// never persisted. No UI renders this record yet; it is the service contract only.
+/// </summary>
 public sealed record WeekGenerationConfirmation(
     DateOnly WeekStart,
     DateOnly WeekEnd,
