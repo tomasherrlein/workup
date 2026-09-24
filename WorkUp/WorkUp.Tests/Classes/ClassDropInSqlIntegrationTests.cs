@@ -1,0 +1,887 @@
+using System.ComponentModel;
+using System.Data;
+using System.Diagnostics;
+using System.Globalization;
+using System.Text.RegularExpressions;
+using Microsoft.Data.SqlClient;
+using WorkUp.BusinessLogic.Classes;
+using WorkUp.Data;
+using WorkUp.Data.Classes;
+using WorkUp.Domain.Entities;
+using WorkUp.Domain.Enums;
+using Xunit.Abstractions;
+
+namespace WorkUp.Tests.Classes;
+
+/// <summary>
+/// Opt-in, retained synthetic LocalDB fixture for <see cref="SqlClassDropInRepository"/>. Requires a new, dedicated
+/// database supplied through WORKUP_T14_SQL_CONNECTION; without it every test returns N/A and no SQL connection is
+/// opened. Each test derives its own database name from the supplied one, so the whole class runs in a single command,
+/// and nothing is torn down: the target is retained on purpose.
+/// </summary>
+public sealed class ClassDropInSqlIntegrationTests(ITestOutputHelper output)
+{
+    private const string VariableName = "WORKUP_T14_SQL_CONNECTION";
+    private const string Server = @"(localdb)\MSSQLLocalDB";
+
+    /// <summary>The inclusive date range used by the listing test: Monday 9 to Wednesday 11 of March 2026.</summary>
+    private static readonly DateOnly ListFrom = new(2026, 3, 9);
+    private static readonly DateOnly ListTo = new(2026, 3, 11);
+
+    private static readonly DateTime FixedNow = new(2026, 3, 9, 8, 0, 0);
+
+    [Fact]
+    public async Task Listing_returns_only_class_sessions_of_the_business_inside_the_half_open_date_range()
+    {
+        var target = await ResolveTargetAsync("_List");
+        if (target is null)
+            return;
+
+        var ids = await SeedListAsync(target.ConnectionString, FixedNow);
+
+        await using var session = new DbSession(target.ConnectionString);
+        var repository = new SqlClassDropInRepository(session);
+
+        // Without a service filter: four class sessions of business A start inside Monday 9 .. Wednesday 11, the
+        // 2026-03-09 00:00 session exactly at the first instant and the 2026-03-11 23:59:59 one at the last
+        // representable instant of the last day. The individual turn, the foreign session and the 2026-03-12 00:00
+        // session are outside the answer.
+        var all = await repository.ListSessionsAsync(ids.BusinessA, ListFrom, ListTo, serviceId: null);
+        Assert.Equal(4, all.Count);
+        Assert.Equal(
+            new[] { ids.SessionAtRangeStart, ids.SessionOfOtherService, ids.SessionInside, ids.SessionAtLastInstantOfEndDay },
+            all.Select(row => row.AppointmentId).ToArray());
+
+        Assert.DoesNotContain(all, row => row.AppointmentId == ids.IndividualAppointment);
+        Assert.DoesNotContain(all, row => row.AppointmentId == ids.SessionAtDayAfterEnd);
+        Assert.DoesNotContain(all, row => row.AppointmentId == ids.SessionOfOtherBusiness);
+
+        // The session exactly at the requested start instant is inside the range.
+        var atStart = Assert.Single(all, row => row.AppointmentId == ids.SessionAtRangeStart);
+        Assert.Equal(ListFrom, atStart.Date);
+        Assert.Equal(TimeOnly.MinValue, atStart.StartTime);
+        Assert.Equal(AppointmentKind.ClassSession, atStart.Kind);
+        Assert.Equal(AppointmentStatus.Scheduled, atStart.Status);
+        Assert.Equal(8, atStart.MaxCapacity);
+        // A class nobody booked yet is the most bookable one, so it is returned with an empty booking list.
+        Assert.Empty(atStart.Bookings);
+
+        // Every booking of the session travels with it, cancelled ones included, and the caller counts the places.
+        var inside = Assert.Single(all, row => row.AppointmentId == ids.SessionInside);
+        Assert.Equal(ListFrom.AddDays(1), inside.Date);
+        Assert.Equal(new TimeOnly(10, 0), inside.StartTime);
+        Assert.Equal(ids.ServiceA, inside.ServiceId);
+        Assert.Equal(ids.WorkerA, inside.WorkerId);
+        Assert.Equal(2, inside.Bookings.Count);
+        Assert.Contains(inside.Bookings, booking =>
+            booking.ClientId == ids.FirstClientOfA && booking.Status == BookingStatus.Pending);
+        Assert.Contains(inside.Bookings, booking =>
+            booking.ClientId == ids.SecondClientOfA && booking.Status == BookingStatus.Cancelled);
+
+        // The last representable instant of the inclusive last day is still inside the half-open bound.
+        var lastInstant = Assert.Single(all, row => row.AppointmentId == ids.SessionAtLastInstantOfEndDay);
+        Assert.Equal(ListTo, lastInstant.Date);
+        Assert.Equal(new TimeOnly(23, 59, 59), lastInstant.StartTime);
+
+        // Optional service filter: the evening class drops out and nothing else changes.
+        var filtered = await repository.ListSessionsAsync(ids.BusinessA, ListFrom, ListTo, ids.ServiceA);
+        Assert.Equal(3, filtered.Count);
+        Assert.Equal(
+            new[] { ids.SessionAtRangeStart, ids.SessionInside, ids.SessionAtLastInstantOfEndDay },
+            filtered.Select(row => row.AppointmentId).ToArray());
+        Assert.DoesNotContain(filtered, row => row.AppointmentId == ids.SessionOfOtherService);
+
+        // A window narrower than the seed keeps both boundary sessions out, in both directions.
+        var singleDay = await repository.ListSessionsAsync(ids.BusinessA, ListFrom.AddDays(1), ListFrom.AddDays(1), ids.ServiceA);
+        var onlyInside = Assert.Single(singleDay);
+        Assert.Equal(ids.SessionInside, onlyInside.AppointmentId);
+
+        output.WriteLine("List assertions passed: only ClassSession rows of business A inside the half-open range, both boundaries pinned, service filter honoured, cancelled booking attached and foreign/individual appointments excluded.");
+    }
+
+    [Fact]
+    public async Task Identifying_a_client_by_email_stays_inside_the_business_and_never_creates_a_password()
+    {
+        var target = await ResolveTargetAsync("_Clients");
+        if (target is null)
+            return;
+
+        var ids = await SeedClientsAsync(target.ConnectionString, FixedNow);
+
+        await using var session = new DbSession(target.ConnectionString);
+        var repository = new SqlClassDropInRepository(session);
+
+        // The requested email is normalized before it is stored, and the client is created without credentials: a
+        // password would live in ClientAccounts, which stays empty for it.
+        var identified = await repository.IdentifyClientAsync(
+            ids.BusinessA, "  New.Client@Example.INVALID ", "New", "Client", "1122334455");
+        Assert.True(identified.ClientId > 0);
+        Assert.Equal("new.client@example.invalid", identified.Email);
+        Assert.Equal("New", identified.FirstName);
+        Assert.Equal("Client", identified.LastName);
+
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId AND Email = @email",
+            ("@businessId", ids.BusinessA), ("@email", "new.client@example.invalid")));
+        Assert.Equal("1122334455", await ReadScalarAsync<string>(target.ConnectionString,
+            "SELECT Phone FROM Clients WHERE Id = @clientId", ("@clientId", identified.ClientId)));
+        Assert.Null(await ReadScalarAsync<string>(target.ConnectionString,
+            "SELECT HealthNotes FROM Clients WHERE Id = @clientId", ("@clientId", identified.ClientId)));
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM ClientAccounts WHERE ClientId = @clientId", ("@clientId", identified.ClientId)));
+
+        // Idempotent for the same email in the same business, whatever the case or the new contact data: the stored
+        // client is returned as it is, never duplicated and never updated.
+        var again = await repository.IdentifyClientAsync(
+            ids.BusinessA, "NEW.CLIENT@example.invalid", "Otro", "Nombre", null);
+        Assert.Equal(identified.ClientId, again.ClientId);
+        Assert.Equal("new.client@example.invalid", again.Email);
+        Assert.Equal("New", again.FirstName);
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId AND Email = @email",
+            ("@businessId", ids.BusinessA), ("@email", "new.client@example.invalid")));
+
+        // The same email in another business is another client, and the identifier stays editable inside the business.
+        var otherBusiness = await repository.IdentifyClientAsync(
+            ids.BusinessB, "new.client@example.invalid", "New", "Client", null);
+        Assert.NotEqual(identified.ClientId, otherBusiness.ClientId);
+        Assert.Equal(ids.BusinessB, await ReadScalarAsync<int>(target.ConnectionString,
+            "SELECT BusinessId FROM Clients WHERE Id = @clientId", ("@clientId", otherBusiness.ClientId)));
+
+        // Tenant scoping of FindClient: a client of another business is simply not there, in both directions.
+        Assert.NotNull(await repository.FindClientAsync(ids.BusinessA, identified.ClientId));
+        Assert.Null(await repository.FindClientAsync(ids.BusinessA, otherBusiness.ClientId));
+        Assert.Null(await repository.FindClientAsync(ids.BusinessB, identified.ClientId));
+        Assert.Null(await repository.FindClientAsync(ids.BusinessA, int.MaxValue));
+        var found = await repository.FindClientAsync(ids.BusinessA, identified.ClientId);
+        Assert.Equal("new.client@example.invalid", found!.Email);
+        Assert.Equal("Client", found.LastName);
+
+        // A stored email with different casing is that same client, not a new one, and the returned Email is the
+        // stored value — the recipient of the notice. This rests on the case-insensitive collation the unique index
+        // UQ_Clients_Email itself relies on, and the second assertion pins that assumption.
+        var legacy = await repository.IdentifyClientAsync(
+            ids.BusinessA, "legacy.mixedcase@example.invalid", "Nuevo", "Nombre", null);
+        Assert.Equal(ids.LegacyClientOfA, legacy.ClientId);
+        Assert.Equal("Legacy.MixedCase@Example.invalid", legacy.Email);
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId AND Email LIKE @pattern",
+            ("@businessId", ids.BusinessA), ("@pattern", "%mixedcase@example.invalid")));
+        Assert.Equal(2, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId", ("@businessId", ids.BusinessA)));
+
+        output.WriteLine("Client assertions passed: email normalized on creation, no ClientAccounts row, idempotent per business, separate client for the same email in another business, foreign ids invisible, and a differently cased stored email resolved to the stored client.");
+    }
+
+    [Fact]
+    public async Task Guarded_insert_writes_the_drop_in_and_names_a_full_or_already_booked_session()
+    {
+        var target = await ResolveTargetAsync("_Write");
+        if (target is null)
+            return;
+
+        var ids = await SeedWriteAsync(target.ConnectionString, FixedNow);
+
+        await using var session = new DbSession(target.ConnectionString);
+        var repository = new SqlClassDropInRepository(session);
+
+        // The session with free places takes the booking, written as Suelta and Pendiente for exactly the requested
+        // business, appointment, client and instant.
+        var inserted = await repository.TryInsertDropInAsync(
+            new DropInInsert(ids.BusinessA, ids.OpenSession, ids.FirstClient, FixedNow));
+        Assert.True(inserted.IsInserted, inserted.Result.ToString());
+        Assert.True(inserted.BookingId > 0);
+        var row = await ReadBookingAsync(target.ConnectionString, inserted.BookingId);
+        Assert.Equal(ids.BusinessA, row.BusinessId);
+        Assert.Equal(ids.OpenSession, row.AppointmentId);
+        Assert.Equal(ids.FirstClient, row.ClientId);
+        Assert.Null(row.EnrollmentId);
+        Assert.Equal(BookingModality.DropIn, row.Modality);
+        Assert.Equal(BookingStatus.Pending, row.Status);
+        Assert.Null(row.CancelledAt);
+        Assert.Equal(FixedNow, row.CreatedAt);
+
+        // The capacity rule counts every non-cancelled booking against MaxCapacity, whichever modality it carries:
+        // the fixed annotation pending payment and the confirmed drop-in fill a class of two, while the third row,
+        // cancelled, occupies nothing. The same client's cancelled row is not an "already booked" either.
+        Assert.Equal(2, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId AND Status <> @cancelled",
+            ("@appointmentId", ids.FullSession), ("@cancelled", BookingStatus.Cancelled)));
+        var full = await repository.TryInsertDropInAsync(
+            new DropInInsert(ids.BusinessA, ids.FullSession, ids.FirstClient, FixedNow));
+        Assert.Equal(DropInInsertResultType.NoPlaceLeft, full.Result);
+        Assert.False(full.IsInserted);
+        Assert.Equal(0, full.BookingId);
+        Assert.Equal(3, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId", ("@appointmentId", ids.FullSession)));
+
+        // A client that already holds a non-cancelled booking of the session hears that, not the unique-key error,
+        // and nothing is written for her.
+        var alreadyBooked = await repository.TryInsertDropInAsync(
+            new DropInInsert(ids.BusinessA, ids.BookedSession, ids.FirstClient, FixedNow));
+        Assert.Equal(DropInInsertResultType.AlreadyBooked, alreadyBooked.Result);
+        Assert.False(alreadyBooked.IsInserted);
+        Assert.Equal(0, alreadyBooked.BookingId);
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId", ("@appointmentId", ids.BookedSession)));
+
+        // Cancelling releases the place, so the same client books the same session again.
+        await ExecuteAsync(target.ConnectionString,
+            "UPDATE Bookings SET Status = @cancelled, CancelledAt = @now WHERE AppointmentId = @appointmentId AND ClientId = @clientId AND Status <> @cancelled",
+            ("@cancelled", BookingStatus.Cancelled), ("@now", FixedNow),
+            ("@appointmentId", ids.BookedSession), ("@clientId", ids.FirstClient));
+        var afterCancellation = await repository.TryInsertDropInAsync(
+            new DropInInsert(ids.BusinessA, ids.BookedSession, ids.FirstClient, FixedNow));
+        Assert.True(afterCancellation.IsInserted, afterCancellation.Result.ToString());
+        Assert.Equal(2, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId", ("@appointmentId", ids.BookedSession)));
+
+        // An individual appointment is not a class session: the guard refuses to write and the port fails loudly
+        // instead of reporting an outcome it cannot know about.
+        var individual = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.TryInsertDropInAsync(
+            new DropInInsert(ids.BusinessA, ids.IndividualAppointment, ids.FirstClient, FixedNow)));
+        Assert.Contains("no defined outcome", individual.Message, StringComparison.Ordinal);
+
+        // Outbox: the same dedup key is queued once, and the stored row keeps what the caller composed.
+        var notification = new Notification
+        {
+            BusinessId = ids.BusinessA,
+            Type = NotificationType.DropInReminder,
+            Recipient = "t14.write.client1@example.invalid",
+            Subject = "Recordatorio de tu clase suelta",
+            BodyHtml = "<p>Hola Client,</p>",
+            DedupKey = $"reminder:booking:{inserted.BookingId}",
+            CreatedAt = FixedNow
+        };
+        await repository.EnqueueNotificationAsync(notification);
+        await repository.EnqueueNotificationAsync(notification);
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Notifications WHERE DedupKey = @dedupKey",
+            ("@dedupKey", notification.DedupKey)));
+        var queued = await ReadNotificationAsync(target.ConnectionString, notification.DedupKey);
+        Assert.Equal(NotificationType.DropInReminder, queued.Type);
+        Assert.Equal("t14.write.client1@example.invalid", queued.Recipient);
+        Assert.Equal("Recordatorio de tu clase suelta", queued.Subject);
+        Assert.Equal("<p>Hola Client,</p>", queued.BodyHtml);
+
+        output.WriteLine("Write assertions passed: the guarded insert wrote Modality=Suelta/Status=Pendiente with the caller's id and instant, the class filled by a fixed and a drop-in annotation returned NoPlaceLeft without writing, the same client could not double-book, a cancelled booking freed the place, an individual appointment failed loudly and the outbox deduplicated one notice.");
+    }
+
+    [Fact]
+    public async Task Two_bookings_for_the_last_place_leave_exactly_one_inserted_booking()
+    {
+        var target = await ResolveTargetAsync("_Race");
+        if (target is null)
+            return;
+
+        var ids = await SeedRaceAsync(target.ConnectionString, FixedNow);
+        Assert.Equal(2, ids.ClientIds.Length);
+
+        // A bare Task.WhenAll over two async calls does not force real overlap: each runs synchronously up to its
+        // first await, so the first booking could take the session lock, insert and commit before the second one even
+        // starts, leaving nothing to serialize. The barrier pins both bookings on their own thread-pool thread and
+        // releases them at the same instant, right before each opens its transaction and asks for the session's
+        // UPDLOCK. That is what proves the lock serializes the count and the guarded insert: without it, both could
+        // read the last place as free and overbook the class.
+        using var startGate = new Barrier(participantCount: 2);
+
+        Task<DropInInsertResult> BookAsync(int clientId) => Task.Run(async () =>
+        {
+            await using var raceSession = new DbSession(target.ConnectionString);
+            var raceRepository = new SqlClassDropInRepository(raceSession);
+            await using var transaction = await raceSession.BeginAsync();
+            startGate.SignalAndWait();
+            var locked = await raceRepository.LockSessionAsync(ids.BusinessA, ids.Session);
+            Assert.NotNull(locked);
+            var result = await raceRepository.TryInsertDropInAsync(
+                new DropInInsert(ids.BusinessA, ids.Session, clientId, FixedNow));
+            await transaction.CommitAsync();
+            return result;
+        });
+
+        var results = await Task.WhenAll(BookAsync(ids.ClientIds[0]), BookAsync(ids.ClientIds[1]));
+
+        // Which one wins depends on the interleaving; the outcome does not: one booking takes the last place and the
+        // other reports it lost, without writing anything.
+        var winner = Assert.Single(results, result => result.Result == DropInInsertResultType.Inserted);
+        var loser = Assert.Single(results, result => result.Result == DropInInsertResultType.NoPlaceLeft);
+        Assert.True(winner.BookingId > 0);
+        Assert.Equal(0, loser.BookingId);
+
+        // The surviving row is the winner's, on the contended session and with the shape the port promises.
+        var winningRow = await ReadBookingAsync(target.ConnectionString, winner.BookingId);
+        Assert.Equal(ids.BusinessA, winningRow.BusinessId);
+        Assert.Equal(ids.Session, winningRow.AppointmentId);
+        Assert.Contains(winningRow.ClientId, ids.ClientIds);
+        Assert.Equal(BookingModality.DropIn, winningRow.Modality);
+        Assert.Equal(BookingStatus.Pending, winningRow.Status);
+
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId", ("@appointmentId", ids.Session)));
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId AND Modality = @modality AND Status = @status",
+            ("@appointmentId", ids.Session), ("@modality", BookingModality.DropIn), ("@status", BookingStatus.Pending)));
+
+        output.WriteLine("Race assertions passed: two concurrent bookings for the last place ended with exactly one inserted and one NoPlaceLeft, and exactly one booking row exists for the session.");
+    }
+
+    [Fact]
+    public async Task A_caller_that_never_commits_leaves_no_client_and_no_booking_behind()
+    {
+        var target = await ResolveTargetAsync("_Rollback");
+        if (target is null)
+            return;
+
+        var ids = await SeedRollbackAsync(target.ConnectionString, FixedNow);
+        const string email = "t14.rollback@example.invalid";
+
+        await using (var session = new DbSession(target.ConnectionString))
+        {
+            var repository = new SqlClassDropInRepository(session);
+
+            // The transaction owns the commit; leaving this scope without committing rolls the whole unit back,
+            // client creation included.
+            await using (var transaction = await session.BeginAsync())
+            {
+                var client = await repository.IdentifyClientAsync(ids.BusinessA, email, "Rollback", "Client", null);
+                Assert.True(client.ClientId > 0);
+                Assert.NotNull(await repository.FindClientAsync(ids.BusinessA, client.ClientId));
+
+                var insert = await repository.TryInsertDropInAsync(
+                    new DropInInsert(ids.BusinessA, ids.Session, client.ClientId, FixedNow));
+                Assert.True(insert.IsInserted, insert.Result.ToString());
+
+                // Both writes are visible inside the unit of work, so what disappears below is a rollback and not a
+                // pair of calls that never wrote anything.
+                var insideUnit = await repository.ListSessionsAsync(
+                    ids.BusinessA, ListFrom, ListFrom.AddDays(30), serviceId: null);
+                var sessionInsideUnit = Assert.Single(insideUnit, row => row.AppointmentId == ids.Session);
+                Assert.Contains(sessionInsideUnit.Bookings, booking => booking.ClientId == client.ClientId);
+            }
+        }
+
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId AND Email = @email",
+            ("@businessId", ids.BusinessA), ("@email", email)));
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId", ("@appointmentId", ids.Session)));
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Appointments WHERE Id = @appointmentId", ("@appointmentId", ids.Session)));
+
+        output.WriteLine("Rollback assertions passed: the client and the booking were visible inside the transaction and both were gone after disposing it without committing.");
+    }
+
+    /// <summary>
+    /// Resolves this test's opt-in target. <c>null</c> means the variable is absent: the test returns N/A without
+    /// opening any connection or touching any server.
+    /// </summary>
+    private async Task<SqlTarget?> ResolveTargetAsync(string testSuffix)
+    {
+        var supplied = Environment.GetEnvironmentVariable(VariableName);
+        if (string.IsNullOrWhiteSpace(supplied))
+        {
+            output.WriteLine($"N/A: {VariableName} absent; no SQL connection opened.");
+            return null;
+        }
+
+        var target = ValidateTarget(supplied, testSuffix);
+        var applied = await CreateTargetAsync(target);
+        output.WriteLine($"Target: {target.DatabaseName}; DB_ID absent before creation; applied {applied} schema script(s); retained without teardown.");
+        return target;
+    }
+
+    private static SqlTarget ValidateTarget(string suppliedConnectionString, string testSuffix)
+    {
+        SqlConnectionStringBuilder supplied;
+        try
+        {
+            supplied = new SqlConnectionStringBuilder(suppliedConnectionString);
+        }
+        catch (ArgumentException)
+        {
+            throw new InvalidOperationException($"{VariableName} could not be parsed; no SQL connection was opened.");
+        }
+
+        // Suffixed so each opt-in test derives its own fresh target from one configured WORKUP_T14_SQL_CONNECTION and
+        // the whole class still runs in a single command.
+        var databaseName = supplied.InitialCatalog + testSuffix;
+        var safeName = databaseName.Length <= 128
+            && Regex.IsMatch(databaseName, @"\AWorkUpDemoT14Sql[A-Za-z0-9_]*\z", RegexOptions.CultureInvariant);
+        if (!string.Equals(supplied.DataSource, Server, StringComparison.OrdinalIgnoreCase)
+            || !supplied.IntegratedSecurity
+            || !safeName
+            || !string.IsNullOrEmpty(supplied.UserID)
+            || !string.IsNullOrEmpty(supplied.Password)
+            || !string.IsNullOrEmpty(supplied.AttachDBFilename)
+            || supplied.UserInstance
+            || !string.IsNullOrEmpty(supplied.FailoverPartner))
+        {
+            throw new InvalidOperationException(
+                $"{VariableName} must target (localdb)\\MSSQLLocalDB with Integrated Security and a safe WorkUpDemoT14Sql* database; credentials, attached files, and failover targets are rejected. No SQL connection was opened.");
+        }
+
+        // Rebuild from only the validated instance and database so no other connection-string option can redirect it
+        // to a default database or add credentials.
+        var safeConnection = new SqlConnectionStringBuilder
+        {
+            DataSource = Server,
+            InitialCatalog = databaseName,
+            IntegratedSecurity = true,
+            ConnectTimeout = 15,
+            ApplicationName = "WorkUp T14 SQL integration test",
+            TrustServerCertificate = true
+        };
+        return new SqlTarget(databaseName, safeConnection.ConnectionString);
+    }
+
+    private static async Task<int> CreateTargetAsync(SqlTarget target)
+    {
+        var startInfo = new ProcessStartInfo("sqlcmd")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        foreach (var argument in new[]
+                 {
+                     "-I", "-S", Server, "-d", "master", "-E", "-b", "-h", "-1", "-W", "-Q",
+                     $"SET NOCOUNT ON; SELECT CASE WHEN DB_ID(N'{target.DatabaseName}') IS NULL THEN 0 ELSE 1 END;"
+                 })
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = StartSqlCmd(startInfo);
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"master preflight failed: {stderr.Trim()}");
+        Assert.Equal("0", stdout.Trim());
+
+        // SQL identifiers cannot be parameters. The strict allowlist above excludes brackets and quotes, so quoting
+        // the identifier keeps CREATE DATABASE bound to exactly this target, and a competing creator fails loudly
+        // instead of letting this run migrate someone else's database.
+        var masterConnectionString = new SqlConnectionStringBuilder(target.ConnectionString) { InitialCatalog = "master" }.ConnectionString;
+        await using (var master = new SqlConnection(masterConnectionString))
+        {
+            await master.OpenAsync();
+            await using var create = new SqlCommand($"CREATE DATABASE [{target.DatabaseName}]", master);
+            await create.ExecuteNonQueryAsync();
+        }
+
+        var scripts = await new DatabaseMigrator(target.ConnectionString).MigrateAsync();
+        return scripts.Count;
+    }
+
+    /// <summary>
+    /// Starts <c>sqlcmd</c>, turning a missing binary into an explicit message instead of an uncaught
+    /// <see cref="Win32Exception"/> that hides which tool is required.
+    /// </summary>
+    private static Process StartSqlCmd(ProcessStartInfo startInfo)
+    {
+        try
+        {
+            return Process.Start(startInfo)
+                ?? throw new InvalidOperationException("sqlcmd preflight unavailable.");
+        }
+        catch (Win32Exception exception)
+        {
+            throw new InvalidOperationException(
+                "sqlcmd could not be started; install the SQL Server command line tools and make sure sqlcmd is on PATH.",
+                exception);
+        }
+    }
+
+    private static async Task<ListIds> SeedListAsync(string connectionString, DateTime now)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var businessA = await InsertBusinessAsync(connection, transaction, "Synthetic T14 List Business", "synthetic-t14-list", now);
+        var businessB = await InsertBusinessAsync(connection, transaction, "Synthetic T14 Other Business", "synthetic-t14-other", now);
+        var serviceA = await InsertServiceAsync(connection, transaction, businessA, "Synthetic T14 Morning Class", 60, 8);
+        var serviceOther = await InsertServiceAsync(connection, transaction, businessA, "Synthetic T14 Evening Class", 60, 8);
+        var workerA = await InsertWorkerAsync(connection, transaction, businessA, "Synthetic", "Teacher", "20141414141");
+        var workerB = await InsertWorkerAsync(connection, transaction, businessB, "Other", "Teacher", "20999999999");
+        var firstClient = await InsertClientAsync(connection, transaction, businessA, "Client", "T14 One", "t14.list.client1@example.invalid", now);
+        var secondClient = await InsertClientAsync(connection, transaction, businessA, "Client", "T14 Two", "t14.list.client2@example.invalid", now);
+
+        // Each session gets its own grid class so the seed looks like generated data; the listing never joins it.
+        var sessionAtRangeStart = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Monday, new TimeOnly(0, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 9, 0, 0, 0), 60, 8, AppointmentStatus.Scheduled, now);
+        var sessionInside = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Tuesday, new TimeOnly(10, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 10, 10, 0, 0), 60, 8, AppointmentStatus.Scheduled, now);
+        var sessionOfOtherService = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceOther, workerA, DayOfWeek.Monday, new TimeOnly(12, 0)),
+            serviceOther, workerA, new DateTime(2026, 3, 9, 12, 0, 0), 60, 8, AppointmentStatus.Scheduled, now);
+        var sessionAtDayAfterEnd = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Thursday, new TimeOnly(0, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 12, 0, 0, 0), 60, 8, AppointmentStatus.Scheduled, now);
+        var sessionAtLastInstantOfEndDay = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Wednesday, new TimeOnly(23, 59)),
+            serviceA, workerA, new DateTime(2026, 3, 11, 23, 59, 59), 60, 8, AppointmentStatus.Scheduled, now);
+
+        // An individual turn inside the same window, already booked: capacity 1 and Programado, so only the kind
+        // discriminant keeps it out of the offer.
+        var individualAppointment = await InsertIndividualAppointmentAsync(connection, transaction, businessA,
+            serviceA, workerA, new DateTime(2026, 3, 9, 9, 0, 0), 60, now);
+        await InsertBookingAsync(connection, transaction, businessA, individualAppointment, firstClient, null,
+            null, BookingStatus.Pending, now);
+
+        // One pending and one cancelled booking of the returned session, so both travel with it.
+        await InsertBookingAsync(connection, transaction, businessA, sessionInside, firstClient, null,
+            BookingModality.DropIn, BookingStatus.Pending, now);
+        await InsertBookingAsync(connection, transaction, businessA, sessionInside, secondClient, null,
+            BookingModality.DropIn, BookingStatus.Cancelled, now);
+
+        // The other tenant: a class session at the same instant as one of business A's, which business A must not see.
+        var serviceB = await InsertServiceAsync(connection, transaction, businessB, "Synthetic T14 Other Class", 60, 8);
+        var sessionOfOtherBusiness = await InsertClassSessionAsync(connection, transaction, businessB,
+            await InsertGridClassAsync(connection, transaction, businessB, serviceB, workerB, DayOfWeek.Tuesday, new TimeOnly(10, 0)),
+            serviceB, workerB, new DateTime(2026, 3, 10, 10, 0, 0), 60, 8, AppointmentStatus.Scheduled, now);
+
+        await transaction.CommitAsync();
+
+        return new ListIds(businessA, businessB, serviceA, workerA, firstClient, secondClient,
+            sessionAtRangeStart, sessionInside, sessionOfOtherService, sessionAtDayAfterEnd,
+            sessionAtLastInstantOfEndDay, individualAppointment, sessionOfOtherBusiness);
+    }
+
+    private static async Task<ClientIds> SeedClientsAsync(string connectionString, DateTime now)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var businessA = await InsertBusinessAsync(connection, transaction, "Synthetic T14 Client Business", "synthetic-t14-clients", now);
+        var businessB = await InsertBusinessAsync(connection, transaction, "Synthetic T14 Client Other", "synthetic-t14-clients-other", now);
+
+        // Stored with a different casing than the request, as the schema's lower-case convention does not rewrite
+        // rows that predate it.
+        var legacyClientOfA = await InsertClientAsync(connection, transaction, businessA, "Legacy", "MixedCase",
+            "Legacy.MixedCase@Example.invalid", now);
+
+        await transaction.CommitAsync();
+
+        return new ClientIds(businessA, businessB, legacyClientOfA);
+    }
+
+    private static async Task<WriteIds> SeedWriteAsync(string connectionString, DateTime now)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var businessA = await InsertBusinessAsync(connection, transaction, "Synthetic T14 Write Business", "synthetic-t14-write", now);
+        var serviceA = await InsertServiceAsync(connection, transaction, businessA, "Synthetic T14 Bookable Class", 60, 8);
+        var workerA = await InsertWorkerAsync(connection, transaction, businessA, "Synthetic", "Teacher", "20151515151");
+        var firstClient = await InsertClientAsync(connection, transaction, businessA, "Client", "T14 One", "t14.write.client1@example.invalid", now);
+        var secondClient = await InsertClientAsync(connection, transaction, businessA, "Client", "T14 Two", "t14.write.client2@example.invalid", now);
+        var thirdClient = await InsertClientAsync(connection, transaction, businessA, "Client", "T14 Three", "t14.write.client3@example.invalid", now);
+
+        // Two free places, and nobody booked: the guarded insert may take one.
+        var openSession = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Friday, new TimeOnly(10, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 20, 10, 0, 0), 60, 2, AppointmentStatus.Scheduled, now);
+
+        // Capacity 2 with two non-cancelled bookings — a fixed annotation pending payment and a confirmed drop-in —
+        // plus a cancelled one from the client that will try to book: full, whatever the modalities are.
+        var fullSession = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Friday, new TimeOnly(12, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 20, 12, 0, 0), 60, 2, AppointmentStatus.Scheduled, now);
+        var enrollmentOfSecondClient = await InsertEnrollmentAsync(connection, transaction, businessA, secondClient, now);
+        await InsertBookingAsync(connection, transaction, businessA, fullSession, secondClient, enrollmentOfSecondClient,
+            BookingModality.Fixed, BookingStatus.Pending, now);
+        await InsertBookingAsync(connection, transaction, businessA, fullSession, thirdClient, null,
+            BookingModality.DropIn, BookingStatus.Confirmed, now);
+        await InsertBookingAsync(connection, transaction, businessA, fullSession, firstClient, null,
+            BookingModality.DropIn, BookingStatus.Cancelled, now);
+
+        // Capacity 2 with a single non-cancelled booking: the client holding it cannot book again until it is
+        // cancelled, which then frees the place for her.
+        var bookedSession = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Saturday, new TimeOnly(10, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 21, 10, 0, 0), 60, 2, AppointmentStatus.Scheduled, now);
+        await InsertBookingAsync(connection, transaction, businessA, bookedSession, firstClient, null,
+            BookingModality.DropIn, BookingStatus.Confirmed, now);
+
+        // An individual turn of the same business: capacity 1 and Programado, never a drop-in target.
+        var individualAppointment = await InsertIndividualAppointmentAsync(connection, transaction, businessA,
+            serviceA, workerA, new DateTime(2026, 3, 20, 9, 0, 0), 60, now);
+
+        await transaction.CommitAsync();
+
+        return new WriteIds(businessA, openSession, fullSession, bookedSession, individualAppointment,
+            firstClient, secondClient, thirdClient);
+    }
+
+    private static async Task<RaceIds> SeedRaceAsync(string connectionString, DateTime now)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var businessA = await InsertBusinessAsync(connection, transaction, "Synthetic T14 Race Business", "synthetic-t14-race", now);
+        var serviceA = await InsertServiceAsync(connection, transaction, businessA, "Synthetic T14 Race Class", 60, 1);
+        var workerA = await InsertWorkerAsync(connection, transaction, businessA, "Race", "Teacher", "20161616161");
+        var firstClient = await InsertClientAsync(connection, transaction, businessA, "Race", "One", "t14.race.client1@example.invalid", now);
+        var secondClient = await InsertClientAsync(connection, transaction, businessA, "Race", "Two", "t14.race.client2@example.invalid", now);
+
+        // One single place to take.
+        var session = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Friday, new TimeOnly(10, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 20, 10, 0, 0), 60, 1, AppointmentStatus.Scheduled, now);
+
+        await transaction.CommitAsync();
+
+        return new RaceIds(businessA, session, new[] { firstClient, secondClient });
+    }
+
+    private static async Task<RollbackIds> SeedRollbackAsync(string connectionString, DateTime now)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var businessA = await InsertBusinessAsync(connection, transaction, "Synthetic T14 Rollback Business", "synthetic-t14-rollback", now);
+        var serviceA = await InsertServiceAsync(connection, transaction, businessA, "Synthetic T14 Rollback Class", 60, 8);
+        var workerA = await InsertWorkerAsync(connection, transaction, businessA, "Rollback", "Teacher", "20171717171");
+        var session = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Friday, new TimeOnly(10, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 20, 10, 0, 0), 60, 8, AppointmentStatus.Scheduled, now);
+
+        await transaction.CommitAsync();
+
+        return new RollbackIds(businessA, session);
+    }
+
+    private static Task<int> InsertBusinessAsync(
+        SqlConnection connection, SqlTransaction transaction, string name, string slug, DateTime now) =>
+        InsertIdAsync(connection, transaction,
+            "INSERT INTO Businesses (Name, Slug, ContactPhone, NotificationEmail, CreatedAt) OUTPUT INSERTED.Id VALUES (@name, @slug, @phone, @email, @createdAt)",
+            ("@name", name), ("@slug", slug), ("@phone", "0000000000"),
+            ("@email", $"{slug}@example.invalid"), ("@createdAt", now));
+
+    private static Task<int> InsertServiceAsync(
+        SqlConnection connection, SqlTransaction transaction, int businessId, string name, int durationMinutes,
+        int maxCapacity) =>
+        InsertIdAsync(connection, transaction,
+            "INSERT INTO Services (BusinessId, Name, Price, DurationMinutes, MaxCapacity) OUTPUT INSERTED.Id VALUES (@businessId, @name, @price, @duration, @capacity)",
+            ("@businessId", businessId), ("@name", name), ("@price", 100.00m),
+            ("@duration", durationMinutes), ("@capacity", maxCapacity));
+
+    private static Task<int> InsertWorkerAsync(
+        SqlConnection connection, SqlTransaction transaction, int businessId, string firstName, string lastName,
+        string cuil) =>
+        InsertIdAsync(connection, transaction,
+            "INSERT INTO Workers (BusinessId, FirstName, LastName, Phone, Cuil) OUTPUT INSERTED.Id VALUES (@businessId, @firstName, @lastName, @phone, @cuil)",
+            ("@businessId", businessId), ("@firstName", firstName), ("@lastName", lastName),
+            ("@phone", "0000000000"), ("@cuil", cuil));
+
+    private static Task<int> InsertClientAsync(
+        SqlConnection connection, SqlTransaction transaction, int businessId, string firstName, string lastName,
+        string email, DateTime now) =>
+        InsertIdAsync(connection, transaction,
+            "INSERT INTO Clients (BusinessId, FirstName, LastName, Email, Phone, CreatedAt) OUTPUT INSERTED.Id VALUES (@businessId, @firstName, @lastName, @email, @phone, @createdAt)",
+            ("@businessId", businessId), ("@firstName", firstName), ("@lastName", lastName),
+            ("@email", email), ("@phone", "0000000000"), ("@createdAt", now));
+
+    private static Task<int> InsertGridClassAsync(
+        SqlConnection connection, SqlTransaction transaction, int businessId, int serviceId, int workerId,
+        DayOfWeek day, TimeOnly startTime) =>
+        InsertIdAsync(connection, transaction,
+            "INSERT INTO GridClasses (BusinessId, ServiceId, WorkerId, DayOfWeek, StartTime, IsActive) OUTPUT INSERTED.Id VALUES (@businessId, @serviceId, @workerId, @dayOfWeek, @startTime, 1)",
+            ("@businessId", businessId), ("@serviceId", serviceId), ("@workerId", workerId),
+            ("@dayOfWeek", day), ("@startTime", startTime));
+
+    private static Task<int> InsertClassSessionAsync(
+        SqlConnection connection, SqlTransaction transaction, int businessId, int gridClassId, int serviceId,
+        int workerId, DateTime startsAt, int durationMinutes, int maxCapacity,
+        AppointmentStatus status, DateTime now) =>
+        InsertIdAsync(connection, transaction,
+            "INSERT INTO Appointments (BusinessId, Kind, ServiceId, WorkerId, GridClassId, StartsAt, EndsAt, MaxCapacity, Origin, Status, CreatedAt) OUTPUT INSERTED.Id VALUES (@businessId, @kind, @serviceId, @workerId, @gridClassId, @startsAt, @endsAt, @capacity, NULL, @status, @createdAt)",
+            ("@businessId", businessId), ("@kind", AppointmentKind.ClassSession), ("@serviceId", serviceId),
+            ("@workerId", workerId), ("@gridClassId", gridClassId), ("@startsAt", startsAt),
+            ("@endsAt", startsAt.AddMinutes(durationMinutes)), ("@capacity", maxCapacity), ("@status", status),
+            ("@createdAt", now));
+
+    private static Task<int> InsertIndividualAppointmentAsync(
+        SqlConnection connection, SqlTransaction transaction, int businessId, int serviceId, int workerId,
+        DateTime startsAt, int durationMinutes, DateTime now) =>
+        InsertIdAsync(connection, transaction,
+            "INSERT INTO Appointments (BusinessId, Kind, ServiceId, WorkerId, GridClassId, StartsAt, EndsAt, MaxCapacity, Origin, Status, CreatedAt) OUTPUT INSERTED.Id VALUES (@businessId, @kind, @serviceId, @workerId, NULL, @startsAt, @endsAt, 1, @origin, @status, @createdAt)",
+            ("@businessId", businessId), ("@kind", AppointmentKind.Individual), ("@serviceId", serviceId),
+            ("@workerId", workerId), ("@startsAt", startsAt), ("@endsAt", startsAt.AddMinutes(durationMinutes)),
+            ("@origin", AppointmentOrigin.Reserved), ("@status", AppointmentStatus.Scheduled), ("@createdAt", now));
+
+    private static Task<int> InsertEnrollmentAsync(
+        SqlConnection connection, SqlTransaction transaction, int businessId, int clientId, DateTime now) =>
+        InsertIdAsync(connection, transaction,
+            "INSERT INTO Enrollments (BusinessId, ClientId, WeeklyFrequency, Status, AgreedPrice, CreatedAt) OUTPUT INSERTED.Id VALUES (@businessId, @clientId, @frequency, @status, @price, @createdAt)",
+            ("@businessId", businessId), ("@clientId", clientId), ("@frequency", 1),
+            ("@status", EnrollmentStatus.PendingPayment), ("@price", 100.00m), ("@createdAt", now));
+
+    /// <summary>
+    /// One booking row with its schema constraints honoured: a fixed annotation carries its enrollment, and a
+    /// cancelled one carries its cancellation instant.
+    /// </summary>
+    private static Task<int> InsertBookingAsync(
+        SqlConnection connection, SqlTransaction transaction, int businessId, int appointmentId, int clientId,
+        int? enrollmentId, BookingModality? modality, BookingStatus status, DateTime createdAt) =>
+        InsertIdAsync(connection, transaction,
+            "INSERT INTO Bookings (BusinessId, AppointmentId, ClientId, EnrollmentId, Modality, Status, CreatedAt, CancelledAt) OUTPUT INSERTED.Id VALUES (@businessId, @appointmentId, @clientId, @enrollmentId, @modality, @status, @createdAt, @cancelledAt)",
+            ("@businessId", businessId), ("@appointmentId", appointmentId), ("@clientId", clientId),
+            ("@enrollmentId", enrollmentId), ("@modality", modality), ("@status", status),
+            ("@createdAt", createdAt),
+            ("@cancelledAt", status == BookingStatus.Cancelled ? createdAt : null));
+
+    private static async Task<int> InsertIdAsync(
+        SqlConnection connection, SqlTransaction transaction, string sql, params (string Name, object? Value)[] parameters)
+    {
+        await using var command = Create(connection, transaction, sql, parameters);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
+    }
+
+    private static async Task ExecuteAsync(
+        string connectionString, string sql, params (string Name, object? Value)[] parameters)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = Create(connection, null, sql, parameters);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<int> CountAsync(
+        string connectionString, string sql, params (string Name, object? Value)[] parameters) =>
+        await ReadScalarAsync<int>(connectionString, sql, parameters);
+
+    private static async Task<T?> ReadScalarAsync<T>(
+        string connectionString, string sql, params (string Name, object? Value)[] parameters)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = Create(connection, null, sql, parameters);
+        var value = await command.ExecuteScalarAsync();
+        if (value is null or DBNull)
+            return default;
+        return (T)Convert.ChangeType(value, Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T), CultureInfo.InvariantCulture);
+    }
+
+    private static async Task<BookingSnapshot> ReadBookingAsync(string connectionString, int bookingId)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "SELECT BusinessId, AppointmentId, ClientId, EnrollmentId, Modality, Status, CancelledAt, CreatedAt FROM Bookings WHERE Id = @id",
+            connection);
+        AddParameter(command, "@id", bookingId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), $"Booking {bookingId} was not found.");
+        return new BookingSnapshot(
+            reader.GetInt32(0),
+            reader.GetInt32(1),
+            reader.GetInt32(2),
+            reader.IsDBNull(3) ? null : reader.GetInt32(3),
+            reader.IsDBNull(4) ? null : (BookingModality)reader.GetByte(4),
+            (BookingStatus)reader.GetByte(5),
+            reader.IsDBNull(6) ? null : reader.GetDateTime(6),
+            reader.GetDateTime(7));
+    }
+
+    private static async Task<NotificationSnapshot> ReadNotificationAsync(string connectionString, string dedupKey)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "SELECT Type, Recipient, Subject, BodyHtml FROM Notifications WHERE DedupKey = @dedupKey",
+            connection);
+        AddParameter(command, "@dedupKey", dedupKey);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), "The queued notification was not found.");
+        return new NotificationSnapshot(
+            (NotificationType)reader.GetByte(0), reader.GetString(1), reader.GetString(2), reader.GetString(3));
+    }
+
+    private static SqlCommand Create(
+        SqlConnection connection, SqlTransaction? transaction, string sql, (string Name, object? Value)[] parameters)
+    {
+        var command = new SqlCommand(sql, connection, transaction);
+        foreach (var (name, value) in parameters)
+            AddParameter(command, name, value);
+        return command;
+    }
+
+    private static void AddParameter(SqlCommand command, string name, object? value)
+    {
+        switch (value)
+        {
+            case DateTime dateTime:
+                command.Parameters.Add(name, SqlDbType.DateTime2).Value = dateTime;
+                return;
+            case DateOnly date:
+                command.Parameters.Add(name, SqlDbType.Date).Value = date.ToDateTime(TimeOnly.MinValue);
+                return;
+            case null:
+                command.Parameters.AddWithValue(name, DBNull.Value);
+                return;
+            case Enum enumeration:
+                command.Parameters.AddWithValue(name, Convert.ToByte(enumeration, CultureInfo.InvariantCulture));
+                return;
+            default:
+                command.Parameters.AddWithValue(name, value);
+                return;
+        }
+    }
+
+    private sealed record SqlTarget(string DatabaseName, string ConnectionString);
+
+    private sealed record ListIds(
+        int BusinessA,
+        int BusinessB,
+        int ServiceA,
+        int WorkerA,
+        int FirstClientOfA,
+        int SecondClientOfA,
+        int SessionAtRangeStart,
+        int SessionInside,
+        int SessionOfOtherService,
+        int SessionAtDayAfterEnd,
+        int SessionAtLastInstantOfEndDay,
+        int IndividualAppointment,
+        int SessionOfOtherBusiness);
+
+    private sealed record ClientIds(int BusinessA, int BusinessB, int LegacyClientOfA);
+
+    private sealed record WriteIds(
+        int BusinessA,
+        int OpenSession,
+        int FullSession,
+        int BookedSession,
+        int IndividualAppointment,
+        int FirstClient,
+        int SecondClient,
+        int ThirdClient);
+
+    private sealed record RaceIds(int BusinessA, int Session, int[] ClientIds);
+
+    private sealed record RollbackIds(int BusinessA, int Session);
+
+    private sealed record BookingSnapshot(
+        int BusinessId,
+        int AppointmentId,
+        int ClientId,
+        int? EnrollmentId,
+        BookingModality? Modality,
+        BookingStatus Status,
+        DateTime? CancelledAt,
+        DateTime CreatedAt);
+
+    private sealed record NotificationSnapshot(NotificationType Type, string Recipient, string Subject, string BodyHtml);
+}
