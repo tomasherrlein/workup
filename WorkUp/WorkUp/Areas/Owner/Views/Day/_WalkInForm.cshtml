@@ -1,4 +1,8 @@
 @model WorkUp.Areas.Owner.Models.Day.WalkInViewModel
+@{ // HTML number inputs only accept the invariant dot form: the MVC input tag helper would otherwise format
+   // a decimal with the request culture ("100,25" under es-AR) and the browser would silently drop it.
+   InvariantDecimalFormValue.Ensure(ViewData.ModelState,
+       ViewData.TemplateInfo.GetFullHtmlFieldName(nameof(Model.AgreedPrice)), Model.AgreedPrice); }
 @* Shared at-arrival form (RF-11). Rendered inline on the Jornada view and on the standalone deep link.
    The business comes from the owner claim and the start time from the business clock, never from the request. *@
 <form asp-area="Owner" asp-controller="Day" asp-action="WalkIn" method="post" class="form owner-walk-in-form">

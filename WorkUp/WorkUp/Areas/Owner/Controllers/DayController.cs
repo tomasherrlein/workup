@@ -75,10 +75,14 @@ public sealed class DayController(OwnerDayService dayService, OwnerDayActionsSer
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Finish(int id, DateOnly date, decimal? amount, string? nextVisitNote,
+    public async Task<IActionResult> Finish(int id, DateOnly date,
+        [ModelBinder(typeof(InvariantDecimalModelBinder))] decimal? amount, string? nextVisitNote,
         CancellationToken ct = default)
     {
         SetPrivateHeaders();
+        // A rejected (ambiguous) amount is not a missing one: report it instead of silently skipping the charge.
+        if (ModelState.TryGetValue(nameof(amount), out var amountState) && amountState.Errors.Count > 0)
+            return ReturnToDay(date, "Revisá el importe y la observación (máximo 1000 caracteres).", false);
         if (nextVisitNote?.Length > 1000 || amount is <= 0 || amount is > 9999999999.99m ||
             amount is { } value && decimal.Round(value, 2) != value)
             return ReturnToDay(date, "Revisá el importe y la observación (máximo 1000 caracteres).", false);
@@ -98,7 +102,8 @@ public sealed class DayController(OwnerDayService dayService, OwnerDayActionsSer
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Charge(int id, DateOnly date, decimal? amount, CancellationToken ct = default)
+    public async Task<IActionResult> Charge(int id, DateOnly date,
+        [ModelBinder(typeof(InvariantDecimalModelBinder))] decimal? amount, CancellationToken ct = default)
     {
         SetPrivateHeaders();
         if (amount is not { } value || value <= 0 || value > 9999999999.99m || decimal.Round(value, 2) != value)

@@ -45,6 +45,45 @@ public sealed class OwnerDayControllerTests
     }
 
     [Fact]
+    public async Task Finish_persists_the_exact_dot_bound_amount()
+    {
+        var (controller, repository) = Create();
+        repository.Booking = FakeOwnerDayActionsRepository.Default() with { AgreedPrice = 100.25m };
+
+        await controller.Finish(12, Date, 100.25m, null);
+
+        Assert.Equal(100.25m, Assert.Single(repository.Payments).Amount);
+    }
+
+    [Fact]
+    public async Task Charge_persists_the_exact_dot_bound_amount()
+    {
+        var (controller, repository) = Create();
+        repository.Booking = FakeOwnerDayActionsRepository.Default() with { AgreedPrice = 100.25m };
+
+        await controller.Charge(12, Date, 100.25m);
+
+        Assert.Equal(100.25m, Assert.Single(repository.Payments).Amount);
+    }
+
+    [Fact]
+    public async Task Finish_rejected_amount_reports_an_error_and_never_finalizes_attendance()
+    {
+        // A malformed amount is rejected by InvariantDecimalModelBinder before the action runs: the amount is
+        // null and ModelState carries an error. Finishing silently with no charge would be a financial surprise.
+        var (controller, repository) = Create();
+        repository.Booking = FakeOwnerDayActionsRepository.Default() with { AgreedPrice = 100.25m };
+        controller.ModelState.AddModelError("amount", "The value '100,25' is not valid for amount.");
+
+        var result = await controller.Finish(12, Date, null, null);
+
+        Assert.Equal(Date, Assert.IsType<RedirectToActionResult>(result).RouteValues!["date"]);
+        Assert.Empty(repository.Payments);
+        Assert.Null(repository.Booking.AttendanceRecordedAt);
+        Assert.Contains("Revisá el importe", string.Join(" ", controller.TempData.Values.OfType<string>()));
+    }
+
+    [Fact]
     public async Task Absence_uses_claim_tenant_and_returns_to_day()
     {
         var (controller, repository) = Create();
