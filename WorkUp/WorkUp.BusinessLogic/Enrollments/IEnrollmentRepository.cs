@@ -46,16 +46,22 @@ public interface IEnrollmentRepository
         int businessId, IReadOnlyList<int> gridClassIds, CancellationToken ct = default);
 
     /// <summary>
-    /// The fixed assignments of the grid class that are valid on <paramref name="referenceDate"/>, with the status of
-    /// the enrollment that owns each one and no cancellation concept (the table has none). The count of seats is not
-    /// returned as a number: <see cref="FixedSeatCapacity"/> owns the predicate — an assignment holds a seat while its
-    /// enrollment is pending payment or active and the window covers the date, counted once per enrollment — so the
-    /// caller applies exactly one rule in one place.
+    /// The fixed assignments of the grid class that still retain their permanent seat on
+    /// <paramref name="referenceDate"/>, with the status of the enrollment that owns each one and no cancellation
+    /// concept (the table has none). The count of seats is not returned as a number:
+    /// <see cref="FixedSeatCapacity"/> owns the predicate — an assignment holds a seat while its enrollment is
+    /// pending payment or active and its window has not already ended, counted once per enrollment — so the caller
+    /// applies exactly one rule in one place.
     /// <para>
     /// It must run inside the transaction that holds <see cref="LockGridClassesAsync"/> on that grid class: reading
-    /// the seats without the lock and inserting after it is the race that overbooks a grid class. An implementation
-    /// may narrow the query by status and window; a wider answer is harmless, because the caller re-applies
-    /// <see cref="FixedSeatCapacity"/> and can only reject more.
+    /// the seats without the lock and inserting after it is the race that overbooks a grid class. The read must filter
+    /// by exactly two things: the enrollment status (<c>PendingPayment</c> or <c>Active</c>) and the end of the window
+    /// (<c>ValidTo IS NULL OR ValidTo &gt;= @referenceDate</c>). Narrowing by the start of the window — for instance
+    /// requiring <c>ValidFrom &lt;= @referenceDate</c> — is forbidden: the place is retained from registration
+    /// (Regla 23, D-21), so that filter would drop the future-start assignments the rule must count and silently
+    /// oversubscribe the grid class while every test that runs against a fake stays green.
+    /// <paramref name="referenceDate"/> is the registration day taken from the caller's clock, never the enrollment's
+    /// own start date.
     /// </para>
     /// </summary>
     Task<IReadOnlyList<FixedSeatAssignment>> ListFixedSeatsAsync(
@@ -63,10 +69,15 @@ public interface IEnrollmentRepository
 
     /// <summary>
     /// Guarded insert of the pending enrollment together with its fixed assignments. It must write only while every
-    /// chosen grid class still has a free permanent seat on the enrollment's effective date, evaluated inside the
-    /// transaction and under the locks taken by <see cref="LockGridClassesAsync"/>; the losing side of a race for the
-    /// last seat changes no row and is reported as <see cref="EnrollmentInsertResult.NoSeatLeft"/> with the grid class
-    /// that ran out, so the caller never overbooks a grid class and never receives an unhandled exception for it.
+    /// chosen grid class still has a free permanent seat on the caller's registration reference date, evaluated inside
+    /// the transaction and under the locks taken by <see cref="LockGridClassesAsync"/>; the losing side of a race for
+    /// the last seat changes no row and is reported as <see cref="EnrollmentInsertResult.NoSeatLeft"/> with the grid
+    /// class that ran out, so the caller never overbooks a grid class and never receives an unhandled exception for
+    /// it. The guard repeats exactly the predicate of <see cref="ListFixedSeatsAsync"/> — enrollment status pending
+    /// payment or active plus the end of the window (<c>ValidTo IS NULL OR ValidTo &gt;= @referenceDate</c>) — where
+    /// the reference date is the registration day the enrollment is written with, never the effective date of a fixed
+    /// assignment. Narrowing by the start of the window is forbidden for the same reason: a seat is retained from
+    /// registration (Regla 23, D-21).
     /// <para>
     /// The enrollment row is written as <c>PendingPayment</c> with its agreed price and its created instant, and each
     /// fixed assignment is written with the effective date as <c>ValidFrom</c> and an open window. The rows are not
