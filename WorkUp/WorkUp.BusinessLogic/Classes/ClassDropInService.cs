@@ -1,5 +1,8 @@
+using System.Globalization;
+using System.Net;
 using WorkUp.BusinessLogic.Abstractions;
 using WorkUp.BusinessLogic.Common;
+using WorkUp.Domain.Entities;
 using WorkUp.Domain.Enums;
 using WorkUp.Domain.Rules;
 
@@ -7,16 +10,19 @@ namespace WorkUp.BusinessLogic.Classes;
 
 /// <summary>
 /// Booking a drop-in into an already generated class session (RF-07 cupo &gt; 1, RF-22, RF-11, D-16, D-23, D-25).
-/// The offer lists the sessions of the business that are <c>Programado</c>, start in the future and still have a
-/// free place, where the occupancy counts every booking that is not <c>Cancelado</c>: the fixed annotations keep
-/// their places across their three states, so a student pending renewal also blocks a drop-in. Booking revalidates
-/// all of that under the repository's row lock, identifies the client by email without requiring a password, writes
-/// the drop-in through the guarded insert, and commits as a single unit, so the last place goes to exactly one
-/// client.
+/// The offer lists the sessions of the business that are a <c>ClassSession</c> (never an individual turn), are
+/// <c>Programado</c>, start in the future and still have a free place, where the occupancy counts every booking that
+/// is not <c>Cancelado</c>: the fixed annotations keep their places across their three states, so a student pending
+/// renewal also blocks a drop-in. Booking revalidates all of that under the repository's row lock, identifies the
+/// client by email without requiring a password (or reads the client the owner picked), rejects a client that already
+/// holds a booking of the session before looking at the occupancy, writes the drop-in through the guarded insert, and
+/// commits as a single unit, so the last place goes to exactly one client.
 /// <para>
 /// The immediate email is only queued when the class starts in less than 24 hours (D-22, RF-17 step 4): with more
 /// notice the scheduled reminder owns that email, and with less notice the immediate email is the reminder itself,
-/// sharing its dedup key so neither is sent twice.
+/// sharing its dedup key so neither is sent twice. Both paths queue it, because both resolve a stored recipient: the
+/// validated email of the public form and the email on file of the client the owner picked. The service composes the
+/// whole notice, because the outbox columns are not nullable.
 /// </para>
 /// </summary>
 public sealed class ClassDropInService(
@@ -31,7 +37,8 @@ public sealed class ClassDropInService(
     /// <summary>
     /// Read-only offer of the bookable sessions in the inclusive date range, optionally narrowed to one service,
     /// ordered by start. A session that is suspended or already started is never offered (RF-07 step 2, RF-22), and
-    /// neither is a full one.
+    /// neither is a full one. An individual turn is never offered either: it is not a class, whatever the repository
+    /// returned.
     /// </summary>
     public async Task<Result<IReadOnlyList<ClassSessionOption>>> ListOptionsAsync(
         int businessId, DateOnly from, DateOnly to, int? serviceId, CancellationToken ct = default)
@@ -40,19 +47,30 @@ public sealed class ClassDropInService(
             return Result<IReadOnlyList<ClassSessionOption>>.Failure(
                 "drop_in_invalid_request", "No pudimos identificar el negocio.");
 
+        // The inclusive end date is expressed to storage as the exclusive instant (toInclusive + 1 day) 00:00, and
+        // that instant does not exist after 9999-12-31. Accepting the range would hand an implementation an
+        // arithmetic overflow it cannot turn into a correct bound, so the request is rejected here, before any
+        // storage call, instead of asking the repository to guess.
+        if (to == DateOnly.MaxValue)
+            return Result<IReadOnlyList<ClassSessionOption>>.Failure(
+                "drop_in_invalid_request", "Elegí un rango de fechas válido.");
+
         // The single clock read of the listing: every session is judged against the same "now".
         var now = clock.Now;
 
-        var sessions = await repository.ListSessionsAsync(
-            businessId, from.ToDateTime(TimeOnly.MinValue), to.ToDateTime(TimeOnly.MaxValue), serviceId, ct);
+        var sessions = await repository.ListSessionsAsync(businessId, from, to, serviceId, ct);
 
         var options = new List<ClassSessionOption>(sessions.Count);
         foreach (var session in sessions)
         {
+            if (session.Kind != AppointmentKind.ClassSession)
+                continue;
+
             if (!ClassCapacity.IsBookable(session.Status, session.StartsAt, now))
                 continue;
 
-            var remaining = ClassCapacity.RemainingPlaces(session.MaxCapacity, session.BookingStatuses);
+            var statuses = session.Bookings.Select(booking => booking.Status).ToArray();
+            var remaining = ClassCapacity.RemainingPlaces(session.MaxCapacity, statuses);
             if (remaining == 0)
                 continue;
 
@@ -63,7 +81,7 @@ public sealed class ClassDropInService(
                 session.Date,
                 session.StartTime,
                 session.MaxCapacity,
-                ClassCapacity.PlacesTaken(session.MaxCapacity, session.BookingStatuses),
+                ClassCapacity.PlacesTaken(session.MaxCapacity, statuses),
                 remaining));
         }
 
@@ -94,8 +112,8 @@ public sealed class ClassDropInService(
 
     /// <summary>
     /// Books a client the owner picked into the chosen session (RF-11). It shares the whole core with the public
-    /// path, except that the client must already belong to the business: an unknown or foreign one is rejected
-    /// instead of created.
+    /// path, except that the client must already belong to the business: an unknown or foreign one is rejected instead
+    /// of created, and the stored client is what supplies the notice recipient and name.
     /// </summary>
     public async Task<Result<DropInBookingOutcome>> BookForClientAsync(
         int businessId, int appointmentId, int clientId, CancellationToken ct = default)
@@ -128,12 +146,16 @@ public sealed class ClassDropInService(
 
         await using var tx = await unitOfWork.BeginAsync(ct: ct);
 
-        // The owner path only books its own clients; checking it before the lock keeps the "not found" answer about
-        // the client it names, not about the session.
-        if (clientId is { } requestedClientId &&
-            !await repository.ClientExistsAsync(businessId, requestedClientId, ct))
-            return Result<DropInBookingOutcome>.Failure(
-                "drop_in_client_not_found", "No encontramos a esa alumna en tu negocio.");
+        // The owner path only books its own clients; resolving the client before the lock keeps the "not found"
+        // answer about the client it names, not about the session, and yields the stored contact the notice needs.
+        DropInClient? ownerClient = null;
+        if (clientId is { } requestedClientId)
+        {
+            ownerClient = await repository.FindClientAsync(businessId, requestedClientId, ct);
+            if (ownerClient is null)
+                return Result<DropInBookingOutcome>.Failure(
+                    "drop_in_client_not_found", "No encontramos a esa alumna en tu negocio.");
+        }
 
         // The session row is the lock: the repository takes UPDLOCK, returns the live occupancy and null when the
         // session is not this business's, so the count below and the insert cannot be raced.
@@ -142,50 +164,119 @@ public sealed class ClassDropInService(
             return Result<DropInBookingOutcome>.Failure(
                 "drop_in_not_found", "No encontramos esa clase.");
 
+        // The discriminant is not decorative: an individual turn has capacity 1 and can also be `Programado`, so
+        // without this check a repository that forgot the kind filter would let it be booked as a class.
+        if (session.Kind != AppointmentKind.ClassSession)
+            return Result<DropInBookingOutcome>.Failure(
+                "drop_in_not_found", "No encontramos esa clase.");
+
         if (!ClassCapacity.IsBookable(session.Status, session.StartsAt, now))
             return Result<DropInBookingOutcome>.Failure(
                 "drop_in_not_available", "Esa clase ya no está disponible para anotarse.");
 
-        if (!ClassCapacity.HasPlace(session.MaxCapacity, session.BookingStatuses))
-            return Result<DropInBookingOutcome>.Failure(
-                "drop_in_full", "La clase está completa. Probá con otro día u horario.");
-
+        // The client is resolved before the occupancy is judged, because the client's own booking is decided first,
+        // just below. Creating a public client here is safe: every rejection after this point returns before the
+        // commit, so the transaction rolls that row back with the rest of the unit.
+        var recipient = email;
+        var recipientName = firstName;
         var resolvedClientId = clientId;
-        if (resolvedClientId is null)
+        if (ownerClient is not null)
+        {
+            // The assisted path carries no contact form: the recipient and the name are the ones stored on the client.
+            resolvedClientId = ownerClient.ClientId;
+            recipient = ownerClient.Email;
+            recipientName = ownerClient.FirstName;
+        }
+        else
         {
             var client = await repository.IdentifyClientAsync(businessId, email, firstName, lastName, phone, ct);
             resolvedClientId = client.ClientId;
+            // The identified email is the notice recipient: dropping it would leave the outbox without a Recipient.
+            recipient = client.Email;
         }
 
-        // The guarded insert is the real protection of the last place: it returns null when it lost the race, and the
-        // loser reports a full class instead of overbooking it.
-        var bookingId = await repository.TryInsertDropInAsync(
-            new DropInInsert(businessId, appointmentId, resolvedClientId.Value, now), ct);
-        if (bookingId is null)
+        // UX_Bookings_ActiveClient (AppointmentId, ClientId) WHERE Status <> 5: the same client cannot hold two
+        // non-cancelled bookings of the session. It is checked before the occupancy on purpose: a client who already
+        // holds a place must hear that she is already booked, even when the session her own booking occupies is the
+        // very reason it is full. Checking it here answers with a stable code instead of letting the insert surface a
+        // raw unique-key exception; a cancelled booking released its place and can book again.
+        if (session.Bookings.Any(booking =>
+            booking.ClientId == resolvedClientId.Value && ClassCapacity.OccupiesPlace(booking.Status)))
+            return Result<DropInBookingOutcome>.Failure(
+                "drop_in_already_booked", "Ya estás anotada en esa clase.");
+
+        var statuses = session.Bookings.Select(booking => booking.Status).ToArray();
+        if (!ClassCapacity.HasPlace(session.MaxCapacity, statuses))
             return Result<DropInBookingOutcome>.Failure(
                 "drop_in_full", "La clase está completa. Probá con otro día u horario.");
 
-        var immediateEmailQueued = session.StartsAt - now < TimeSpan.FromHours(ReminderLeadHours);
+        // The guarded insert is the real protection of the last place: it reports the losing outcome without writing,
+        // so the loser rolls back instead of overbooking the class or duplicating the client.
+        var insert = await repository.TryInsertDropInAsync(
+            new DropInInsert(businessId, appointmentId, resolvedClientId.Value, now), ct);
+        switch (insert.Result)
+        {
+            case DropInInsertResultType.Inserted:
+                break;
+            case DropInInsertResultType.NoPlaceLeft:
+                return Result<DropInBookingOutcome>.Failure(
+                    "drop_in_full", "La clase está completa. Probá con otro día u horario.");
+            case DropInInsertResultType.AlreadyBooked:
+                return Result<DropInBookingOutcome>.Failure(
+                    "drop_in_already_booked", "Ya estás anotada en esa clase.");
+            default:
+                // The enum knows exactly three outcomes, and `DropInInsertResultType` has no zero member: any other
+                // value is a broken implementation. Failing loud beats falling through as a successful insert, which
+                // would commit a booking that was never written and queue `reminder:booking:0` for it.
+                throw new InvalidOperationException(
+                    $"El insert de la reserva suelta devolvió un resultado desconocido: {(int)insert.Result}.");
+        }
+
+        // Both paths carry a stored recipient: the validated email of the public form or the email on file of the
+        // client the owner picked. The immediate email is queued only within the window, because with more notice the
+        // scheduled reminder (T24) owns it, and the shared dedup key stops a second send for the same booking.
+        var withinReminderWindow = session.StartsAt - now < TimeSpan.FromHours(ReminderLeadHours);
+        var immediateEmailQueued = withinReminderWindow;
         if (immediateEmailQueued)
         {
-            // The dedup key is shared with the scheduled reminder (T24) so this booking receives exactly one email.
-            await repository.EnqueueNotificationAsync(new DropInNotification(
-                businessId,
-                bookingId.Value,
-                NotificationType.DropInReminder,
-                $"reminder:booking:{bookingId.Value}",
-                now), ct);
+            await repository.EnqueueNotificationAsync(
+                ComposeDropInReminder(businessId, recipient, recipientName, session, insert.BookingId, now), ct);
         }
 
         await tx.CommitAsync(ct);
 
         return Result<DropInBookingOutcome>.Success(new DropInBookingOutcome(
             session.AppointmentId,
-            bookingId.Value,
+            insert.BookingId,
             resolvedClientId.Value,
             session.Date,
             session.StartTime,
             immediateEmailQueued));
+    }
+
+    /// <summary>
+    /// Composes the drop-in notice for the outbox. The class and teacher names are only ids in this unit, so the body
+    /// carries what is available (the name of the client, from the form or from the client on file, and the session
+    /// date and time) in the same shape as the individual booking path, and every value is HTML-encoded.
+    /// </summary>
+    private static Notification ComposeDropInReminder(
+        int businessId, string recipient, string firstName, ClassSessionRow session, int bookingId, DateTime now)
+    {
+        var safeFirstName = WebUtility.HtmlEncode(firstName);
+        var when = WebUtility.HtmlEncode(session.StartsAt.ToString(
+            "dddd d 'de' MMMM 'a las' HH:mm", CultureInfo.GetCultureInfo("es-AR")));
+
+        return new Notification
+        {
+            BusinessId = businessId,
+            Type = NotificationType.DropInReminder,
+            Recipient = recipient,
+            Subject = "Recordatorio de tu clase suelta",
+            BodyHtml = $"<p>Hola {safeFirstName},</p>" +
+                       $"<p>Tu lugar en la clase suelta del {when} quedó reservado.</p>",
+            DedupKey = $"reminder:booking:{bookingId}",
+            CreatedAt = now
+        };
     }
 
     /// <summary>

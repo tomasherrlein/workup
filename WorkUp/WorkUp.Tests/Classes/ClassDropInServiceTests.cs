@@ -6,10 +6,10 @@ using WorkUp.Tests.Fakes;
 namespace WorkUp.Tests.Classes;
 
 // T14 business core (RF-07 cupo > 1, RF-22, D-16, D-23, D-25): booking a drop-in into an already generated class
-// session. Only a `Programado` session with a future start and a free place can be booked, and the occupancy counts
-// every booking that is not `Cancelado`, the fixed ones included. The last place is protected by the repository's
-// guarded insert inside one transaction, and the immediate email is only queued when the session starts in less
-// than 24 hours (D-22).
+// session. Only a `ClassSession` that is `Programado` with a future start and a free place can be booked, and the
+// occupancy counts every booking that is not `Cancelado`, the fixed ones included. The last place is protected by the
+// repository's guarded insert inside one transaction, and the immediate email is only queued when the session starts
+// in less than 24 hours (D-22).
 public class ClassDropInServiceTests
 {
     private readonly FakeClassDropInRepository _repository = new();
@@ -37,6 +37,14 @@ public class ClassDropInServiceTests
         string? phone = null) =>
         new(appointmentId, email, firstName, lastName, phone);
 
+    /// <summary>Bookings of a session with synthetic client ids, enough when the test only needs the occupancy.</summary>
+    private static ClassSessionBooking[] Statuses(params BookingStatus[] statuses) =>
+        statuses.Select((status, index) => new ClassSessionBooking(index + 1, status)).ToArray();
+
+    /// <summary>Bookings of a session all held by one client, to exercise the active-client unique key.</summary>
+    private static ClassSessionBooking[] ForClient(int clientId, params BookingStatus[] statuses) =>
+        statuses.Select(status => new ClassSessionBooking(clientId, status)).ToArray();
+
     private int AddSessionAt(
         DateTime startsAt,
         int maxCapacity = 8,
@@ -44,12 +52,14 @@ public class ClassDropInServiceTests
         int businessId = 1,
         int serviceId = 7,
         int workerId = 3,
-        params BookingStatus[] bookings)
+        AppointmentKind kind = AppointmentKind.ClassSession,
+        IReadOnlyList<ClassSessionBooking>? bookings = null)
     {
         var appointmentId = _nextAppointmentId++;
         _repository.Sessions.Add(new FakeClassDropInSession(
             businessId,
-            new ClassSessionRow(appointmentId, serviceId, workerId, startsAt, maxCapacity, status, bookings)));
+            new ClassSessionRow(
+                appointmentId, serviceId, workerId, startsAt, maxCapacity, kind, status, bookings ?? [])));
         return appointmentId;
     }
 
@@ -61,11 +71,18 @@ public class ClassDropInServiceTests
         int businessId = 1,
         int serviceId = 7,
         int workerId = 3,
-        params BookingStatus[] bookings) =>
-        AddSessionAt(date.ToDateTime(time), maxCapacity, status, businessId, serviceId, workerId, bookings);
+        AppointmentKind kind = AppointmentKind.ClassSession,
+        IReadOnlyList<ClassSessionBooking>? bookings = null) =>
+        AddSessionAt(date.ToDateTime(time), maxCapacity, status, businessId, serviceId, workerId, kind, bookings);
 
-    private void AddClient(int businessId, int clientId, string email = "ana@example.com")
-        => _repository.Clients.Add(new FakeClassDropInClient(businessId, new DropInClient(clientId, email, "Ana", "Perez")));
+    private void AddClient(
+        int businessId,
+        int clientId,
+        string email = "ana@example.com",
+        string firstName = "Ana",
+        string lastName = "Perez")
+        => _repository.Clients.Add(
+            new FakeClassDropInClient(businessId, new DropInClient(clientId, email, firstName, lastName)));
 
     // RF-07 step 2: the offer lists only scheduled classes with a future start and a free place, ordered by start.
 
@@ -78,7 +95,7 @@ public class ClassDropInServiceTests
         // A fixed student keeps the only place without being cancelled, so this class is full for a drop-in too
         // (D-16, D-23).
         AddSessionAt(
-            new DateTime(2026, 3, 11, 17, 0, 0), maxCapacity: 1, bookings: new[] { BookingStatus.Pending });
+            new DateTime(2026, 3, 11, 17, 0, 0), maxCapacity: 1, bookings: Statuses(BookingStatus.Pending));
         var earlier = AddSessionAt(new DateTime(2026, 3, 11, 18, 0, 0), serviceId: 9, workerId: 4);
 
         var result = await _service.ListOptionsAsync(1, D(2026, 3, 1), D(2026, 3, 31), serviceId: null);
@@ -110,7 +127,7 @@ public class ClassDropInServiceTests
     {
         var appointmentId = AddSession(
             D(2026, 3, 11), T(18), maxCapacity: 4,
-            bookings: new[] { BookingStatus.Pending, BookingStatus.Cancelled, BookingStatus.Confirmed });
+            bookings: Statuses(BookingStatus.Pending, BookingStatus.Cancelled, BookingStatus.Confirmed));
 
         var result = await _service.ListOptionsAsync(1, D(2026, 3, 1), D(2026, 3, 31), serviceId: null);
 
@@ -118,6 +135,19 @@ public class ClassDropInServiceTests
         Assert.Equal(appointmentId, option.AppointmentId);
         Assert.Equal(2, option.PlacesTaken);
         Assert.Equal(2, option.RemainingPlaces);
+    }
+
+    [Fact]
+    public async Task List_excludes_individual_appointments()
+    {
+        // An individual turn is also `Programado` and has capacity 1, so without the kind discriminant it would be
+        // offered as a class and bookable as a drop-in.
+        AddSessionAt(_clock.Now.AddDays(1), maxCapacity: 1, kind: AppointmentKind.Individual);
+
+        var result = await _service.ListOptionsAsync(1, D(2026, 3, 1), D(2026, 3, 31), serviceId: null);
+
+        Assert.True(result.Succeeded);
+        Assert.Empty(result.Value);
     }
 
     [Fact]
@@ -131,9 +161,21 @@ public class ClassDropInServiceTests
 
         Assert.Equal(appointmentId, Assert.Single(result.Value).AppointmentId);
         Assert.Equal(1, _repository.ListBusinessId);
-        Assert.Equal(D(2026, 3, 20).ToDateTime(TimeOnly.MinValue), _repository.RequestedFrom);
-        Assert.Equal(D(2026, 3, 20).ToDateTime(TimeOnly.MaxValue), _repository.RequestedTo);
+        // The port takes dates, never an inclusive maximum instant that no DATETIME2(0) column can store.
+        Assert.Equal(D(2026, 3, 20), _repository.RequestedFrom);
+        Assert.Equal(D(2026, 3, 20), _repository.RequestedTo);
         Assert.Equal(7, _repository.RequestedServiceId);
+    }
+
+    [Fact]
+    public async Task List_includes_a_session_on_the_last_inclusive_day_and_excludes_the_next()
+    {
+        var onLastDay = AddSession(D(2026, 3, 20), T(18));
+        AddSession(D(2026, 3, 21), T(18));
+
+        var result = await _service.ListOptionsAsync(1, D(2026, 3, 20), D(2026, 3, 20), serviceId: null);
+
+        Assert.Equal(onLastDay, Assert.Single(result.Value).AppointmentId);
     }
 
     [Fact]
@@ -153,13 +195,32 @@ public class ClassDropInServiceTests
     }
 
     [Fact]
-    public async Task List_accepts_the_last_day_of_the_calendar()
+    public async Task List_accepts_the_day_before_the_last_of_the_calendar()
     {
-        var result = await _service.ListOptionsAsync(1, D(9999, 12, 31), D(9999, 12, 31), serviceId: null);
+        // 9999-12-30 is the last day whose exclusive bound, (toInclusive + 1 day) 00:00, is still representable.
+        var appointmentId = AddSession(D(9999, 12, 30), T(18));
 
-        Assert.True(result.Succeeded);
-        Assert.Empty(result.Value);
-        Assert.Equal(D(9999, 12, 31).ToDateTime(TimeOnly.MaxValue), _repository.RequestedTo);
+        var result = await _service.ListOptionsAsync(1, D(9999, 12, 30), D(9999, 12, 30), serviceId: null);
+
+        Assert.Equal(appointmentId, Assert.Single(result.Value).AppointmentId);
+        Assert.Equal(D(9999, 12, 30), _repository.RequestedTo);
+    }
+
+    [Fact]
+    public async Task List_rejects_a_range_ending_on_the_last_day_of_the_calendar()
+    {
+        // The port bounds the range as `StartsAt < (toInclusive + 1 day) 00:00`, and 9999-12-31 + 1 day is not
+        // representable, so the service refuses that range before any storage call instead of handing the repository
+        // a bound it cannot compute. The date filtering of the fake is an emulation of the query shape, not proof of
+        // the SQL bound: this test pins the rejection the service owes every implementation.
+        AddSession(D(9999, 12, 30), T(18));
+
+        var result = await _service.ListOptionsAsync(1, D(9999, 12, 30), DateOnly.MaxValue, serviceId: null);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("drop_in_invalid_request", result.Error!.Code);
+        Assert.Equal(0, _repository.ListCallCount);
+        Assert.Equal(0, _unitOfWork.BeginCount);
     }
 
     [Fact]
@@ -178,7 +239,7 @@ public class ClassDropInServiceTests
     [Fact]
     public async Task Book_public_inserts_a_drop_in_and_commits_once()
     {
-        var appointmentId = AddSession(D(2026, 3, 20), T(18), maxCapacity: 4, bookings: new[] { BookingStatus.Pending });
+        var appointmentId = AddSession(D(2026, 3, 20), T(18), maxCapacity: 4, bookings: Statuses(BookingStatus.Pending));
 
         var result = await _service.BookPublicAsync(1, Request(appointmentId, phone: "11 5555 5555"));
 
@@ -242,7 +303,7 @@ public class ClassDropInServiceTests
     {
         var appointmentId = AddSessionAt(
             _clock.Now.AddDays(1), maxCapacity: 2,
-            bookings: new[] { BookingStatus.Confirmed, BookingStatus.Pending });
+            bookings: Statuses(BookingStatus.Confirmed, BookingStatus.Pending));
 
         var result = await _service.BookPublicAsync(1, Request(appointmentId));
 
@@ -285,6 +346,24 @@ public class ClassDropInServiceTests
     }
 
     [Fact]
+    public async Task Book_rejects_an_individual_appointment_as_a_class_not_found()
+    {
+        // Capacity 1 and no bookings: without the kind discriminant this individual turn would be booked as a class.
+        var appointmentId = AddSessionAt(
+            _clock.Now.AddDays(1), maxCapacity: 1, kind: AppointmentKind.Individual);
+
+        var result = await _service.BookPublicAsync(1, Request(appointmentId));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("drop_in_not_found", result.Error!.Code);
+        Assert.Equal(0, _repository.IdentifyCallCount);
+        Assert.Equal(0, _repository.InsertCallCount);
+        Assert.Empty(_repository.Inserts);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
+    [Fact]
     public async Task Book_rejects_a_session_that_does_not_belong_to_the_business()
     {
         var appointmentId = AddSessionAt(_clock.Now.AddDays(1), businessId: 2);
@@ -307,8 +386,8 @@ public class ClassDropInServiceTests
     {
         // The guarded insert is the real protection of the last place: when it reports that no place remained, the
         // loser learns the class is full and its transaction rolls back.
-        var appointmentId = AddSessionAt(_clock.Now.AddDays(1), maxCapacity: 1, bookings: Array.Empty<BookingStatus>());
-        _repository.TryInsertReturnsNull = true;
+        var appointmentId = AddSessionAt(_clock.Now.AddDays(1), maxCapacity: 1);
+        _repository.TryInsertReturnsNoPlaceLeft = true;
 
         var result = await _service.BookPublicAsync(1, Request(appointmentId));
 
@@ -321,9 +400,99 @@ public class ClassDropInServiceTests
         Assert.Equal(1, _unitOfWork.RolledBackCount);
     }
 
+    [Fact]
+    public async Task Book_fails_loudly_when_the_guarded_insert_reports_an_undefined_result()
+    {
+        // The switch over DropInInsertResultType knows three outcomes and the enum default 0 is not one of them.
+        // Treating it as a successful insert would commit a booking that does not exist and queue
+        // `reminder:booking:0` for it, so the service must not fall through: it fails loudly and the unit rolls back.
+        var appointmentId = AddSessionAt(_clock.Now.AddDays(1));
+        _repository.TryInsertResultOverride = new DropInInsertResult((DropInInsertResultType)0, 0);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _service.BookPublicAsync(1, Request(appointmentId)));
+
+        Assert.Equal(1, _repository.InsertCallCount);
+        Assert.Empty(_repository.Notifications);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
+    // UX_Bookings_ActiveClient (AppointmentId, ClientId) WHERE Status <> 5: a double submit or a fixed student
+    // booking their own session must be answered with a stable code, never an unhandled unique-key exception.
+
+    [Fact]
+    public async Task Book_rejects_a_client_that_already_holds_a_non_cancelled_booking()
+    {
+        var appointmentId = AddSessionAt(
+            _clock.Now.AddDays(1), maxCapacity: 4, bookings: ForClient(42, BookingStatus.Confirmed));
+        AddClient(1, 42);
+
+        var result = await _service.BookForClientAsync(1, appointmentId, 42);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("drop_in_already_booked", result.Error!.Code);
+        Assert.Equal(0, _repository.InsertCallCount);
+        Assert.Empty(_repository.Inserts);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
+    [Fact]
+    public async Task Book_maps_the_already_booked_race_to_the_stable_code()
+    {
+        var appointmentId = AddSessionAt(_clock.Now.AddDays(1));
+        _repository.TryInsertReturnsAlreadyBooked = true;
+
+        var result = await _service.BookPublicAsync(1, Request(appointmentId));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("drop_in_already_booked", result.Error!.Code);
+        Assert.Equal(1, _repository.InsertCallCount);
+        Assert.Empty(_repository.Inserts);
+        Assert.Empty(_repository.Notifications);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
+    [Fact]
+    public async Task Book_reports_the_clients_own_booking_when_the_full_session_is_hers_already()
+    {
+        // The client's own booking is checked before the occupancy: a client holding the only place of a class that is
+        // therefore full must hear that she is already booked, not that the class is full. Both reject without a write.
+        var appointmentId = AddSessionAt(
+            _clock.Now.AddDays(1), maxCapacity: 1, bookings: ForClient(42, BookingStatus.Confirmed));
+        AddClient(1, 42);
+
+        var result = await _service.BookPublicAsync(1, Request(appointmentId));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("drop_in_already_booked", result.Error!.Code);
+        Assert.Equal(0, _repository.InsertCallCount);
+        Assert.Empty(_repository.Inserts);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
+    [Fact]
+    public async Task Book_allows_a_client_whose_only_booking_is_cancelled()
+    {
+        var appointmentId = AddSessionAt(
+            _clock.Now.AddDays(1), maxCapacity: 4, bookings: ForClient(42, BookingStatus.Cancelled));
+        AddClient(1, 42);
+
+        var result = await _service.BookForClientAsync(1, appointmentId, 42);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(42, Assert.Single(_repository.Inserts).ClientId);
+        Assert.Equal(1, _unitOfWork.CommitCount);
+        Assert.Equal(0, _unitOfWork.RolledBackCount);
+    }
+
     // RF-17 step 4 and D-22: a class booked with less than 24 hours of notice has no future reminder to send, so the
     // immediate email is the reminder itself. The shared dedup key is what stops the scheduled reminder (T24) from
-    // sending a second email for the same booking.
+    // sending a second email for the same booking. The outbox columns are not nullable, so the service composes the
+    // full notice and the data layer only stores it.
 
     [Theory]
     [InlineData(23, 59, true)]
@@ -349,10 +518,70 @@ public class ClassDropInServiceTests
 
         var notification = Assert.Single(_repository.Notifications);
         Assert.Equal(1, notification.BusinessId);
-        Assert.Equal(result.Value.BookingId, notification.BookingId);
         Assert.Equal(NotificationType.DropInReminder, notification.Type);
+        Assert.Equal("ana@example.com", notification.Recipient);
+        Assert.False(string.IsNullOrWhiteSpace(notification.Subject));
+        Assert.False(string.IsNullOrWhiteSpace(notification.BodyHtml));
         Assert.Equal($"reminder:booking:{result.Value.BookingId}", notification.DedupKey);
         Assert.Equal(_clock.Now, notification.CreatedAt);
+        Assert.Equal(1, _unitOfWork.CommitCount);
+    }
+
+    [Fact]
+    public async Task Book_queues_the_email_stored_on_the_client_not_the_one_typed_in_the_request()
+    {
+        // The identifier matches the client by email ignoring case, and the notice recipient is the email stored on
+        // the client, the value the outbox column will carry, never the string the form sent.
+        var appointmentId = AddSessionAt(_clock.Now.AddHours(2));
+        AddClient(1, 42, email: "ANA@Example.com");
+
+        var result = await _service.BookPublicAsync(1, Request(appointmentId, email: "ana@example.com"));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(42, result.Value.ClientId);
+        Assert.True(result.Value.ImmediateEmailQueued);
+        Assert.Equal("ANA@Example.com", Assert.Single(_repository.Notifications).Recipient);
+    }
+
+    [Fact]
+    public async Task Book_for_client_queues_the_notice_to_the_stored_email_inside_the_window()
+    {
+        // The owner-assisted path carries no contact form, so the notice recipient and name come from the stored
+        // client: a class starting in less than 24 hours still gets its immediate email, with the shared dedup key.
+        var appointmentId = AddSessionAt(_clock.Now.AddHours(2));
+        AddClient(1, 42, email: "ana.stored@example.com", firstName: "Anabella");
+
+        var result = await _service.BookForClientAsync(1, appointmentId, 42);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(42, result.Value.ClientId);
+        Assert.True(result.Value.ImmediateEmailQueued);
+
+        var notification = Assert.Single(_repository.Notifications);
+        Assert.Equal(1, notification.BusinessId);
+        Assert.Equal(NotificationType.DropInReminder, notification.Type);
+        Assert.Equal("ana.stored@example.com", notification.Recipient);
+        Assert.False(string.IsNullOrWhiteSpace(notification.Subject));
+        Assert.Contains("Anabella", notification.BodyHtml);
+        Assert.Equal($"reminder:booking:{result.Value.BookingId}", notification.DedupKey);
+        Assert.Equal(_clock.Now, notification.CreatedAt);
+        Assert.Equal(1, _unitOfWork.CommitCount);
+        Assert.Equal(0, _unitOfWork.RolledBackCount);
+    }
+
+    [Fact]
+    public async Task Book_for_client_does_not_queue_outside_the_24_hour_window()
+    {
+        // With more notice the scheduled reminder (RF-17) owns the email, on the assisted path too.
+        var appointmentId = AddSessionAt(_clock.Now.AddDays(3));
+        AddClient(1, 42);
+
+        var result = await _service.BookForClientAsync(1, appointmentId, 42);
+
+        Assert.True(result.Succeeded);
+        Assert.False(result.Value.ImmediateEmailQueued);
+        Assert.Empty(_repository.Notifications);
+        Assert.Equal(0, _repository.EnqueueCallCount);
         Assert.Equal(1, _unitOfWork.CommitCount);
     }
 
@@ -434,7 +663,7 @@ public class ClassDropInServiceTests
         Assert.True(result.Succeeded);
         Assert.Equal(42, result.Value.ClientId);
         Assert.Equal(42, Assert.Single(_repository.Inserts).ClientId);
-        Assert.Equal(1, _repository.ClientExistsCallCount);
+        Assert.Equal(1, _repository.FindClientCallCount);
         Assert.Equal(0, _repository.IdentifyCallCount);
         Assert.Single(_repository.Clients);
         Assert.Equal(1, _unitOfWork.CommitCount);
@@ -451,7 +680,7 @@ public class ClassDropInServiceTests
 
         Assert.False(result.Succeeded);
         Assert.Equal("drop_in_client_not_found", result.Error!.Code);
-        Assert.Equal(1, _repository.ClientExistsCallCount);
+        Assert.Equal(1, _repository.FindClientCallCount);
         Assert.Equal(0, _repository.LockCallCount);
         Assert.Equal(0, _repository.InsertCallCount);
         Assert.Equal(0, _unitOfWork.CommitCount);
@@ -482,7 +711,7 @@ public class ClassDropInServiceTests
 
         Assert.False(result.Succeeded);
         Assert.Equal("drop_in_invalid_request", result.Error!.Code);
-        Assert.Equal(0, _repository.ClientExistsCallCount);
+        Assert.Equal(0, _repository.FindClientCallCount);
         Assert.Equal(0, _repository.LockCallCount);
         Assert.Equal(0, _unitOfWork.BeginCount);
     }
