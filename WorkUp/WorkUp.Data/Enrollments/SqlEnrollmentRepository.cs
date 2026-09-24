@@ -389,9 +389,10 @@ public sealed class SqlEnrollmentRepository(DbSession session)
         if (insertedIds.Count == 0)
         {
             // The transaction still holds the guard's locks, so this second statement answers which grid class ran out
-            // and that answer cannot drift before the caller rolls back. The diagnosis returns 0 only when no guard
-            // explains the refusal — no requested class matches the business, for instance — and an identity is never
-            // 0, so that case fails loudly instead of claiming a seat was lost.
+            // and that answer cannot drift before the caller rolls back. A requested class that is missing from the
+            // business is the diagnosis's first failing branch, so an unknown or foreign class is reported by its own
+            // id, never as 0. The statement answers no id only when no requested class explains the refusal at all, and
+            // an identity is never 0, so that case fails loudly instead of claiming a seat was lost.
             var exhausted = await ScalarAsync<int>(
                 DiagnoseNoSeatSql(gridClassIds),
                 p => AddEnrollmentInsertParameters(p, insert, referenceDate),

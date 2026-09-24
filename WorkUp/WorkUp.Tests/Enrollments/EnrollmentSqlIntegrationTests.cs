@@ -614,6 +614,96 @@ public sealed class EnrollmentSqlIntegrationTests(ITestOutputHelper output)
         output.WriteLine("List assertions passed: the read returned every enrollment of the business with its client and periods, and the derived Current, ExpiringSoon, Expired and PendingPayment filters matched the hand-derived counts with the annulled and terminated ones visible only in All.");
     }
 
+    [Fact]
+    public async Task A_two_class_enrollment_writes_one_assignment_per_class_and_the_guard_refuses_when_one_is_full()
+    {
+        var target = await ResolveTargetAsync("_MultiClass");
+        if (target is null)
+            return;
+
+        var ids = await SeedMultiClassAsync(target.ConnectionString, FixedNow);
+
+        await using var session = new DbSession(target.ConnectionString);
+        var repository = new SqlEnrollmentRepository(session);
+        var service = new EnrollmentService(
+            repository, new SqlMembershipPriceRepository(session), session, new FakeClock { Now = FixedNow });
+
+        // Two grid classes of the same business chosen together: class A has two permanent seats and class B only
+        // one, and both are free. This is the only insert of the fixture whose guard and diagnosis build the multi-row
+        // (VALUES (@gridClassId0), (@gridClassId1)) derived table instead of a single-id one.
+        // The weekly frequency has to cover the number of chosen fixed classes: a client with a weekly frequency of 2
+        // may choose at most two grid classes, so the two-class request below needs frequency 2, not 1.
+        var created = await service.CreatePendingAsync(
+            ids.BusinessId,
+            new CreateEnrollmentRequest(
+                ids.Client, 2, null, null, new[] { ids.ClassA, ids.ClassB }, ReferenceDate));
+        Assert.True(created.Succeeded, created.Error?.Code);
+        var enrollmentId = created.Value.EnrollmentId;
+        Assert.True(enrollmentId > 0);
+        Assert.Equal(new[] { ids.ClassA, ids.ClassB }, created.Value.GridClassIds);
+
+        // Hand-derived from SQL: exactly one enrollment row and exactly two assignment rows, one per requested class.
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Enrollments WHERE Id = @enrollmentId", ("@enrollmentId", enrollmentId)));
+        Assert.Equal(2, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM EnrollmentFixedClasses WHERE EnrollmentId = @enrollmentId", ("@enrollmentId", enrollmentId)));
+        Assert.Equal(
+            new[] { ids.ClassA, ids.ClassB },
+            (await ReadFixedClassIdsAsync(target.ConnectionString, enrollmentId)).ToArray());
+
+        // The seat read afterwards reports one seat held in each class, and B is already sitting on its only seat.
+        var seatsA = await repository.ListFixedSeatsAsync(ids.BusinessId, ids.ClassA, ReferenceDate);
+        var seatsB = await repository.ListFixedSeatsAsync(ids.BusinessId, ids.ClassB, ReferenceDate);
+        Assert.Equal(1, FixedSeatCapacity.SeatsTaken(2, seatsA, ReferenceDate));
+        Assert.Equal(enrollmentId, Assert.Single(seatsA).EnrollmentId);
+        Assert.Equal(1, FixedSeatCapacity.SeatsTaken(1, seatsB, ReferenceDate));
+        Assert.Equal(enrollmentId, Assert.Single(seatsB).EnrollmentId);
+        Assert.True(FixedSeatCapacity.HasSeat(2, seatsA, ReferenceDate));
+        Assert.False(FixedSeatCapacity.HasSeat(1, seatsB, ReferenceDate));
+
+        // Class B is now at capacity while A still has a seat, so a second two-class insert has to be refused by the
+        // same multi-row guard and the diagnosis has to name B: A never fails the guard, so the refused insert can
+        // only report the class without a seat. The direct repository call is what reaches the guard with both
+        // classes: the service would refuse at its own seat read, before the insert.
+        var contested = new EnrollmentInsert(
+            new Enrollment
+            {
+                BusinessId = ids.BusinessId,
+                ClientId = ids.OtherClient,
+                WeeklyFrequency = 2,
+                Status = EnrollmentStatus.PendingPayment,
+                AgreedPrice = 5000m,
+                CreatedAt = FixedNow
+            },
+            new[]
+            {
+                new EnrollmentFixedClass { GridClassId = ids.ClassA, ValidFrom = ReferenceDate },
+                new EnrollmentFixedClass { GridClassId = ids.ClassB, ValidFrom = ReferenceDate }
+            });
+
+        await using (var transaction = await session.BeginAsync())
+        {
+            var guarded = await repository.TryInsertEnrollmentAsync(contested);
+            Assert.Equal(EnrollmentInsertResultType.NoSeatLeft, guarded.Result);
+            Assert.Equal(ids.ClassB, guarded.GridClassId);
+            Assert.False(guarded.IsInserted);
+            Assert.Equal(0, guarded.EnrollmentId);
+            await transaction.CommitAsync();
+        }
+
+        // The refused attempt wrote no enrollment and no assignment row: the totals are still the accepted ones.
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Enrollments WHERE BusinessId = @businessId", ("@businessId", ids.BusinessId)));
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Enrollments WHERE ClientId = @clientId", ("@clientId", ids.OtherClient)));
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM EnrollmentFixedClasses WHERE GridClassId = @gridClassId", ("@gridClassId", ids.ClassA)));
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM EnrollmentFixedClasses WHERE GridClassId = @gridClassId", ("@gridClassId", ids.ClassB)));
+
+        output.WriteLine("Multi-class assertions passed: the two-class enrollment was written with exactly one assignment per class and one seat held in each, and a second two-class insert was refused naming the full class without writing an enrollment or an assignment.");
+    }
+
     /// <summary>
     /// Resolves this test's opt-in target. <c>null</c> means the variable is absent: the test returns N/A without
     /// opening any connection or touching any server.
@@ -958,6 +1048,34 @@ public sealed class EnrollmentSqlIntegrationTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// Two grid classes of one business with different permanent capacities: class A admits two enrollments and class
+    /// B only one, so a two-class insert is accepted while both are free and refused, naming B, once B is full.
+    /// </summary>
+    private static async Task<MultiClassIds> SeedMultiClassAsync(string connectionString, DateTime now)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var businessId = await InsertBusinessAsync(connection, transaction, "Synthetic T15 Multi Class Business", "synthetic-t15-multiclass", now);
+        var workerId = await InsertWorkerAsync(connection, transaction, businessId, "Multiclase", "Teacher", "20202109090");
+        var serviceA = await InsertServiceAsync(connection, transaction, businessId, "Synthetic T15 Multi Class A", 60, 2);
+        var serviceB = await InsertServiceAsync(connection, transaction, businessId, "Synthetic T15 Multi Class B", 60, 1);
+        var classA = await InsertGridClassAsync(connection, transaction, businessId, serviceA, workerId, DayOfWeek.Sunday, new TimeOnly(10, 0));
+        var classB = await InsertGridClassAsync(connection, transaction, businessId, serviceB, workerId, DayOfWeek.Sunday, new TimeOnly(12, 0));
+        await InsertPriceAsync(connection, transaction, businessId, 1, 5000m);
+        // The two-class request below uses weekly frequency 2, and the service requires a configured price for the
+        // exact requested frequency (no fallback), so frequency 2 has to be offered too.
+        await InsertPriceAsync(connection, transaction, businessId, 2, 5000m);
+        var client = await InsertClientAsync(connection, transaction, businessId, "Multiclase", "Inscripta", "t15.multiclass.client@example.invalid", now);
+        var otherClient = await InsertClientAsync(connection, transaction, businessId, "Multiclase", "Otra", "t15.multiclass.other@example.invalid", now);
+
+        await transaction.CommitAsync();
+
+        return new MultiClassIds(businessId, classA, classB, client, otherClient);
+    }
+
+    /// <summary>
     /// The business, service, worker, grid class and frequency-1 price every integration scenario needs. The price is
     /// what the service charges as the agreed amount when the request omits one.
     /// </summary>
@@ -1241,6 +1359,22 @@ public sealed class EnrollmentSqlIntegrationTests(ITestOutputHelper output)
         return fixedClass;
     }
 
+    /// <summary>The grid class of every fixed assignment of one enrollment, ordered by the assignment id.</summary>
+    private static async Task<List<int>> ReadFixedClassIdsAsync(string connectionString, int enrollmentId)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "SELECT GridClassId FROM EnrollmentFixedClasses WHERE EnrollmentId = @enrollmentId ORDER BY Id",
+            connection);
+        AddParameter(command, "@enrollmentId", enrollmentId);
+        await using var reader = await command.ExecuteReaderAsync();
+        var gridClassIds = new List<int>();
+        while (await reader.ReadAsync())
+            gridClassIds.Add(reader.GetInt32(0));
+        return gridClassIds;
+    }
+
     private static async Task<BookingSnapshot> ReadSingleBookingAsync(string connectionString, int appointmentId)
     {
         await using var connection = new SqlConnection(connectionString);
@@ -1317,6 +1451,8 @@ public sealed class EnrollmentSqlIntegrationTests(ITestOutputHelper output)
     private sealed record RegressionIds(int BusinessA, int GridClass, int FirstClient, int SecondClient);
 
     private sealed record RaceIds(int BusinessA, int GridClass, int FirstClient, int SecondClient);
+
+    private sealed record MultiClassIds(int BusinessId, int ClassA, int ClassB, int Client, int OtherClient);
 
     private sealed record ChargeIds(int BusinessA, int GridClass, int Client, int SessionFree, int SessionFull);
 
