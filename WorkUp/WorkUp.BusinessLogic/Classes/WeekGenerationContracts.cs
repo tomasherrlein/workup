@@ -27,7 +27,9 @@ public sealed record WeekGridClassRow(
     int ServiceId,
     int WorkerId,
     DayOfWeek DayOfWeek,
-    TimeOnly StartTime);
+    TimeOnly StartTime,
+    int DurationMinutes,
+    int MaxCapacity);
 
 /// <summary>
 /// An existing booking in a dated session. Cancelled bookings are included so the preview can keep them visible
@@ -112,3 +114,49 @@ public sealed record WeekGenerationPreview(
 
     public int ExistingSessionCount => Sessions.Count(session => session.Kind == WeekSessionKind.Existing);
 }
+
+/// <summary>A fixed student still to be annotated in a planned session, as the confirm flow will write it (RF-06).</summary>
+public sealed record WeekStudentToAnnotate(int EnrollmentId, int ClientId);
+
+/// <summary>
+/// One session the confirm flow will write for a grid class of the week. <see cref="AppointmentId"/> is null only for a
+/// session that does not exist yet; an existing one is reused as it is, including a suspension, and only its missing
+/// fixed annotations are added. <see cref="Students"/> excludes any enrollment that already has a booking in the
+/// session, active or cancelled, so regenerating never duplicates and never resurrects a cancellation.
+/// </summary>
+public sealed record WeekSessionPlan(
+    int GridClassId,
+    int ServiceId,
+    int WorkerId,
+    DateOnly Date,
+    TimeOnly StartTime,
+    int DurationMinutes,
+    int MaxCapacity,
+    int? AppointmentId,
+    IReadOnlyList<WeekStudentToAnnotate> Students);
+
+/// <summary>
+/// Everything one confirm call writes, resolved from a single read of the week. <see cref="ExistingSessionCount"/> counts
+/// the sessions that already exist, and <see cref="PendingRenewalStudentCount"/> the annotated students whose derived
+/// state is "Pendiente de renovación" (D-23); that state is counted for the owner, never persisted.
+/// </summary>
+public sealed record WeekGenerationPlan(
+    int BusinessId,
+    DateOnly WeekStart,
+    DateOnly WeekEnd,
+    DateTime Now,
+    IReadOnlyList<WeekSessionPlan> Sessions,
+    int ExistingSessionCount,
+    int PendingRenewalStudentCount);
+
+/// <summary>What the write actually created, so a retried generation reports zero instead of failing.</summary>
+public sealed record WeekGenerationWriteOutcome(int CreatedSessions, int CreatedFixedBookings);
+
+/// <summary>Result shown to the owner after confirming a week: the bounds, what was created and what was reused.</summary>
+public sealed record WeekGenerationConfirmation(
+    DateOnly WeekStart,
+    DateOnly WeekEnd,
+    int CreatedSessions,
+    int CreatedFixedBookings,
+    int ExistingSessions,
+    int PendingRenewalStudents);

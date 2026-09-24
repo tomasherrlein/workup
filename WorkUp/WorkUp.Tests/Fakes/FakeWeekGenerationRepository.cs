@@ -3,9 +3,9 @@ using WorkUp.BusinessLogic.Classes;
 namespace WorkUp.Tests.Fakes;
 
 /// <summary>
-/// In-memory stand-in for the read-only week generation snapshot. It mimics the tenant scope of the SQL
-/// implementation: only sessions inside the requested week are returned, and
-/// <see cref="ReportedBusinessId"/> can be set to a different tenant to simulate a leaked snapshot.
+/// In-memory stand-in for the week generation persistence. It mimics the tenant scope of the SQL implementation: only
+/// sessions inside the requested week are returned, and <see cref="ReportedBusinessId"/> can be set to a different
+/// tenant to simulate a leaked snapshot. The write records the plan it received instead of touching a store.
 /// </summary>
 public sealed class FakeWeekGenerationRepository : IWeekGenerationRepository
 {
@@ -20,6 +20,14 @@ public sealed class FakeWeekGenerationRepository : IWeekGenerationRepository
     public DateOnly? RequestedWeekStart { get; private set; }
     public DateOnly? RequestedWeekEnd { get; private set; }
     public int CallCount { get; private set; }
+
+    /// <summary>The plan of the last confirm call, or null when the write was never reached.</summary>
+    public WeekGenerationPlan? ConfirmedPlan { get; private set; }
+
+    public int ConfirmCallCount { get; private set; }
+
+    /// <summary>What the write reports it created. Defaults to a write that created nothing new.</summary>
+    public WeekGenerationWriteOutcome ConfirmOutcome { get; set; } = new(0, 0);
 
     public Task<WeekGenerationSnapshot> GetWeekSnapshotAsync(
         int businessId, DateOnly weekStart, DateOnly weekEnd, CancellationToken ct = default)
@@ -38,5 +46,12 @@ public sealed class FakeWeekGenerationRepository : IWeekGenerationRepository
             GridClasses.ToList(),
             sessions,
             FixedAssignments.ToList()));
+    }
+
+    public Task<WeekGenerationWriteOutcome> ConfirmWeekAsync(WeekGenerationPlan plan, CancellationToken ct = default)
+    {
+        ConfirmCallCount++;
+        ConfirmedPlan = plan;
+        return Task.FromResult(ConfirmOutcome);
     }
 }

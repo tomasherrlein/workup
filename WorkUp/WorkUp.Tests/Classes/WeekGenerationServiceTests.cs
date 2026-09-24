@@ -12,6 +12,7 @@ namespace WorkUp.Tests.Classes;
 public class WeekGenerationServiceTests
 {
     private readonly FakeWeekGenerationRepository _repository = new();
+    private readonly FakeUnitOfWork _unitOfWork = new();
     private readonly FakeClock _clock = new();
     private readonly WeekGenerationService _service;
 
@@ -21,17 +22,19 @@ public class WeekGenerationServiceTests
 
     public WeekGenerationServiceTests()
     {
-        _service = new WeekGenerationService(_repository, _clock);
+        _service = new WeekGenerationService(_repository, _unitOfWork, _clock);
     }
 
     private static DateOnly D(int year, int month, int day) => new(year, month, day);
 
     private static TimeOnly T(int hour, int minute = 0) => new(hour, minute);
 
-    private int AddGridClass(DayOfWeek day, int hour, int serviceId = 7, int workerId = 3)
+    private int AddGridClass(
+        DayOfWeek day, int hour, int serviceId = 7, int workerId = 3, int durationMinutes = 60, int maxCapacity = 8)
     {
         var gridClassId = _nextGridClassId++;
-        _repository.GridClasses.Add(new WeekGridClassRow(gridClassId, serviceId, workerId, day, T(hour)));
+        _repository.GridClasses.Add(new WeekGridClassRow(
+            gridClassId, serviceId, workerId, day, T(hour), durationMinutes, maxCapacity));
         return gridClassId;
     }
 
@@ -492,5 +495,259 @@ public class WeekGenerationServiceTests
         var result = await _service.PreviewAsync(1, D(2026, 3, 9));
 
         Assert.Equal(firstId, Assert.Single(result.Value.Sessions).AppointmentId);
+    }
+
+    // RF-06, D-16, D-23: confirming a week writes one session per grid class and the fixed annotations that are
+    // still missing. It runs inside one transaction, never duplicates an existing annotation, never resurrects a
+    // cancellation and never touches a suspension. "Pendiente de renovación" is only counted and derived, never
+    // persisted as a state.
+
+    [Fact]
+    public async Task Confirm_plans_one_new_session_per_grid_class_with_its_capacity_and_duration()
+    {
+        var gridClassId = AddGridClass(DayOfWeek.Tuesday, 18, durationMinutes: 90, maxCapacity: 12);
+        AddFixedAssignment(40, gridClassId, "Ana", EnrollmentStatus.PendingPayment, D(2026, 3, 1));
+        AddFixedAssignment(
+            41, gridClassId, "Brenda", EnrollmentStatus.Active, D(2026, 3, 1),
+            clientId: 2,
+            periods: [new MembershipPeriod { CoverageStart = D(2026, 3, 1), ExpiresOn = D(2026, 4, 1) }]);
+
+        var result = await _service.ConfirmAsync(1, D(2026, 3, 9));
+
+        Assert.True(result.Succeeded);
+        var session = Assert.Single(_repository.ConfirmedPlan!.Sessions);
+        Assert.Equal(gridClassId, session.GridClassId);
+        Assert.Equal(7, session.ServiceId);
+        Assert.Equal(3, session.WorkerId);
+        Assert.Equal(D(2026, 3, 10), session.Date);
+        Assert.Equal(T(18), session.StartTime);
+        Assert.Equal(90, session.DurationMinutes);
+        Assert.Equal(12, session.MaxCapacity);
+        Assert.Null(session.AppointmentId);
+        Assert.Equal(new[] { 40, 41 }, session.Students.Select(student => student.EnrollmentId).ToArray());
+        Assert.Equal(new[] { 1, 2 }, session.Students.Select(student => student.ClientId).ToArray());
+    }
+
+    [Fact]
+    public async Task Confirm_annotates_a_repeated_enrollment_only_once()
+    {
+        var gridClassId = AddGridClass(DayOfWeek.Tuesday, 18);
+        AddFixedAssignment(42, gridClassId, "Carla", EnrollmentStatus.PendingPayment, D(2026, 3, 1));
+        AddFixedAssignment(42, gridClassId, "Carla", EnrollmentStatus.PendingPayment, D(2026, 3, 1));
+
+        var result = await _service.ConfirmAsync(1, D(2026, 3, 9));
+
+        Assert.True(result.Succeeded);
+        var student = Assert.Single(Assert.Single(_repository.ConfirmedPlan!.Sessions).Students);
+        Assert.Equal(42, student.EnrollmentId);
+    }
+
+    [Fact]
+    public async Task Confirm_reuses_an_existing_session_and_skips_its_existing_booking()
+    {
+        var gridClassId = AddGridClass(DayOfWeek.Tuesday, 18);
+        var appointmentId = AddSession(
+            gridClassId, D(2026, 3, 10), 18, AppointmentStatus.Scheduled,
+            AddBooking(50, BookingStatus.Confirmed, "Elena"));
+        AddFixedAssignment(
+            50, gridClassId, "Elena", EnrollmentStatus.Active, D(2026, 3, 1),
+            periods: [new MembershipPeriod { CoverageStart = D(2026, 3, 1), ExpiresOn = D(2026, 4, 1) }]);
+
+        var result = await _service.ConfirmAsync(1, D(2026, 3, 9));
+
+        Assert.True(result.Succeeded);
+        var plan = _repository.ConfirmedPlan!;
+        var session = Assert.Single(plan.Sessions);
+        Assert.Equal(appointmentId, session.AppointmentId);
+        Assert.Empty(session.Students);
+        Assert.Equal(1, plan.ExistingSessionCount);
+        Assert.Equal(0, result.Value.CreatedSessions);
+    }
+
+    [Fact]
+    public async Task Confirm_never_resurrects_a_cancelled_annotation()
+    {
+        var gridClassId = AddGridClass(DayOfWeek.Tuesday, 18);
+        AddSession(
+            gridClassId, D(2026, 3, 10), 18, AppointmentStatus.Scheduled,
+            AddBooking(51, BookingStatus.Cancelled, "Fabiana"));
+        AddFixedAssignment(51, gridClassId, "Fabiana", EnrollmentStatus.PendingPayment, D(2026, 3, 1));
+        AddFixedAssignment(52, gridClassId, "Grisel", EnrollmentStatus.PendingPayment, D(2026, 3, 1));
+
+        var result = await _service.ConfirmAsync(1, D(2026, 3, 9));
+
+        Assert.True(result.Succeeded);
+        var student = Assert.Single(Assert.Single(_repository.ConfirmedPlan!.Sessions).Students);
+        Assert.Equal(52, student.EnrollmentId);
+    }
+
+    [Fact]
+    public async Task Confirm_adds_the_missing_annotation_to_an_already_generated_session()
+    {
+        var gridClassId = AddGridClass(DayOfWeek.Tuesday, 18);
+        var appointmentId = AddSession(gridClassId, D(2026, 3, 10), 18);
+        AddFixedAssignment(53, gridClassId, "Hilda", EnrollmentStatus.PendingPayment, D(2026, 3, 1));
+
+        var result = await _service.ConfirmAsync(1, D(2026, 3, 9));
+
+        Assert.True(result.Succeeded);
+        var session = Assert.Single(_repository.ConfirmedPlan!.Sessions);
+        Assert.Equal(appointmentId, session.AppointmentId);
+        Assert.Equal(53, Assert.Single(session.Students).EnrollmentId);
+    }
+
+    [Fact]
+    public async Task Confirm_counts_existing_sessions_and_pending_renewals_and_still_annotates_the_expired_enrollment()
+    {
+        var newGridClassId = AddGridClass(DayOfWeek.Tuesday, 18);
+        var existingGridClassId = AddGridClass(DayOfWeek.Thursday, 19);
+        var appointmentId = AddSession(existingGridClassId, D(2026, 3, 12), 19);
+        AddFixedAssignment(60, newGridClassId, "Julia", EnrollmentStatus.PendingPayment, D(2026, 3, 1));
+        AddFixedAssignment(
+            61, existingGridClassId, "Karina", EnrollmentStatus.Active, D(2026, 2, 1),
+            periods: [new MembershipPeriod { CoverageStart = D(2026, 2, 1), ExpiresOn = D(2026, 3, 1) }]);
+
+        var result = await _service.ConfirmAsync(1, D(2026, 3, 9));
+
+        Assert.True(result.Succeeded);
+        var plan = _repository.ConfirmedPlan!;
+        Assert.Equal(1, plan.ExistingSessionCount);
+        Assert.Equal(1, plan.PendingRenewalStudentCount);
+        Assert.Equal(1, result.Value.ExistingSessions);
+        Assert.Equal(1, result.Value.PendingRenewalStudents);
+        var existing = plan.Sessions.Single(session => session.AppointmentId == appointmentId);
+        Assert.Equal(61, Assert.Single(existing.Students).EnrollmentId);
+    }
+
+    [Fact]
+    public async Task Confirm_rejects_an_invalid_business_without_reading_or_writing()
+    {
+        var result = await _service.ConfirmAsync(0);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("week_generation_invalid_business", result.Error!.Code);
+        Assert.Equal(0, _repository.CallCount);
+        Assert.Equal(0, _repository.ConfirmCallCount);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+    }
+
+    [Fact]
+    public async Task Confirm_rejects_an_incomplete_week_before_reading_or_writing()
+    {
+        var result = await _service.ConfirmAsync(1, D(9999, 12, 31));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("week_generation_week_out_of_range", result.Error!.Code);
+        Assert.Equal(0, _repository.CallCount);
+        Assert.Equal(0, _repository.ConfirmCallCount);
+    }
+
+    [Fact]
+    public async Task Confirm_rejects_a_week_that_already_ended_before_reading_or_writing()
+    {
+        _clock.Now = new DateTime(2026, 3, 10, 9, 0, 0); // Tuesday of the week in progress
+
+        var result = await _service.ConfirmAsync(1, D(2026, 3, 2)); // previous Monday to Sunday
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("week_generation_week_in_the_past", result.Error!.Code);
+        Assert.Equal("No se puede generar una semana que ya terminó.", result.Error.Message);
+        Assert.Equal(0, _repository.CallCount);
+        Assert.Equal(0, _repository.ConfirmCallCount);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+    }
+
+    [Fact]
+    public async Task Confirm_rejects_a_snapshot_from_another_business_without_writing()
+    {
+        _repository.ReportedBusinessId = 2;
+
+        var result = await _service.ConfirmAsync(1, D(2026, 3, 9));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("week_generation_snapshot_mismatch", result.Error!.Code);
+        Assert.Equal(1, _repository.CallCount);
+        Assert.Equal(0, _repository.ConfirmCallCount);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+    }
+
+    [Fact]
+    public async Task Confirm_commits_once_and_returns_the_repository_outcome_with_the_week_bounds()
+    {
+        _repository.ConfirmOutcome = new WeekGenerationWriteOutcome(3, 4);
+        AddGridClass(DayOfWeek.Monday, 8);
+
+        var result = await _service.ConfirmAsync(1, D(2026, 3, 9));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, _repository.CallCount);
+        Assert.Equal(1, _repository.ConfirmCallCount);
+        Assert.Equal(1, _unitOfWork.CommitCount);
+        Assert.Equal(1, _repository.RequestedBusinessId);
+        Assert.Equal(D(2026, 3, 9), result.Value.WeekStart);
+        Assert.Equal(D(2026, 3, 15), result.Value.WeekEnd);
+        Assert.Equal(3, result.Value.CreatedSessions);
+        Assert.Equal(4, result.Value.CreatedFixedBookings);
+        Assert.Equal(_clock.Now, _repository.ConfirmedPlan!.Now);
+    }
+
+    [Fact]
+    public async Task Confirm_defaults_to_the_next_week_from_the_injected_clock()
+    {
+        _clock.Now = new DateTime(2026, 3, 10, 9, 0, 0); // Tuesday
+        AddGridClass(DayOfWeek.Monday, 8);
+
+        var result = await _service.ConfirmAsync(1);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(D(2026, 3, 16), result.Value.WeekStart);
+        Assert.Equal(D(2026, 3, 22), result.Value.WeekEnd);
+        Assert.Equal(D(2026, 3, 16), Assert.Single(_repository.ConfirmedPlan!.Sessions).Date);
+    }
+
+    [Fact]
+    public async Task Confirm_keeps_a_suspended_session_and_plans_no_new_session_for_it()
+    {
+        var gridClassId = AddGridClass(DayOfWeek.Tuesday, 18);
+        var appointmentId = AddSession(gridClassId, D(2026, 3, 10), 18, AppointmentStatus.Suspended);
+
+        var result = await _service.ConfirmAsync(1, D(2026, 3, 9));
+
+        Assert.True(result.Succeeded);
+        var plan = _repository.ConfirmedPlan!;
+        var session = Assert.Single(plan.Sessions);
+        Assert.Equal(appointmentId, session.AppointmentId);
+        Assert.DoesNotContain(plan.Sessions, session => session.AppointmentId is null);
+        Assert.Equal(1, plan.ExistingSessionCount);
+    }
+
+    [Fact]
+    public async Task Confirm_accepts_the_week_that_ends_today()
+    {
+        // The last day of the week may be today: only a week that already ended is rejected.
+        _clock.Now = new DateTime(2026, 3, 15, 20, 0, 0); // Sunday of 2026-03-09..2026-03-15
+
+        var result = await _service.ConfirmAsync(1, D(2026, 3, 9));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(D(2026, 3, 15), result.Value.WeekEnd);
+        Assert.Equal(1, _repository.ConfirmCallCount);
+        Assert.Equal(1, _unitOfWork.CommitCount);
+    }
+
+    [Fact]
+    public async Task Confirm_rejects_the_default_next_week_when_it_is_not_representable()
+    {
+        // Same guard as the preview: the last complete week ends on Sunday 9999-12-26, so the next Monday opens an
+        // incomplete week whose Saturday and Sunday do not exist.
+        _clock.Now = new DateTime(9999, 12, 26, 9, 0, 0);
+
+        var result = await _service.ConfirmAsync(1);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("week_generation_week_out_of_range", result.Error!.Code);
+        Assert.Equal(0, _repository.CallCount);
+        Assert.Equal(0, _repository.ConfirmCallCount);
+        Assert.Equal(0, _unitOfWork.CommitCount);
     }
 }
