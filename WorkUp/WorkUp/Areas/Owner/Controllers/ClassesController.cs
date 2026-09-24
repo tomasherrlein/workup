@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
 using WorkUp.BusinessLogic.Abstractions;
 using WorkUp.BusinessLogic.Catalog;
@@ -137,6 +138,14 @@ public class ClassesController(ClassesService classesService, CatalogService cat
     {
         ViewData["Title"] = "Generar semana";
 
+        // A malformed date binds to null, which would silently confirm the default week. Reject it before the
+        // service is reached so the owner corrects the value instead of writing a week they never picked.
+        if (!ModelState.IsValid)
+        {
+            this.Flash("Elegí una fecha válida.", FlashType.Error);
+            return RedirectToAction(nameof(Week));
+        }
+
         var result = await weekGenerationService.PreviewAsync(BusinessId, date, ct);
         if (!result.Succeeded)
         {
@@ -171,7 +180,10 @@ public class ClassesController(ClassesService classesService, CatalogService cat
             WeekEnd = preview.WeekEnd,
             Sessions = sessions,
             CurrentWeekStart = WeekCalendar.TryGetWeek(today, out var currentWeekStart, out _) ? currentWeekStart : null,
-            NextWeekStart = WeekCalendar.NextMonday(today)
+            NextWeekStart = WeekCalendar.NextMonday(today),
+            // Same single clock read as the quick links: the service rejects a week that already ended, so the page
+            // must not offer a confirm that can only fail.
+            IsPastWeek = preview.WeekEnd < today
         });
     }
 
@@ -182,10 +194,20 @@ public class ClassesController(ClassesService classesService, CatalogService cat
     [HttpPost]
     public async Task<IActionResult> ConfirmWeek(DateOnly? date, CancellationToken ct)
     {
+        // The POST must never write on a malformed date: without this, `?date=abc` binds to null and the default
+        // next week is confirmed behind a success flash the owner never asked for.
+        if (!ModelState.IsValid)
+        {
+            this.Flash("Elegí una fecha válida.", FlashType.Error);
+            return RedirectToAction(nameof(Week));
+        }
+
         var result = await weekGenerationService.ConfirmAsync(BusinessId, date, ct);
         this.Flash(result.Succeeded ? ConfirmationMessage(result.Value) : result.Error!.Message,
             result.Succeeded ? FlashType.Success : FlashType.Error);
-        return RedirectToAction(nameof(Week), new { date });
+        // A raw DateOnly is not IConvertible: it would stringify under the ambient culture, unlike the invariant
+        // links the view already emits. Format it the same way so the redirect always echoes the picked date.
+        return RedirectToAction(nameof(Week), new { date = date?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) });
     }
 
     private static string ConfirmationMessage(WeekGenerationConfirmation confirmation)

@@ -70,10 +70,23 @@
 }
 else
 {
-    <form asp-action="ConfirmWeek" method="post" class="actions">
-        <input type="hidden" name="date" value="@selectedDate" />
-        <button type="submit" class="btn btn-primary">@Icons.Svg("check-double") Confirmar semana</button>
-    </form>
+    @*
+        Generating a week that already ended is rejected by the service, so a past week shows a note instead of a
+        confirm button that could only fail. The table stays visible and the note adds no primary button.
+    *@
+    @if (Model.IsPastWeek)
+    {
+        <div class="empty-state">
+            <p>Esta semana ya terminó. No se puede generar una semana pasada: elegí una semana actual o futura.</p>
+        </div>
+    }
+    else
+    {
+        <form asp-action="ConfirmWeek" method="post" class="actions">
+            <input type="hidden" name="date" value="@selectedDate" />
+            <button type="submit" class="btn btn-primary">@Icons.Svg("check-double") Confirmar semana</button>
+        </form>
+    }
 
     <section class="section">
         <table class="data-table">

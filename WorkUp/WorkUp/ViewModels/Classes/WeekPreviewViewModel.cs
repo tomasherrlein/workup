@@ -1,5 +1,7 @@
 using WorkUp.BusinessLogic.Classes;
+using WorkUp.Domain.Enums;
 using WorkUp.ViewModels.Shared;
+using SharedStatusTag = WorkUp.ViewModels.Shared.StatusTag;
 
 namespace WorkUp.ViewModels.Classes;
 
@@ -27,9 +29,10 @@ public sealed record WeekPreviewFixedStudentViewModel(
     /// <summary>State as a word plus an icon (The Word-First Rule); never colour-only meaning.</summary>
     public StatusTag StateTag => State switch
     {
+        // Activa has no shared factory; the other two reuse the shared tags so their label, class and icon cannot drift.
         WeekFixedStudentState.Active => new StatusTag(StateLabel, "tag-confirmed", "check"),
-        WeekFixedStudentState.PendingPayment => new StatusTag(StateLabel, "tag-pending", "coin"),
-        WeekFixedStudentState.PendingRenewal => new StatusTag(StateLabel, "tag-pending", "repeat"),
+        WeekFixedStudentState.PendingPayment => SharedStatusTag.PendingPayment,
+        WeekFixedStudentState.PendingRenewal => SharedStatusTag.PendingRenewal,
         _ => throw new ArgumentOutOfRangeException(nameof(State), State, null)
     };
 
@@ -57,7 +60,7 @@ public sealed record WeekPreviewSessionViewModel(
     public string StatusLabel => Suspended ? "Suspendido" : IsNew ? "Nueva" : "Ya generada";
 
     public StatusTag StatusTag => Suspended
-        ? new StatusTag(StatusLabel, "tag-alert", "pause")
+        ? SharedStatusTag.For(AppointmentStatus.Suspended)
         : IsNew
             ? new StatusTag(StatusLabel, "tag-scheduled", "plus")
             : new StatusTag(StatusLabel, "tag-neutral", "repeat");
@@ -84,6 +87,12 @@ public sealed class WeekPreviewViewModel
 
     /// <summary>Monday of the week after the one in progress, or null when it is not fully representable.</summary>
     public DateOnly? NextWeekStart { get; init; }
+
+    /// <summary>
+    /// True when the previewed week ended before today: the service rejects generating it, so the page shows a note
+    /// instead of a confirm button that could only fail. The week that ends today is still confirmable.
+    /// </summary>
+    public bool IsPastWeek { get; init; }
 
     /// <summary>
     /// An active grid class always projects exactly one session for the week, so an empty preview means the business

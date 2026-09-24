@@ -159,7 +159,7 @@ public sealed record WeekGenerationWriteOutcome(int CreatedSessions, int Created
 /// <summary>
 /// Result of confirming a week: the bounds, what was created and what was reused.
 /// <see cref="PendingRenewalStudents"/> is the week total of distinct students pending renewal (D-23), derived and
-/// never persisted. No UI renders this record yet; it is the service contract only.
+/// never persisted. ClassesController renders its counts in the success flash after confirming a week.
 /// </summary>
 public sealed record WeekGenerationConfirmation(
     DateOnly WeekStart,
