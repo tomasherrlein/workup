@@ -15,13 +15,17 @@ namespace WorkUp.Tests.Scheduling;
 
 /// <summary>
 /// Opt-in, reusable HTTP integration harness for the owner panel. It drives the real MVC host over loopback with
-/// cookies and antiforgery, then verifies the persisted rows with ADO.NET, and it covers two independent flows.
+/// cookies and antiforgery, then verifies the persisted rows with ADO.NET, and it covers three independent flows.
 /// The Jornada (RF-11/RF-15): owner login, one synthetic client through the owner form, GET /panel/Day, a walk-in with
 /// an exact agreed price plus immediate payment and next-visit note, a second overlapping walk-in saved with a
 /// warning, and the anti-CSRF rejection. The week generation (RF-06): yoga owner login, the first real render of
 /// GET /panel/Classes/Week, the default-week confirm that sends no date, the SQL shape of the generated sessions,
-/// the idempotent second confirm, the anti-CSRF rejection and the past-week gate. It replaces manual scratch scripts:
-/// the same test is the smoke it used to need.
+/// the idempotent second confirm, the anti-CSRF rejection and the past-week gate. The drop-in classes (RF-22, RF-07
+/// cupo &gt; 1): yoga owner login, the default-week confirm that gives the roster its sessions, the first real render
+/// of GET /panel/Classes/DropIns with its session rows, one client created through the owner form and booked as a
+/// suelta, the owner cancellation that frees the place, the public booking from /r/{slug}/clases with its
+/// confirmation and the client it creates without an account, and the anti-CSRF rejection. It replaces manual scratch
+/// scripts: the same test is the smoke it used to need.
 ///
 /// Without <c>WORKUP_T12_HTTP_CONNECTION</c> each test logs N/A and returns before any SQL connection or HTTP
 /// request, so the default suite is unaffected. With it set, the harness refuses to run unless it can prove the
@@ -143,6 +147,60 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
             Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
             output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
             await RunWeekGenerationFlowAsync(host.BaseUrl, plan, password);
+        }
+        finally
+        {
+            await StopWebHostAsync(host.Process);
+        }
+
+        output.WriteLine("All HTTP/SQL checkpoints passed; the isolated database and encrypted keyring stay in place (no DROP or DELETE).");
+    }
+
+    [Fact]
+    public async Task Drop_in_classes_render_and_book_and_cancel_on_an_isolated_http_host()
+    {
+        var suppliedConnection = Environment.GetEnvironmentVariable(ConnectionVariable);
+        if (string.IsNullOrWhiteSpace(suppliedConnection))
+        {
+            output.WriteLine($"N/A: {ConnectionVariable} is not set; no SQL connection, database, or HTTP host was used.");
+            return;
+        }
+
+        // Preflight runs before any SQL connection: an unsafe assistant or a reused target stops the run here.
+        var plan = PlanHarness(suppliedConnection);
+        output.WriteLine($"Runtime: database '{plan.DatabaseName}', isolated keyring '{plan.KeysPath}', next free port {plan.Port}.");
+
+        await CreateDatabaseAsync(plan);
+
+        // The demo password exists only in memory and is never written to output or to any log.
+        var password = "T14-" + Guid.NewGuid().ToString("N") + "!aA1";
+
+        // First owned host migrates the fresh database and materializes the isolated encrypted keyring.
+        var migrations = StartWebHost(plan, plan.Port);
+        try
+        {
+            await WaitUntilReadyAsync(migrations);
+            Assert.False(migrations.Process.HasExited, "The owned migration host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned migration host (pid {migrations.Process.Id}) became ready on {migrations.BaseUrl}.");
+        }
+        finally
+        {
+            await StopWebHostAsync(migrations.Process);
+        }
+        AssertKeyringCreated(plan.KeysPath);
+
+        // The explicit T07 seed into the migrated, dedicated database, reusing the real hasher and clock.
+        await SeedDemoAsync(plan.ConnectionString, password);
+        output.WriteLine("SQL: T07 demo seeded (marina.demo and lucia.demo) into the isolated database.");
+
+        // Second owned host serves the authenticated owner flow with a brand-new loopback port.
+        var host = StartWebHost(plan, FindFreeLoopbackPort());
+        try
+        {
+            await WaitUntilReadyAsync(host);
+            Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
+            await RunDropInFlowAsync(host.BaseUrl, plan, password);
         }
         finally
         {
@@ -374,6 +432,300 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
         Assert.Contains("Semana del", pastHtml, StringComparison.Ordinal);
         Assert.DoesNotContain("Confirmar semana", pastHtml, StringComparison.Ordinal);
         output.WriteLine("HTTP: past-week preview -> 200 with the week heading and without the confirm submit.");
+    }
+
+    /// <summary>
+    /// Drop-in classes flow (RF-22, RF-07 cupo &gt; 1) over the real host. This T14 smoke deliberately reuses the T12
+    /// harness variables (<c>WORKUP_T12_HTTP_CONNECTION</c>, <c>WORKUP_T12_HTTP_KEYS_PATH</c>) and the
+    /// <c>WorkUpDemoT12Http*</c> database prefix instead of duplicating the isolation harness: every fact is opt-in and
+    /// each run needs a fresh, absent database and keyring, so reusing the names never shares state between flows.
+    /// </summary>
+    private async Task RunDropInFlowAsync(string baseUrl, HarnessPlan plan, string password)
+    {
+        // Every diagnostic line goes through Note, so the last checkpoint can prove that no password, antiforgery token
+        // or cookie value ever reached the test output.
+        var written = new List<string>();
+        var secrets = new HashSet<string>(StringComparer.Ordinal) { password };
+        void Note(string line)
+        {
+            output.WriteLine(line);
+            written.Add(line);
+        }
+
+        // The token is a secret: it is remembered for the output check instead of being written anywhere.
+        string ExtractToken(string html)
+        {
+            var token = ExtractAntiforgeryToken(html);
+            secrets.Add(token);
+            return token;
+        }
+
+        using var handler = new HttpClientHandler { CookieContainer = new CookieContainer(), AllowAutoRedirect = false };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(30) };
+
+        // Login as the yoga owner: the hairdresser demo has no grid classes, so it has no drop-in roster either.
+        var (loginStatus, loginHtml) = await GetHtmlAsync(client, "/panel/Account/Login");
+        Assert.Equal(HttpStatusCode.OK, loginStatus);
+        var loginResponse = await client.PostAsync("/panel/Account/Login", Form(new Dictionary<string, string>
+        {
+            ["Username"] = "lucia.demo",
+            ["Password"] = password,
+            ["__RequestVerificationToken"] = ExtractToken(loginHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, loginResponse.StatusCode);
+        Assert.True(IsDayRedirect(loginResponse), $"Login did not redirect to the owner Jornada (location '{DescribeRedirect(loginResponse)}').");
+        Note("HTTP: yoga owner login accepted with antiforgery; redirected to the owner Jornada (/panel).");
+
+        // The roster only has something to offer once sessions exist: ConfirmWeek without a date binds null and
+        // generates the default (next) week. The week page is read for the antiforgery token of that POST, which is
+        // also the first real render of the page the confirm belongs to.
+        var (weekStatus, weekHtml) = await GetHtmlAsync(client, "/panel/Classes/Week");
+        Assert.Equal(HttpStatusCode.OK, weekStatus);
+        var confirmResponse = await client.PostAsync("/panel/Classes/ConfirmWeek", Form(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = ExtractToken(weekHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, confirmResponse.StatusCode);
+        var (confirmStatus, confirmHtml) = await GetHtmlAsync(client, confirmResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, confirmStatus);
+        Assert.Contains("Semana generada", confirmHtml, StringComparison.Ordinal);
+        Note("HTTP: POST /panel/Classes/ConfirmWeek with no date -> 302 -> 200 with the generated week.");
+
+        await using var connection = new SqlConnection(plan.ConnectionString);
+        await connection.OpenAsync();
+        var businessId = await ScalarIntAsync(connection, "SELECT Id FROM Businesses WHERE Slug = 'estudio-yoga-lucia-demo'");
+        var slug = await ScalarStringAsync(connection, "SELECT Slug FROM Businesses WHERE Id = @businessId", ("@businessId", businessId));
+        Assert.False(string.IsNullOrWhiteSpace(slug), "The yoga demo business must expose its public slug.");
+        var sessionCount = await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM Appointments
+             WHERE BusinessId = @businessId
+               AND Kind = @kind
+               AND Status = @status
+               AND GridClassId IS NOT NULL
+            """,
+            ("@businessId", businessId),
+            ("@kind", (byte)AppointmentKind.ClassSession),
+            ("@status", (byte)AppointmentStatus.Scheduled));
+        Assert.True(sessionCount > 0, "The confirmed week must persist at least one scheduled class session.");
+        var sessionId = await ScalarIntAsync(connection, """
+            SELECT TOP 1 Id
+              FROM Appointments
+             WHERE BusinessId = @businessId
+               AND Kind = @kind
+               AND Status = @status
+               AND GridClassId IS NOT NULL
+             ORDER BY Id
+            """,
+            ("@businessId", businessId),
+            ("@kind", (byte)AppointmentKind.ClassSession),
+            ("@status", (byte)AppointmentStatus.Scheduled));
+        Note($"SQL: the confirmed week generated {sessionCount} scheduled class session(s); the flow uses session #{sessionId}.");
+
+        // First real render of the owner roster: the heading, the window, the session rows, the status partial and an
+        // inline icon prove the view and its partials rendered, while the absence of the empty state proves this is
+        // the populated branch and not a page that failed to resolve its sessions.
+        var (rosterStatus, rosterHtml) = await GetHtmlAsync(client, "/panel/Classes/DropIns");
+        Assert.Equal(HttpStatusCode.OK, rosterStatus);
+        Assert.Contains("Clases sueltas", rosterHtml, StringComparison.Ordinal);
+        Assert.Contains("De hoy al", rosterHtml, StringComparison.Ordinal);
+        Assert.Contains("row-time", rosterHtml, StringComparison.Ordinal);
+        Assert.Contains("tag-scheduled", rosterHtml, StringComparison.Ordinal);
+        Assert.Contains("<svg", rosterHtml, StringComparison.Ordinal);
+        // The empty state is matched by an ASCII-only prefix because the rendered sentence carries an accent.
+        Assert.DoesNotContain("No hay clases en los pr", rosterHtml, StringComparison.Ordinal);
+        Note("HTTP: GET /panel/Classes/DropIns -> 200 with the roster render (heading, window, session rows, status tag and icons).");
+
+        // One synthetic client created only through the owner form, exactly like the Jornada flow.
+        var (createStatus, createHtml) = await GetHtmlAsync(client, "/panel/Clients/Create");
+        Assert.Equal(HttpStatusCode.OK, createStatus);
+        var ownerEmail = $"t14owner{Guid.NewGuid():N}@example.invalid";
+        var createResponse = await client.PostAsync("/panel/Clients/Create", Form(new Dictionary<string, string>
+        {
+            ["FirstName"] = "Synthetic",
+            ["LastName"] = "T14Owner",
+            ["Email"] = ownerEmail,
+            ["Phone"] = "0000000000",
+            ["__RequestVerificationToken"] = ExtractToken(createHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, createResponse.StatusCode);
+        var clientId = ExtractClientId(createResponse);
+        Note($"HTTP: synthetic client #{clientId} created through the owner form.");
+
+        // Opening the roster on that session renders its booking form, which is also where the POST takes its token
+        // from: the form fields are the picker of the client and the antiforgery token.
+        var (formStatus, formHtml) = await GetHtmlAsync(client, $"/panel/Classes/DropIns?session={sessionId}");
+        Assert.Equal(HttpStatusCode.OK, formStatus);
+        Assert.Contains($"drop-in-client-{sessionId}", formHtml, StringComparison.Ordinal);
+        var bookResponse = await client.PostAsync("/panel/Classes/BookDropIn", Form(new Dictionary<string, string>
+        {
+            ["appointmentId"] = sessionId.ToString(CultureInfo.InvariantCulture),
+            ["clientId"] = clientId.ToString(CultureInfo.InvariantCulture),
+            ["__RequestVerificationToken"] = ExtractToken(formHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, bookResponse.StatusCode);
+        var (afterBookStatus, afterBookHtml) = await GetHtmlAsync(client, bookResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, afterBookStatus);
+        // The redirected roster lists the annotation with the client's name and the status partial, so the booking is
+        // visible on the screen the owner actually reads.
+        Assert.Contains("Synthetic T14Owner", afterBookHtml, StringComparison.Ordinal);
+        Assert.Contains("tag-pending", afterBookHtml, StringComparison.Ordinal);
+        Note($"HTTP: owner booked client #{clientId} into session #{sessionId} -> 302 -> 200 with the annotated drop-in.");
+
+        var bookingId = await ScalarIntAsync(connection, """
+            SELECT TOP 1 Id
+              FROM Bookings
+             WHERE BusinessId = @businessId
+               AND AppointmentId = @appointmentId
+               AND Modality = @modality
+             ORDER BY Id
+            """,
+            ("@businessId", businessId), ("@appointmentId", sessionId), ("@modality", (byte)BookingModality.DropIn));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM Bookings
+             WHERE BusinessId = @businessId
+               AND AppointmentId = @appointmentId
+               AND Modality = @modality
+            """,
+            ("@businessId", businessId), ("@appointmentId", sessionId), ("@modality", (byte)BookingModality.DropIn)));
+        Assert.Equal((int)BookingStatus.Pending, await ScalarIntAsync(connection,
+            "SELECT Status FROM Bookings WHERE Id = @bookingId AND BusinessId = @businessId",
+            ("@bookingId", bookingId), ("@businessId", businessId)));
+        Assert.Equal(clientId, await ScalarIntAsync(connection,
+            "SELECT ClientId FROM Bookings WHERE Id = @bookingId", ("@bookingId", bookingId)));
+        Note($"SQL: exactly one drop-in booking #{bookingId} on session #{sessionId}, Pending/Suelta for client #{clientId} of business #{businessId}.");
+
+        // Cancelling the annotation before the class starts is what releases the place; the POST takes its token from
+        // the roster that just rendered the cancel form.
+        var cancelResponse = await client.PostAsync("/panel/Classes/CancelDropIn", Form(new Dictionary<string, string>
+        {
+            ["bookingId"] = bookingId.ToString(CultureInfo.InvariantCulture),
+            ["__RequestVerificationToken"] = ExtractToken(afterBookHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, cancelResponse.StatusCode);
+        var (afterCancelStatus, afterCancelHtml) = await GetHtmlAsync(client, cancelResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, afterCancelStatus);
+        // A cancelled annotation stays listed with its status, which is how the owner sees the place that was freed.
+        Assert.Contains("tag-cancelled", afterCancelHtml, StringComparison.Ordinal);
+        Note($"HTTP: owner cancelled drop-in booking #{bookingId} -> 302 -> 200 with the annotation still listed as cancelled.");
+
+        Assert.Equal((int)BookingStatus.Cancelled, await ScalarIntAsync(connection,
+            "SELECT Status FROM Bookings WHERE Id = @bookingId", ("@bookingId", bookingId)));
+        Assert.Equal((int)CancelledBy.Owner, await ScalarIntAsync(connection,
+            "SELECT CancelledBy FROM Bookings WHERE Id = @bookingId", ("@bookingId", bookingId)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE Id = @bookingId AND CancelledAt IS NOT NULL", ("@bookingId", bookingId)));
+        Assert.Equal(0, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM Bookings
+             WHERE BusinessId = @businessId
+               AND AppointmentId = @appointmentId
+               AND ClientId = @clientId
+               AND Status <> @cancelled
+            """,
+            ("@businessId", businessId), ("@appointmentId", sessionId), ("@clientId", clientId),
+            ("@cancelled", (byte)BookingStatus.Cancelled)));
+        Note($"SQL: booking #{bookingId} is Cancelled by the owner with a cancellation instant, and client #{clientId} holds no active booking of session #{sessionId}.");
+
+        // The public screen is a different session: a brand-new cookie-less client, so nothing of the owner login leaks
+        // into it and the public flow proves the anonymous path.
+        using var publicHandler = new HttpClientHandler { AllowAutoRedirect = false };
+        using var publicClient = new HttpClient(publicHandler) { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(30) };
+
+        var (publicStatus, publicHtml) = await GetHtmlAsync(publicClient, $"/r/{slug}/clases");
+        Assert.Equal(HttpStatusCode.OK, publicStatus);
+        var serviceName = await ScalarStringAsync(connection, """
+            SELECT s.Name
+              FROM Appointments AS a
+              JOIN Services AS s ON s.Id = a.ServiceId AND s.BusinessId = a.BusinessId
+             WHERE a.BusinessId = @businessId AND a.Id = @appointmentId
+            """,
+            ("@businessId", businessId), ("@appointmentId", sessionId));
+        Assert.False(string.IsNullOrWhiteSpace(serviceName), "The booked class session must resolve its service name.");
+        Assert.Contains(serviceName!, publicHtml, StringComparison.Ordinal);
+        Assert.Contains("Quedan ", publicHtml, StringComparison.Ordinal);
+        Assert.Contains(" lugares", publicHtml, StringComparison.Ordinal);
+        // The public empty state is matched by an ASCII-only fragment because its sentence carries accents.
+        Assert.DoesNotContain("no hay clases con lugar", publicHtml, StringComparison.Ordinal);
+        Note($"HTTP: GET /r/{slug}/clases -> 200 with the class name and the remaining-places line of the public offer.");
+
+        // The list offers a link per session; opening one renders the contact form, which carries the antiforgery token
+        // the booking POST needs. The email is synthetic and identifies the client, so no account is required.
+        var (publicFormStatus, publicFormHtml) = await GetHtmlAsync(publicClient, $"/r/{slug}/clases?session={sessionId}");
+        Assert.Equal(HttpStatusCode.OK, publicFormStatus);
+        var publicEmail = $"t14public{Guid.NewGuid():N}@example.invalid";
+        var publicResponse = await publicClient.PostAsync($"/r/{slug}/clases/reservar", Form(new Dictionary<string, string>
+        {
+            ["AppointmentId"] = sessionId.ToString(CultureInfo.InvariantCulture),
+            ["Email"] = publicEmail,
+            ["FirstName"] = "Synthetic",
+            ["LastName"] = "T14Public",
+            ["__RequestVerificationToken"] = ExtractToken(publicFormHtml)
+        }));
+        Assert.Equal(HttpStatusCode.OK, publicResponse.StatusCode);
+        var publicConfirmation = await publicResponse.Content.ReadAsStringAsync();
+        Assert.Contains("Recibimos tu reserva", publicConfirmation, StringComparison.Ordinal);
+        Note($"HTTP: public drop-in booking for session #{sessionId} -> 200 with the confirmation screen.");
+
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM Bookings
+             WHERE BusinessId = @businessId
+               AND AppointmentId = @appointmentId
+               AND Modality = @modality
+               AND Status = @pending
+            """,
+            ("@businessId", businessId), ("@appointmentId", sessionId), ("@modality", (byte)BookingModality.DropIn),
+            ("@pending", (byte)BookingStatus.Pending)));
+        // The cancelled annotation and the public one are the two bookings of the session, so the cancelled one really
+        // released its place instead of blocking the new client.
+        Assert.Equal(2, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM Bookings
+             WHERE BusinessId = @businessId
+               AND AppointmentId = @appointmentId
+               AND Modality = @modality
+            """,
+            ("@businessId", businessId), ("@appointmentId", sessionId), ("@modality", (byte)BookingModality.DropIn)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId AND Email = @email",
+            ("@businessId", businessId), ("@email", publicEmail)));
+        var publicClientId = await ScalarIntAsync(connection,
+            "SELECT Id FROM Clients WHERE BusinessId = @businessId AND Email = @email",
+            ("@businessId", businessId), ("@email", publicEmail));
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM ClientAccounts WHERE BusinessId = @businessId AND ClientId = @clientId",
+            ("@businessId", businessId), ("@clientId", publicClientId)));
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM ClientAccounts WHERE BusinessId = @businessId AND Email = @email",
+            ("@businessId", businessId), ("@email", publicEmail)));
+        Note($"SQL: session #{sessionId} holds two drop-in bookings (1 Pending from the public screen plus 1 Cancelled) and client #{publicClientId} was created without an account.");
+
+        // A public POST without the antiforgery token must be rejected before any business logic runs.
+        var rejected = await publicClient.PostAsync($"/r/{slug}/clases/reservar", Form(new Dictionary<string, string>
+        {
+            ["AppointmentId"] = sessionId.ToString(CultureInfo.InvariantCulture),
+            ["Email"] = $"t14rejected{Guid.NewGuid():N}@example.invalid",
+            ["FirstName"] = "Synthetic",
+            ["LastName"] = "T14Rejected"
+        }));
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        Note("HTTP: public drop-in POST without an anti-CSRF token -> 400.");
+
+        // The harness never writes a secret: every diagnostic line reports only booleans, identifiers, counts or paths,
+        // and this proves it against the password, every antiforgery token and every cookie of the authenticated run.
+        // Short cookie values are skipped because they are not secrets and could match any line by accident.
+        foreach (Cookie cookie in handler.CookieContainer.GetAllCookies())
+        {
+            if (cookie.Value.Length >= 8)
+                secrets.Add(cookie.Value);
+        }
+
+        Assert.NotEmpty(written);
+        var leaked = written.Any(line => secrets.Any(secret => line.Contains(secret, StringComparison.Ordinal)));
+        Assert.False(leaked, "The test output must never contain a password, an antiforgery token or a cookie value.");
+        Note("Secrets: the run wrote no password, antiforgery token or cookie value to the test output.");
     }
 
     private static async Task AssertWalkInRowAsync(SqlConnection connection, int businessId, int appointmentId,
