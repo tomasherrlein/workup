@@ -1,5 +1,6 @@
 using WorkUp.BusinessLogic.Classes;
 using WorkUp.Domain.Entities;
+using WorkUp.Domain.Enums;
 
 namespace WorkUp.Tests.Fakes;
 
@@ -8,6 +9,22 @@ public sealed record FakeClassDropInSession(int BusinessId, ClassSessionRow Row)
 
 /// <summary>One client of the fake, owned by a business, so a cross-tenant client can be simulated.</summary>
 public sealed record FakeClassDropInClient(int BusinessId, DropInClient Client);
+
+/// <summary>
+/// One cancellable drop-in annotation of the fake, owned by a business so a foreign tenant can be simulated. The
+/// cancellation facts are kept beside the locked state so a test can observe what the cancellation wrote, exactly
+/// like the <c>CancelledAt</c>, <c>CancelledBy</c> and <c>Status</c> columns of the real row.
+/// </summary>
+public sealed class FakeClassDropInBooking(int businessId, DropInCancellationState state)
+{
+    public int BusinessId { get; } = businessId;
+
+    public DropInCancellationState State { get; set; } = state;
+
+    public CancelledBy? CancelledBy { get; set; }
+
+    public DateTime? CancelledAt { get; set; }
+}
 
 /// <summary>
 /// In-memory stand-in for the drop-in persistence port. Every call is recorded and the tenant scope is emulated: a
@@ -29,6 +46,9 @@ public sealed class FakeClassDropInRepository : IClassDropInRepository
 
     /// <summary>Drop-ins the guarded insert actually wrote.</summary>
     public List<DropInInsert> Inserts { get; } = [];
+
+    /// <summary>The cancellable drop-in annotations of the fake, each owned by a business.</summary>
+    public List<FakeClassDropInBooking> DropInBookings { get; } = [];
 
     public List<Notification> Notifications { get; } = [];
 
@@ -56,6 +76,19 @@ public sealed class FakeClassDropInRepository : IClassDropInRepository
     public int LockCallCount { get; private set; }
     public int? LockBusinessId { get; private set; }
     public int? LockedAppointmentId { get; private set; }
+
+    public int RosterCallCount { get; private set; }
+    public int? RosterBusinessId { get; private set; }
+    public DateTime? RosterFromExclusive { get; private set; }
+
+    public int LockDropInCallCount { get; private set; }
+    public int? LockDropInBusinessId { get; private set; }
+    public int? LockedDropInBookingId { get; private set; }
+
+    public int CancelCallCount { get; private set; }
+
+    /// <summary>Every cancellation the service asked for, so a test can pin the instant it was given.</summary>
+    public List<(int BookingId, DateTime Now)> CancelRequests { get; } = [];
 
     public int IdentifyCallCount { get; private set; }
     public string? IdentifiedEmail { get; private set; }
@@ -101,6 +134,92 @@ public sealed class FakeClassDropInRepository : IClassDropInRepository
             candidate.BusinessId == businessId && candidate.Row.AppointmentId == appointmentId);
 
         return Task.FromResult(session?.Row);
+    }
+
+    /// <summary>
+    /// Emulates the tenant scope and the strictly-future start of the roster query. It deliberately does not filter
+    /// the kind nor the modality: those filters are the caller's own guards, and emulating them here would hide a
+    /// service that forgot them — exactly like <see cref="ListSessionsAsync"/> does not filter the kind. The SQL
+    /// statements do carry both filters, and the opt-in fixture proves them against a real database.
+    /// </summary>
+    public Task<IReadOnlyList<ClassSessionRow>> ListUpcomingRosterAsync(
+        int businessId, DateTime fromExclusive, CancellationToken ct = default)
+    {
+        RosterCallCount++;
+        RosterBusinessId = businessId;
+        RosterFromExclusive = fromExclusive;
+
+        IReadOnlyList<ClassSessionRow> rows = Sessions
+            .Where(session => session.BusinessId == businessId)
+            .Where(session => session.Row.StartsAt > fromExclusive)
+            .Select(session => session.Row)
+            .ToList();
+
+        return Task.FromResult(rows);
+    }
+
+    public Task<DropInCancellationState?> LockDropInForCancellationAsync(
+        int businessId, int bookingId, CancellationToken ct = default)
+    {
+        LockDropInCallCount++;
+        LockDropInBusinessId = businessId;
+        LockedDropInBookingId = bookingId;
+
+        var booking = DropInBookings.FirstOrDefault(candidate =>
+            candidate.BusinessId == businessId && candidate.State.BookingId == bookingId);
+
+        return Task.FromResult(booking?.State);
+    }
+
+    /// <summary>
+    /// Emulates the guarded cancellation statement, guard included: only a drop-in annotation of a scheduled class
+    /// that starts after <paramref name="now"/> and is not cancelled yet is written, and anything else reports that no
+    /// row changed. <c>CancelledBy = Owner</c> mirrors the fixed value of the statement; a fake test can pin it, but
+    /// only the opt-in fixture proves the stored column.
+    /// </summary>
+    public Task<bool> CancelDropInAsync(
+        int businessId, int bookingId, DateTime now, CancellationToken ct = default)
+    {
+        CancelCallCount++;
+        CancelRequests.Add((bookingId, now));
+
+        var booking = DropInBookings.FirstOrDefault(candidate =>
+            candidate.BusinessId == businessId
+            && candidate.State.BookingId == bookingId
+            && candidate.State.Modality == BookingModality.DropIn
+            && candidate.State.Kind == AppointmentKind.ClassSession
+            && candidate.State.AppointmentStatus == AppointmentStatus.Scheduled
+            && candidate.State.StartsAt > now
+            && candidate.State.Status != BookingStatus.Cancelled);
+        if (booking is null)
+            return Task.FromResult(false);
+
+        booking.State = booking.State with { Status = BookingStatus.Cancelled };
+        booking.CancelledAt = now;
+        booking.CancelledBy = CancelledBy.Owner;
+        ReleasePlace(booking.State.AppointmentId, bookingId);
+        return Task.FromResult(true);
+    }
+
+    /// <summary>
+    /// Mirrors the cancelled row into the occupancy of its session, so a later booking sees the released place, just
+    /// like a real reader of <c>Bookings</c> would.
+    /// </summary>
+    private void ReleasePlace(int appointmentId, int bookingId)
+    {
+        var index = Sessions.FindIndex(session =>
+            session.Row.AppointmentId == appointmentId
+            && session.Row.Bookings.Any(booking => booking.BookingId == bookingId));
+        if (index < 0)
+            return;
+
+        var session = Sessions[index];
+        var bookings = session.Row.Bookings
+            .Select(booking => booking.BookingId == bookingId
+                ? booking with { Status = BookingStatus.Cancelled }
+                : booking)
+            .ToArray();
+        Sessions[index] = session with { Row = session.Row with { Bookings = bookings } };
     }
 
     public Task<DropInClient> IdentifyClientAsync(

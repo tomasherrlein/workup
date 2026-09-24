@@ -84,6 +84,46 @@ public class ClassDropInServiceTests
         => _repository.Clients.Add(
             new FakeClassDropInClient(businessId, new DropInClient(clientId, email, firstName, lastName)));
 
+    /// <summary>One annotation of a session with the full booking shape the roster and the cancellation read.</summary>
+    private static ClassSessionBooking Annotation(
+        int bookingId,
+        int clientId,
+        string clientName,
+        BookingStatus status = BookingStatus.Pending,
+        BookingModality? modality = BookingModality.DropIn) =>
+        new(clientId, status, bookingId, modality, clientName);
+
+    /// <summary>
+    /// An upcoming session with one drop-in annotation of <paramref name="clientId"/>, registered in the fake as a
+    /// cancellable booking too, so a cancellation test can load it and cancel it.
+    /// </summary>
+    private int AddDropInSessionAt(
+        DateTime startsAt,
+        int bookingId = 500,
+        int clientId = 42,
+        string clientName = "Ana Perez",
+        BookingStatus bookingStatus = BookingStatus.Pending,
+        AppointmentStatus status = AppointmentStatus.Scheduled,
+        int businessId = 1,
+        AppointmentKind kind = AppointmentKind.ClassSession,
+        BookingModality? modality = BookingModality.DropIn,
+        int maxCapacity = 8)
+    {
+        var appointmentId = AddSessionAt(
+            startsAt,
+            maxCapacity,
+            status,
+            businessId,
+            kind: kind,
+            bookings: [Annotation(bookingId, clientId, clientName, bookingStatus, modality)]);
+
+        _repository.DropInBookings.Add(new FakeClassDropInBooking(
+            businessId,
+            new DropInCancellationState(
+                bookingId, appointmentId, startsAt, kind, status, bookingStatus, modality)));
+        return appointmentId;
+    }
+
     // RF-07 step 2: the offer lists only scheduled classes with a future start and a free place, ordered by start.
 
     [Fact]
@@ -231,6 +271,115 @@ public class ClassDropInServiceTests
         Assert.False(result.Succeeded);
         Assert.Equal("drop_in_invalid_request", result.Error!.Code);
         Assert.Equal(0, _repository.ListCallCount);
+        Assert.Equal(0, _unitOfWork.BeginCount);
+    }
+
+    // RF-22: the owner screen reads the upcoming classes with their drop-in annotations. The read is tenant-scoped,
+    // never presents a fixed annotation as a drop-in, and keeps an empty class in the answer.
+
+    [Fact]
+    public async Task Roster_returns_the_upcoming_sessions_with_only_their_drop_in_annotations()
+    {
+        var appointmentId = AddSession(
+            D(2026, 3, 20), T(18), maxCapacity: 8,
+            bookings:
+            [
+                Annotation(501, 11, "Fija Estudiante", BookingStatus.Confirmed, BookingModality.Fixed),
+                Annotation(502, 42, "Ana Perez"),
+                Annotation(503, 43, "Bella Cancelada", BookingStatus.Cancelled)
+            ]);
+        AddSessionAt(_clock.Now.AddDays(-1));                              // already started
+        AddSessionAt(_clock.Now.AddDays(2), businessId: 2);                // another business
+        AddSessionAt(_clock.Now.AddDays(3), kind: AppointmentKind.Individual);
+
+        var result = await _service.ListRosterAsync(1);
+
+        Assert.True(result.Succeeded);
+        var session = Assert.Single(result.Value);
+        Assert.Equal(appointmentId, session.AppointmentId);
+        Assert.Equal(7, session.ServiceId);
+        Assert.Equal(3, session.WorkerId);
+        Assert.Equal(8, session.MaxCapacity);
+        Assert.Equal(AppointmentStatus.Scheduled, session.Status);
+        Assert.Equal(D(2026, 3, 20), session.Date);
+        Assert.Equal(T(18), session.StartTime);
+
+        // The fixed annotation is never part of the roster; the cancelled drop-in is, with its status, so the owner
+        // can see that the place was released and who released it.
+        Assert.Equal(new[] { 502, 503 }, session.DropIns.Select(entry => entry.BookingId).ToArray());
+        Assert.Equal(new[] { 42, 43 }, session.DropIns.Select(entry => entry.ClientId).ToArray());
+        Assert.Equal(new[] { "Ana Perez", "Bella Cancelada" }, session.DropIns.Select(entry => entry.ClientName).ToArray());
+        Assert.Equal(BookingStatus.Pending, session.DropIns[0].Status);
+        Assert.Equal(BookingStatus.Cancelled, session.DropIns[1].Status);
+
+        // The tenant and the instant are the ones the caller named, through the single clock read.
+        Assert.Equal(1, _repository.RosterCallCount);
+        Assert.Equal(1, _repository.RosterBusinessId);
+        Assert.Equal(_clock.Now, _repository.RosterFromExclusive);
+
+        // The roster is read-only: it opens no transaction and writes nothing.
+        Assert.Equal(0, _unitOfWork.BeginCount);
+        Assert.Empty(_repository.Inserts);
+        Assert.Empty(_repository.Notifications);
+        Assert.Equal(0, _repository.CancelCallCount);
+    }
+
+    [Fact]
+    public async Task Roster_keeps_a_session_without_annotations_with_an_empty_list_and_orders_by_start()
+    {
+        var later = AddSession(D(2026, 3, 21), T(9));
+        var earlier = AddSession(
+            D(2026, 3, 20), T(18), bookings: [Annotation(502, 42, "Ana Perez")]);
+
+        var result = await _service.ListRosterAsync(1);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(
+            new[] { earlier, later },
+            result.Value.Select(session => session.AppointmentId).ToArray());
+        Assert.Empty(result.Value[1].DropIns);
+    }
+
+    [Fact]
+    public async Task Roster_reads_the_clock_once_and_judges_every_session_with_the_same_now()
+    {
+        // The session starts one second after the first read: a second read would move "now" past its start and the
+        // session would drop out of the roster, so a double read cannot pass unnoticed.
+        var clock = new AdvancingClock(new DateTime(2026, 3, 10, 9, 0, 0));
+        var service = new ClassDropInService(_repository, _unitOfWork, clock);
+        var appointmentId = AddDropInSessionAt(new DateTime(2026, 3, 10, 9, 0, 1));
+
+        var result = await service.ListRosterAsync(1);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, clock.ReadCount);
+        Assert.Equal(appointmentId, Assert.Single(result.Value).AppointmentId);
+    }
+
+    [Fact]
+    public async Task Roster_accepts_a_suspended_session_because_the_owner_still_needs_to_see_who_is_booked()
+    {
+        // Suspending a class does not cancel its annotations, so the owner screen must show them with the session
+        // status; filtering the session out would hide exactly the students that need to hear about the suspension.
+        var appointmentId = AddDropInSessionAt(
+            _clock.Now.AddDays(1), status: AppointmentStatus.Suspended);
+
+        var result = await _service.ListRosterAsync(1);
+
+        var session = Assert.Single(result.Value);
+        Assert.Equal(appointmentId, session.AppointmentId);
+        Assert.Equal(AppointmentStatus.Suspended, session.Status);
+        Assert.Equal(500, Assert.Single(session.DropIns).BookingId);
+    }
+
+    [Fact]
+    public async Task Roster_rejects_an_invalid_business_without_reading_storage()
+    {
+        var result = await _service.ListRosterAsync(0);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("drop_in_invalid_request", result.Error!.Code);
+        Assert.Equal(0, _repository.RosterCallCount);
         Assert.Equal(0, _unitOfWork.BeginCount);
     }
 
@@ -713,6 +862,171 @@ public class ClassDropInServiceTests
         Assert.Equal("drop_in_invalid_request", result.Error!.Code);
         Assert.Equal(0, _repository.FindClientCallCount);
         Assert.Equal(0, _repository.LockCallCount);
+        Assert.Equal(0, _unitOfWork.BeginCount);
+    }
+
+    // RF-22: the owner cancels a drop-in before its class starts. The booking row is locked inside one transaction,
+    // the cancellation releases the place, and every rejection reports a stable code without writing.
+
+    [Fact]
+    public async Task Cancel_marks_the_annotation_cancelled_by_the_owner_and_commits_once()
+    {
+        AddDropInSessionAt(_clock.Now.AddDays(1), bookingId: 500, clientId: 42);
+
+        var result = await _service.CancelDropInAsync(1, 500);
+
+        Assert.True(result.Succeeded);
+        var stored = Assert.Single(_repository.DropInBookings);
+        Assert.Equal(BookingStatus.Cancelled, stored.State.Status);
+        Assert.Equal(CancelledBy.Owner, stored.CancelledBy);
+        Assert.Equal(_clock.Now, stored.CancelledAt);
+
+        Assert.Equal(1, _repository.LockDropInCallCount);
+        Assert.Equal(1, _repository.CancelCallCount);
+        Assert.Equal(1, _unitOfWork.BeginCount);
+        Assert.Equal(1, _unitOfWork.CommitCount);
+        Assert.Equal(0, _unitOfWork.RolledBackCount);
+    }
+
+    [Fact]
+    public async Task Cancel_releases_the_place_so_the_same_client_can_book_again()
+    {
+        var appointmentId = AddDropInSessionAt(
+            _clock.Now.AddDays(1), bookingId: 500, clientId: 42, maxCapacity: 1);
+        AddClient(1, 42);
+
+        var cancelled = await _service.CancelDropInAsync(1, 500);
+        var rebooked = await _service.BookForClientAsync(1, appointmentId, 42);
+
+        Assert.True(cancelled.Succeeded);
+        Assert.True(rebooked.Succeeded);
+        Assert.Equal(42, Assert.Single(_repository.Inserts).ClientId);
+        Assert.Equal(2, _unitOfWork.CommitCount);
+    }
+
+    [Fact]
+    public async Task Cancel_reads_the_clock_once_for_the_window_and_the_cancellation_instant()
+    {
+        // The class starts one second after the first read: a second read would put "now" exactly on the start, the
+        // cancellation would be rejected and the instant written would differ, so a double read cannot pass.
+        var clock = new AdvancingClock(new DateTime(2026, 3, 10, 9, 0, 0));
+        var service = new ClassDropInService(_repository, _unitOfWork, clock);
+        AddDropInSessionAt(new DateTime(2026, 3, 10, 9, 0, 1), bookingId: 500);
+
+        var result = await service.CancelDropInAsync(1, 500);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, clock.ReadCount);
+        Assert.Equal(1, _repository.CancelCallCount);
+        Assert.Equal(new DateTime(2026, 3, 10, 9, 0, 0), Assert.Single(_repository.CancelRequests).Now);
+    }
+
+    [Fact]
+    public async Task Cancel_rejects_a_suspended_session_without_writing()
+    {
+        AddDropInSessionAt(_clock.Now.AddDays(1), status: AppointmentStatus.Suspended);
+
+        var result = await _service.CancelDropInAsync(1, 500);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("drop_in_not_available", result.Error!.Code);
+        Assert.Equal(BookingStatus.Pending, Assert.Single(_repository.DropInBookings).State.Status);
+        Assert.Equal(0, _repository.CancelCallCount);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
+    [Fact]
+    public async Task Cancel_rejects_an_already_started_session_without_writing()
+    {
+        AddDropInSessionAt(_clock.Now.AddMinutes(-1));
+
+        var result = await _service.CancelDropInAsync(1, 500);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("drop_in_not_available", result.Error!.Code);
+        Assert.Equal(BookingStatus.Pending, Assert.Single(_repository.DropInBookings).State.Status);
+        Assert.Equal(0, _repository.CancelCallCount);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
+    [Fact]
+    public async Task Cancel_rejects_a_second_cancellation_without_writing_again()
+    {
+        AddDropInSessionAt(_clock.Now.AddDays(1));
+
+        var first = await _service.CancelDropInAsync(1, 500);
+        var second = await _service.CancelDropInAsync(1, 500);
+
+        Assert.True(first.Succeeded);
+        Assert.False(second.Succeeded);
+        Assert.Equal("drop_in_already_cancelled", second.Error!.Code);
+        Assert.Equal(1, _repository.CancelCallCount);
+        Assert.Equal(1, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
+    [Fact]
+    public async Task Cancel_treats_a_booking_of_another_business_exactly_like_a_missing_one()
+    {
+        AddDropInSessionAt(_clock.Now.AddDays(1), businessId: 2);
+
+        var foreign = await _service.CancelDropInAsync(1, 500);
+        var missing = await _service.CancelDropInAsync(1, 999);
+
+        Assert.False(foreign.Succeeded);
+        Assert.False(missing.Succeeded);
+        Assert.Equal("drop_in_not_found", foreign.Error!.Code);
+        Assert.Equal(foreign.Error!.Code, missing.Error!.Code);
+        Assert.Equal(foreign.Error!.Message, missing.Error!.Message);
+        Assert.Equal(2, _repository.LockDropInCallCount);
+        Assert.Equal(0, _repository.CancelCallCount);
+        Assert.Equal(1, _repository.LockDropInBusinessId);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(2, _unitOfWork.RolledBackCount);
+    }
+
+    [Fact]
+    public async Task Cancel_rejects_a_fixed_annotation_and_an_individual_turn_as_not_found()
+    {
+        // A fixed annotation is not a drop-in and an individual turn is not a class: neither can be cancelled here,
+        // and both are answered exactly like a booking of another business.
+        var fixedSession = AddSession(
+            D(2026, 3, 20), T(18),
+            bookings: [Annotation(700, 11, "Fija Estudiante", BookingStatus.Confirmed, BookingModality.Fixed)]);
+        _repository.DropInBookings.Add(new FakeClassDropInBooking(
+            1,
+            new DropInCancellationState(
+                700, fixedSession, D(2026, 3, 20).ToDateTime(T(18)),
+                AppointmentKind.ClassSession, AppointmentStatus.Scheduled, BookingStatus.Confirmed,
+                BookingModality.Fixed)));
+        var individualSession = AddDropInSessionAt(
+            _clock.Now.AddDays(1), bookingId: 701, kind: AppointmentKind.Individual);
+
+        var fixedResult = await _service.CancelDropInAsync(1, 700);
+        var individualResult = await _service.CancelDropInAsync(1, 701);
+
+        Assert.False(fixedResult.Succeeded);
+        Assert.False(individualResult.Succeeded);
+        Assert.Equal("drop_in_not_found", fixedResult.Error!.Code);
+        Assert.Equal("drop_in_not_found", individualResult.Error!.Code);
+        Assert.Equal(0, _repository.CancelCallCount);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(2, _unitOfWork.RolledBackCount);
+        Assert.Equal(individualSession, _repository.DropInBookings[1].State.AppointmentId);
+    }
+
+    [Theory]
+    [InlineData(0, 500)]
+    [InlineData(1, 0)]
+    public async Task Cancel_rejects_an_invalid_request_without_reading_storage(int businessId, int bookingId)
+    {
+        var result = await _service.CancelDropInAsync(businessId, bookingId);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("drop_in_not_found", result.Error!.Code);
+        Assert.Equal(0, _repository.LockDropInCallCount);
         Assert.Equal(0, _unitOfWork.BeginCount);
     }
 

@@ -8,13 +8,15 @@ namespace WorkUp.Data.Classes;
 
 /// <summary>
 /// SQL Server persistence for booking a drop-in into an already generated class session (RF-07 cupo &gt; 1, RF-22,
-/// D-25). Every statement is scoped by <c>BusinessId</c>, so a session or a client of another tenant is invisible.
-/// Nothing here commits or rolls back: each command joins the caller's ambient transaction through
-/// <see cref="DbSession.Transaction"/>, which owns the whole booking unit.
+/// D-25), reading the owner's drop-in roster and cancelling a drop-in before its class starts. Every statement is
+/// scoped by <c>BusinessId</c>, so a session, a booking or a client of another tenant is invisible. Nothing here
+/// commits or rolls back: each command joins the caller's ambient transaction through
+/// <see cref="DbSession.Transaction"/>, which owns the whole unit.
 /// <para>
-/// The discriminant <c>a.Kind = ClassSession</c> is part of every session statement, listing included. An individual
-/// turn is also <c>Programado</c> with capacity 1, so without the discriminant it would be offered, locked and booked
-/// as a class.
+/// The discriminant <c>a.Kind = ClassSession</c> is part of every session statement, listing and roster included. An
+/// individual turn is also <c>Programado</c> with capacity 1, so without the discriminant it would be offered, locked
+/// and booked as a class. The roster carries the modality discriminant too: only <c>b.Modality = Suelta</c> rows are
+/// ever read as drop-in annotations, so a fixed annotation of the same class can never be presented as one.
 /// </para>
 /// </summary>
 public sealed class SqlClassDropInRepository(DbSession session)
@@ -39,13 +41,18 @@ public sealed class SqlClassDropInRepository(DbSession session)
 
     /// <summary>
     /// Every booking of those same sessions, cancelled ones included, so the caller — and not this query — decides
-    /// what a cancellation releases. The session filter is repeated instead of joining a temporary set; the join to
-    /// <c>Appointments</c> carries the tenant on both sides.
+    /// what a cancellation releases. Each row carries its booking id, its modality and the client's name, so the same
+    /// shape serves the occupancy count, the owner roster and the cancellation read. The session filter is repeated
+    /// instead of joining a temporary set; the join to <c>Appointments</c> carries the tenant on both sides, and the
+    /// join to <c>Clients</c> is a <c>LEFT JOIN</c> with the tenant condition: a booking whose client row is missing
+    /// or belongs to another business must still be counted against the capacity, never dropped from the occupancy
+    /// silently.
     /// </summary>
     private const string ListSessionBookingsSql = """
-        SELECT b.Id AS BookingId, b.AppointmentId, b.ClientId, b.Status
+        SELECT b.Id AS BookingId, b.AppointmentId, b.ClientId, b.Status, b.Modality, c.FirstName, c.LastName
           FROM Bookings AS b
           JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
+          LEFT JOIN Clients AS c ON c.Id = b.ClientId AND c.BusinessId = b.BusinessId
          WHERE b.BusinessId = @businessId
            AND a.Kind = @classSession
            AND a.StartsAt >= @rangeStart
@@ -70,11 +77,81 @@ public sealed class SqlClassDropInRepository(DbSession session)
 
     /// <summary>Live bookings of the locked session, under the same lock, cancelled ones included.</summary>
     private const string LockedSessionBookingsSql = """
-        SELECT b.Id AS BookingId, b.AppointmentId, b.ClientId, b.Status
+        SELECT b.Id AS BookingId, b.AppointmentId, b.ClientId, b.Status, b.Modality, c.FirstName, c.LastName
           FROM Bookings AS b
+          LEFT JOIN Clients AS c ON c.Id = b.ClientId AND c.BusinessId = b.BusinessId
          WHERE b.AppointmentId = @appointmentId
            AND b.BusinessId = @businessId
          ORDER BY b.Id
+        """;
+
+    /// <summary>
+    /// Upcoming class sessions of the business: <c>Kind = ClassSession</c> with a start strictly after the caller's
+    /// instant, suspended ones included because suspending a class cancels nobody and the owner still needs to see
+    /// who is booked in it. Ordered by start, like the offer listing.
+    /// </summary>
+    private const string ListUpcomingRosterSessionsSql = """
+        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.MaxCapacity, a.Kind, a.Status
+          FROM Appointments AS a
+         WHERE a.BusinessId = @businessId
+           AND a.Kind = @classSession
+           AND a.StartsAt > @fromExclusive
+         ORDER BY a.StartsAt, a.Id
+        """;
+
+    /// <summary>
+    /// The drop-in annotations of those same sessions, with the client's name, cancelled ones included. The filter
+    /// <c>b.Modality = @dropIn</c> is what keeps a fixed annotation out of the roster: an annotation without a
+    /// modality belongs to an individual turn and is never a drop-in either. The <c>LEFT JOIN</c> to <c>Clients</c>
+    /// keeps an annotation whose client row cannot be resolved visible with an empty name instead of hiding it from
+    /// the owner, while the tenant condition keeps another business's client out of the answer.
+    /// </summary>
+    private const string ListUpcomingRosterDropInsSql = """
+        SELECT b.Id AS BookingId, b.AppointmentId, b.ClientId, b.Status, b.Modality, c.FirstName, c.LastName
+          FROM Bookings AS b
+          JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
+          LEFT JOIN Clients AS c ON c.Id = b.ClientId AND c.BusinessId = b.BusinessId
+         WHERE b.BusinessId = @businessId
+           AND a.Kind = @classSession
+           AND a.StartsAt > @fromExclusive
+           AND b.Modality = @dropIn
+         ORDER BY b.AppointmentId, b.Id
+        """;
+
+    /// <summary>
+    /// Locks the booking row of the business together with its session inside the caller's transaction, so the rules
+    /// the caller reads here cannot change under it before it writes. The tenant is part of the predicate, so a
+    /// booking of another business is simply not found and is indistinguishable from a missing one. The modality and
+    /// the kind are not filtered: the caller decides what to do with a booking that is not a drop-in of a class.
+    /// </summary>
+    private const string LockDropInForCancellationSql = """
+        SELECT b.Id AS BookingId, a.Id AS AppointmentId, a.StartsAt, a.Kind, a.Status AS AppointmentStatus,
+               b.Status AS BookingStatus, b.Modality
+          FROM Bookings AS b WITH (UPDLOCK, ROWLOCK)
+          JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
+         WHERE b.BusinessId = @businessId
+           AND b.Id = @bookingId
+        """;
+
+    /// <summary>
+    /// The guarded cancellation: one statement that writes <c>Cancelado</c>, <c>CancelledAt</c> and
+    /// <c>CancelledBy = Owner</c> only while the annotation is still a drop-in that is not cancelled and its session
+    /// is still a <c>ClassSession</c>, <c>Programado</c> and starting after <paramref name="now"/>. The guard makes a
+    /// double cancel report zero changed rows instead of overwriting the original instant and author, and because the
+    /// three columns are written by the same statement there is no read-modify-write window between them.
+    /// </summary>
+    private const string CancelDropInSql = """
+        UPDATE b
+           SET Status = @cancelled, CancelledBy = @owner, CancelledAt = @now
+          FROM Bookings AS b
+          JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
+         WHERE b.BusinessId = @businessId
+           AND b.Id = @bookingId
+           AND b.Modality = @dropIn
+           AND b.Status <> @cancelled
+           AND a.Kind = @classSession
+           AND a.Status = @scheduled
+           AND a.StartsAt > @now
         """;
 
     /// <summary>
@@ -262,6 +339,65 @@ public sealed class SqlClassDropInRepository(DbSession session)
             bookings.Select(booking => booking.Booking).ToArray());
     }
 
+    public async Task<IReadOnlyList<ClassSessionRow>> ListUpcomingRosterAsync(
+        int businessId, DateTime fromExclusive, CancellationToken ct = default)
+    {
+        var sessions = await QueryAsync(
+            ListUpcomingRosterSessionsSql,
+            MapSession,
+            p => AddRosterParameters(p, businessId, fromExclusive),
+            ct);
+
+        var dropIns = await QueryAsync(
+            ListUpcomingRosterDropInsSql,
+            MapBooking,
+            p => AddRosterParameters(p, businessId, fromExclusive),
+            ct);
+
+        var dropInsByAppointment = dropIns
+            .GroupBy(booking => booking.AppointmentId)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<ClassSessionBooking>)group.Select(booking => booking.Booking).ToArray());
+
+        // A class nobody booked as a drop-in is still part of the roster, with an empty annotation list: the owner
+        // screen shows the upcoming classes and, per class, who is booked as a drop-in.
+        return sessions
+            .Select(row => new ClassSessionRow(
+                row.AppointmentId,
+                row.ServiceId,
+                row.WorkerId,
+                row.StartsAt,
+                row.MaxCapacity,
+                row.Kind,
+                row.Status,
+                dropInsByAppointment.TryGetValue(row.AppointmentId, out var attached) ? attached : []))
+            .ToArray();
+    }
+
+    public Task<DropInCancellationState?> LockDropInForCancellationAsync(
+        int businessId, int bookingId, CancellationToken ct = default) =>
+        QuerySingleOrDefaultAsync(
+            LockDropInForCancellationSql,
+            MapDropInCancellationState,
+            p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId),
+            ct);
+
+    public async Task<bool> CancelDropInAsync(
+        int businessId, int bookingId, DateTime now, CancellationToken ct = default) =>
+        await ExecuteAsync(
+            CancelDropInSql,
+            p => p
+                .AddValue("@businessId", businessId)
+                .AddValue("@bookingId", bookingId)
+                .AddValue("@dropIn", BookingModality.DropIn)
+                .AddValue("@classSession", AppointmentKind.ClassSession)
+                .AddValue("@scheduled", AppointmentStatus.Scheduled)
+                .AddValue("@cancelled", BookingStatus.Cancelled)
+                .AddValue("@owner", CancelledBy.Owner)
+                .AddDateTime2("@now", now),
+            ct) == 1;
+
     public async Task<DropInClient> IdentifyClientAsync(
         int businessId, string email, string firstName, string lastName, string? phone,
         CancellationToken ct = default)
@@ -416,6 +552,18 @@ public sealed class SqlClassDropInRepository(DbSession session)
             .AddDateTime2("@rangeStart", rangeStart)
             .AddDateTime2("@dayAfterRangeEnd", dayAfterRangeEnd);
 
+    /// <summary>
+    /// The two instants a range-based read needs. <c>DATETIME2</c> has no inclusive maximum for a whole day, so the
+    /// bound is half-open on the end: <c>StartsAt &lt; (toInclusive + 1 day) 00:00</c>.
+    /// </summary>
+    private static void AddRosterParameters(
+        SqlParameterCollection parameters, int businessId, DateTime fromExclusive) =>
+        parameters
+            .AddValue("@businessId", businessId)
+            .AddValue("@classSession", AppointmentKind.ClassSession)
+            .AddValue("@dropIn", BookingModality.DropIn)
+            .AddDateTime2("@fromExclusive", fromExclusive);
+
     private static void AddInsertParameters(SqlParameterCollection parameters, DropInInsert insert) =>
         parameters
             .AddValue("@businessId", insert.BusinessId)
@@ -449,13 +597,31 @@ public sealed class SqlClassDropInRepository(DbSession session)
         reader.GetEnum<AppointmentStatus>("Status"));
 
     /// <summary>
-    /// One booking reduced to what the contract keeps: who holds it and whether it occupies a place. The booking id
-    /// is read by the query only to order the rows deterministically; <see cref="ClassSessionBooking"/> has no slot
-    /// for it, because the caller never needs a booking id to count places.
+    /// One booking reduced to what the contract keeps: which booking it is, who holds it, the modality, the client's
+    /// name and whether it occupies a place, so the same shape serves the occupancy count, the owner roster and the
+    /// cancellation read. The name is composed from the <c>LEFT JOIN</c>ed client and stays empty for a row that could
+    /// not be resolved: the booking is still counted, it is the display name that is missing.
     /// </summary>
     private static DatedBooking MapBooking(SqlDataReader reader) => new(
         reader.Get<int>("AppointmentId"),
-        new ClassSessionBooking(reader.Get<int>("ClientId"), reader.GetEnum<BookingStatus>("Status")));
+        new ClassSessionBooking(
+            reader.Get<int>("ClientId"),
+            reader.GetEnum<BookingStatus>("Status"),
+            reader.Get<int>("BookingId"),
+            reader.GetNullableEnum<BookingModality>("Modality"),
+            ReadClientName(reader)));
+
+    private static string ReadClientName(SqlDataReader reader) =>
+        $"{reader.GetNullableString("FirstName")} {reader.GetNullableString("LastName")}".Trim();
+
+    private static DropInCancellationState MapDropInCancellationState(SqlDataReader reader) => new(
+        reader.Get<int>("BookingId"),
+        reader.Get<int>("AppointmentId"),
+        reader.Get<DateTime>("StartsAt"),
+        reader.GetEnum<AppointmentKind>("Kind"),
+        reader.GetEnum<AppointmentStatus>("AppointmentStatus"),
+        reader.GetEnum<BookingStatus>("BookingStatus"),
+        reader.GetNullableEnum<BookingModality>("Modality"));
 
     private static DropInClient MapDropInClient(SqlDataReader reader) => new(
         reader.Get<int>("ClientId"),

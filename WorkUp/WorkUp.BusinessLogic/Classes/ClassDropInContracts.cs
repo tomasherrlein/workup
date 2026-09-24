@@ -3,17 +3,27 @@ using WorkUp.Domain.Enums;
 namespace WorkUp.BusinessLogic.Classes;
 
 /// <summary>
-/// One booking of a session reduced to the two facts the drop-in flow needs: who holds it and whether it occupies a
-/// place (D-25). The status is kept per booking instead of as a bare list so the caller can both count the places and
-/// detect that the same client already holds a non-cancelled booking of the session.
+/// One booking of a session reduced to the facts the drop-in flow needs: which booking it is, who holds it, whether
+/// it occupies a place and — on the owner roster — the client's name (D-25). The status is kept per booking instead
+/// of as a bare list so the caller can both count the places and detect that the same client already holds a
+/// non-cancelled booking of the session. <see cref="BookingId"/>, <see cref="Modality"/> and <see cref="ClientName"/>
+/// are filled by every read of the port; <see cref="BookingId"/> has no meaning for a booking that was not read yet
+/// and is <c>0</c> there, and <see cref="Modality"/> is <c>null</c> for an individual appointment, which has no
+/// modality at all.
 /// </summary>
-public sealed record ClassSessionBooking(int ClientId, BookingStatus Status);
+public sealed record ClassSessionBooking(
+    int ClientId,
+    BookingStatus Status,
+    int BookingId = 0,
+    BookingModality? Modality = null,
+    string ClientName = "");
 
 /// <summary>
 /// A dated class session as storage returns it for a drop-in booking (RF-07 cupo &gt; 1). <see cref="Kind"/> is the
 /// discriminant: only a <c>ClassSession</c> can receive drop-ins, because an individual turn is also <c>Programado</c>
-/// with capacity 1 and would otherwise look bookable. The bookings are kept with their client and status because the
-/// count of places only needs the statuses; cancelled ones are included so the caller, not the query, decides what a
+/// with capacity 1 and would otherwise look bookable. The bookings are kept with their client, modality and status
+/// because the count of places needs the statuses, the owner roster needs the modality and the client's name, and the
+/// same shape then serves both reads; cancelled ones are included so the caller, not the query, decides what a
 /// cancellation frees (D-25).
 /// </summary>
 public sealed record ClassSessionRow(
@@ -41,6 +51,50 @@ public sealed record ClassSessionOption(
     int MaxCapacity,
     int PlacesTaken,
     int RemainingPlaces);
+
+/// <summary>
+/// One drop-in annotation of an upcoming session as the owner roster reads it (RF-22, RF-07 cupo &gt; 1): which
+/// booking it is, which client holds it, that client's full name and the status of the annotation. Only an annotation
+/// with <c>Modality = Suelta</c> is ever projected here: a fixed annotation of the same session is not a drop-in, and
+/// the roster must never present it as one.
+/// </summary>
+public sealed record ClassDropInRosterEntry(int BookingId, int ClientId, string ClientName, BookingStatus Status);
+
+/// <summary>
+/// An upcoming class session of the business with its drop-in annotations, for the owner screen (RF-22). Cancelled
+/// annotations are part of the answer, with <see cref="BookingStatus.Cancelled"/> as their status: the owner has to
+/// know that the place was released and by whom, and the status is what lets the screen tell an active annotation
+/// from a cancelled one without a second query. A suspended session is part of the answer too, because suspending a
+/// class does not cancel its annotations and the owner still needs to see who is booked in it.
+/// </summary>
+public sealed record ClassDropInRosterSession(
+    int AppointmentId,
+    int ServiceId,
+    int WorkerId,
+    DateTime StartsAt,
+    int MaxCapacity,
+    AppointmentStatus Status,
+    IReadOnlyList<ClassDropInRosterEntry> DropIns)
+{
+    public DateOnly Date => DateOnly.FromDateTime(StartsAt);
+
+    public TimeOnly StartTime => TimeOnly.FromDateTime(StartsAt);
+}
+
+/// <summary>
+/// The drop-in annotation read under the cancellation lock (RF-22): the booking and the session facts the rules
+/// need. It is read inside the caller's transaction, scoped by business, so <see cref="BookingId"/> of another
+/// business is simply not there. <see cref="Modality"/> and <see cref="Kind"/> are what let the caller refuse a
+/// booking that is not a drop-in of a class with the same answer as a missing one.
+/// </summary>
+public sealed record DropInCancellationState(
+    int BookingId,
+    int AppointmentId,
+    DateTime StartsAt,
+    AppointmentKind Kind,
+    AppointmentStatus AppointmentStatus,
+    BookingStatus Status,
+    BookingModality? Modality);
 
 /// <summary>
 /// The client the booking belongs to: identified by email, created without a password when the email is unknown

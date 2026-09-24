@@ -13,8 +13,9 @@ public interface IClassDropInRepository
     /// <summary>
     /// Dated <c>ClassSession</c> rows of the business whose start day falls inside the inclusive date range
     /// <paramref name="fromInclusive"/>..<paramref name="toInclusive"/> (both ends included), optionally narrowed to
-    /// one service, each with the client and status of every one of its bookings, cancelled included, so the caller
-    /// counts the places with its own rule. The implementation must filter <c>a.Kind = @classSession</c>: an individual
+    /// one service, each with the booking id, the client, the client name, the modality and the status of every one of
+    /// its bookings, cancelled included, so the caller counts the places with its own rule. The implementation must
+    /// filter <c>a.Kind = @classSession</c>: an individual
     /// turn has capacity 1 and can also be <c>Programado</c>, so without the discriminant it would be offered as a
     /// class. The query does not filter by status or occupancy: the bookable window is a business rule, not a query
     /// shape.
@@ -43,6 +44,49 @@ public interface IClassDropInRepository
     /// two bookings competing for the last place: the count and the insert happen under the same lock.
     /// </summary>
     Task<ClassSessionRow?> LockSessionAsync(int businessId, int appointmentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Upcoming roster of the business (RF-22, RF-07 cupo &gt; 1): every <c>ClassSession</c> appointment of the
+    /// business that starts strictly after <paramref name="fromExclusive"/>, each with only its drop-in annotations —
+    /// cancelled ones included — as <see cref="ClassSessionBooking"/> rows carrying their booking id, modality,
+    /// client and client name. An annotation whose modality is not <c>Suelta</c> is never part of the answer: the
+    /// query filters <c>b.Modality = @dropIn</c>, so a fixed annotation of the same class can never reach the caller
+    /// as if it were a drop-in. A session or a booking of another business is invisible, and so is an individual turn:
+    /// the query carries the <c>a.Kind = @classSession</c> discriminant. A session without annotations is returned
+    /// with an empty list, never dropped. Ordering is by start, so the caller can present the roster as it comes.
+    /// </summary>
+    Task<IReadOnlyList<ClassSessionRow>> ListUpcomingRosterAsync(
+        int businessId, DateTime fromExclusive, CancellationToken ct = default);
+
+    /// <summary>
+    /// Locks the booking row of the business together with its session inside the caller's transaction, like
+    /// <c>SELECT ... WITH (UPDLOCK, ROWLOCK)</c>, and returns the facts the cancellation rules read (RF-22). It
+    /// returns <c>null</c> when the booking does not belong to the business, so a booking of another tenant and a
+    /// booking that does not exist are the same answer and cannot be told apart. It does not filter the modality or
+    /// the kind: the caller decides what to do with a booking that is not a drop-in of a class, and it must answer
+    /// both cases with the same stable code.
+    /// </summary>
+    Task<DropInCancellationState?> LockDropInForCancellationAsync(
+        int businessId, int bookingId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Marks the drop-in annotation <c>Cancelado</c>, with <c>CancelledAt = </c><paramref name="now"/> and
+    /// <c>CancelledBy = Owner</c>, and reports whether a row actually changed. It runs inside the caller's transaction
+    /// and is scoped by <c>BusinessId</c> and guarded by the same facts the caller just validated: the annotation must
+    /// be <c>Modality = Suelta</c> and not cancelled yet, and its session must be a <c>ClassSession</c> that is still
+    /// <c>Programado</c> and starts strictly after <paramref name="now"/>. The guard is not decorative: a row that
+    /// stopped matching between the lock and this statement (a session suspended in between, for instance) is left
+    /// untouched and reported as <c>false</c> instead of being cancelled anyway.
+    /// <para>
+    /// A concurrent double cancel cannot lose an update. The caller holds the <c>UPDLOCK</c> on the booking row for
+    /// the whole transaction, so the second canceller waits and then reads the already cancelled annotation and is
+    /// rejected before reaching this statement. And even without that lock the statement is a single atomic update
+    /// whose predicate requires the pre-cancellation status: at most one execution can match the row, the loser
+    /// changes zero rows and reports <c>false</c>, and <c>Status</c>, <c>CancelledAt</c> and <c>CancelledBy</c> are
+    /// written together with no read-modify-write window between them.
+    /// </para>
+    /// </summary>
+    Task<bool> CancelDropInAsync(int businessId, int bookingId, DateTime now, CancellationToken ct = default);
 
     /// <summary>
     /// Returns the client identified by <paramref name="email"/> inside the business, creating it without a password

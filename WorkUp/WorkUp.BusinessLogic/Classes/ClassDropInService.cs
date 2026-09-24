@@ -34,6 +34,20 @@ public sealed class ClassDropInService(
     private const int MaxNameLength = 60;
     private const int MaxEmailLength = 254;
 
+    /// <summary>Stable codes of the owner cancellation (RF-22). They are the caller's contract, not messages.</summary>
+    private const string DropInNotFoundCode = "drop_in_not_found";
+
+    private const string DropInNotAvailableCode = "drop_in_not_available";
+
+    private const string DropInAlreadyCancelledCode = "drop_in_already_cancelled";
+
+    private const string DropInNotFoundMessage = "No encontramos esa reserva suelta.";
+
+    private const string DropInNotAvailableMessage =
+        "La clase ya empezó o está suspendida: esa reserva suelta ya no se puede cancelar.";
+
+    private const string DropInAlreadyCancelledMessage = "Esa reserva suelta ya estaba cancelada.";
+
     /// <summary>
     /// Read-only offer of the bookable sessions in the inclusive date range, optionally narrowed to one service,
     /// ordered by start. A session that is suspended or already started is never offered (RF-07 step 2, RF-22), and
@@ -94,6 +108,61 @@ public sealed class ClassDropInService(
     }
 
     /// <summary>
+    /// Read-only roster of the upcoming classes of the business with their drop-in annotations, for the owner screen
+    /// (RF-22, RF-07 cupo &gt; 1). It reads the clock exactly once and passes that instant to storage: the "upcoming"
+    /// rule and every session judgement derive from the same value. A session that already started is excluded; a
+    /// suspended one is not, because suspending a class cancels nobody and the owner still needs to see who is booked
+    /// in it. Only annotations with <c>Modality = Suelta</c> are projected: a fixed annotation of the same class is
+    /// not a drop-in and is never presented as one. The read opens no transaction and writes nothing.
+    /// </summary>
+    public async Task<Result<IReadOnlyList<ClassDropInRosterSession>>> ListRosterAsync(
+        int businessId, CancellationToken ct = default)
+    {
+        if (businessId <= 0)
+            return Result<IReadOnlyList<ClassDropInRosterSession>>.Failure(
+                "drop_in_invalid_request", "No pudimos identificar el negocio.");
+
+        // The single clock read of the roster: the query bound and the judgement of every returned session use it.
+        var now = clock.Now;
+
+        var sessions = await repository.ListUpcomingRosterAsync(businessId, now, ct);
+
+        var roster = new List<ClassDropInRosterSession>(sessions.Count);
+        foreach (var session in sessions)
+        {
+            // The discriminant is not decorative: an individual turn has capacity 1 and can also be `Programado`, so
+            // without this check a repository that forgot the kind filter would list it as a class. The start is
+            // re-judged here for the same reason: "upcoming" is a business rule, not only a query bound.
+            if (session.Kind != AppointmentKind.ClassSession || session.StartsAt <= now)
+                continue;
+
+            // Only a `Suelta` annotation is a drop-in. A fixed annotation of the same class occupies a place, but it
+            // is not somebody who booked a single class: presenting it here would show the owner a drop-in that does
+            // not exist and would hide the difference between a fixed student and a drop-in student.
+            var dropIns = session.Bookings
+                .Where(booking => booking.Modality == BookingModality.DropIn)
+                .Select(booking => new ClassDropInRosterEntry(
+                    booking.BookingId, booking.ClientId, booking.ClientName, booking.Status))
+                .ToArray();
+
+            roster.Add(new ClassDropInRosterSession(
+                session.AppointmentId,
+                session.ServiceId,
+                session.WorkerId,
+                session.StartsAt,
+                session.MaxCapacity,
+                session.Status,
+                dropIns));
+        }
+
+        return Result<IReadOnlyList<ClassDropInRosterSession>>.Success(
+            roster
+                .OrderBy(session => session.StartsAt)
+                .ThenBy(session => session.AppointmentId)
+                .ToArray());
+    }
+
+    /// <summary>
     /// Books the client of the public form into the chosen session (RF-07). The client is identified by email and
     /// created without a password when unknown. Every rejection reports a stable error code and rolls back the
     /// transaction it opened.
@@ -124,6 +193,59 @@ public sealed class ClassDropInService(
 
         return await BookAsync(
             businessId, appointmentId, clientId, email: "", firstName: "", lastName: "", phone: null, ct);
+    }
+
+    /// <summary>
+    /// Cancels a drop-in annotation of the business before its class starts (RF-22). The whole operation is one unit:
+    /// the booking is read under the repository's row lock, judged, and cancelled inside the same transaction, which
+    /// commits exactly once; every rejection returns before the commit, so it rolls back without writing. The
+    /// cancellation marks the annotation <c>Cancelado</c>, stamps <see cref="IClock.Now"/> — the single clock read of
+    /// the operation — and records the owner as the author, which is what releases the place: the same client can book
+    /// the session again, because a cancelled booking no longer occupies a place and no longer trips
+    /// <c>UX_Bookings_ActiveClient</c>.
+    /// <para>
+    /// A booking of another business and a booking that does not exist are the same answer
+    /// (<c>drop_in_not_found</c>), and so is a booking that is not a drop-in of a class; an annotation whose
+    /// cancellation already happened answers <c>drop_in_already_cancelled</c> and is never written twice, so the
+    /// original instant and author survive a double click.
+    /// </para>
+    /// </summary>
+    public async Task<Result> CancelDropInAsync(
+        int businessId, int bookingId, CancellationToken ct = default)
+    {
+        // A missing identifier is answered like a missing booking: there is no booking of the business to cancel, and
+        // the caller must not be able to tell "you did not name it" from "it is not yours".
+        if (businessId <= 0 || bookingId <= 0)
+            return Result.Failure(DropInNotFoundCode, DropInNotFoundMessage);
+
+        // The single clock read of the cancellation: the availability check and the instant that gets persisted
+        // derive from the same value, so a clock that advances mid-call cannot split them.
+        var now = clock.Now;
+
+        await using var tx = await unitOfWork.BeginAsync(ct: ct);
+
+        // The booking row is the lock. It carries its session, and a booking of another business is simply not
+        // found, so nothing about another tenant's rows leaks through the answer.
+        var state = await repository.LockDropInForCancellationAsync(businessId, bookingId, ct);
+        if (state is null || state.Kind != AppointmentKind.ClassSession || state.Modality != BookingModality.DropIn)
+            return Result.Failure(DropInNotFoundCode, DropInNotFoundMessage);
+
+        // The availability of the class is judged before the state of the annotation, so the caller hears what it can
+        // do with this booking (nothing, the class is gone) before the report of what already happened to it.
+        if (!ClassCapacity.IsBookable(state.AppointmentStatus, state.StartsAt, now))
+            return Result.Failure(DropInNotAvailableCode, DropInNotAvailableMessage);
+
+        if (state.Status == BookingStatus.Cancelled)
+            return Result.Failure(DropInAlreadyCancelledCode, DropInAlreadyCancelledMessage);
+
+        // The guarded statement repeats every rule inside one atomic update. A row that stopped matching between the
+        // lock and the update — a session suspended in between, for instance — is left untouched and reported as
+        // "no row changed", and that is a state that no longer admits the cancellation.
+        if (!await repository.CancelDropInAsync(businessId, bookingId, now, ct))
+            return Result.Failure(DropInNotAvailableCode, DropInNotAvailableMessage);
+
+        await tx.CommitAsync(ct);
+        return Result.Success();
     }
 
     /// <summary>

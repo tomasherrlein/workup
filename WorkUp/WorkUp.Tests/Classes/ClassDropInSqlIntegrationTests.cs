@@ -9,6 +9,7 @@ using WorkUp.Data;
 using WorkUp.Data.Classes;
 using WorkUp.Domain.Entities;
 using WorkUp.Domain.Enums;
+using WorkUp.Tests.Fakes;
 using Xunit.Abstractions;
 
 namespace WorkUp.Tests.Classes;
@@ -371,6 +372,157 @@ public sealed class ClassDropInSqlIntegrationTests(ITestOutputHelper output)
         output.WriteLine("Rollback assertions passed: the client and the booking were visible inside the transaction and both were gone after disposing it without committing.");
     }
 
+    [Fact]
+    public async Task Roster_returns_only_the_drop_in_annotations_of_the_business_with_the_client_name()
+    {
+        var target = await ResolveTargetAsync("_Roster");
+        if (target is null)
+            return;
+
+        var ids = await SeedRosterAsync(target.ConnectionString, FixedNow);
+
+        await using var session = new DbSession(target.ConnectionString);
+        var repository = new SqlClassDropInRepository(session);
+
+        var roster = await repository.ListUpcomingRosterAsync(ids.BusinessA, FixedNow);
+
+        // Two upcoming sessions of the business, ordered by start: the empty one first, then the annotated one. The
+        // started session, the individual turn and the session of the other business are not part of the answer.
+        Assert.Equal(2, roster.Count);
+        Assert.Equal(
+            new[] { ids.SessionWithoutAnnotations, ids.SessionUpcoming },
+            roster.Select(row => row.AppointmentId).ToArray());
+
+        var empty = roster[0];
+        Assert.Empty(empty.Bookings);
+        Assert.Equal(4, empty.MaxCapacity);
+
+        var upcoming = roster[1];
+        Assert.Equal(ids.ServiceA, upcoming.ServiceId);
+        Assert.Equal(ids.WorkerA, upcoming.WorkerId);
+        Assert.Equal(8, upcoming.MaxCapacity);
+        Assert.Equal(AppointmentKind.ClassSession, upcoming.Kind);
+        Assert.Equal(AppointmentStatus.Scheduled, upcoming.Status);
+
+        // Only the drop-in annotations travel with the session, and the fixed one is never among them whatever its
+        // status is. The cancelled drop-in is kept, with its status and its client, so the owner can see the released
+        // place and who released it.
+        Assert.DoesNotContain(upcoming.Bookings, booking => booking.BookingId == ids.FixedBooking);
+        Assert.All(upcoming.Bookings, booking => Assert.Equal(BookingModality.DropIn, booking.Modality));
+        var pending = Assert.Single(upcoming.Bookings, booking => booking.BookingId == ids.PendingDropIn);
+        Assert.Equal(ids.FirstClient, pending.ClientId);
+        Assert.Equal("Ana Perez", pending.ClientName);
+        Assert.Equal(BookingStatus.Pending, pending.Status);
+        var cancelled = Assert.Single(upcoming.Bookings, booking => booking.BookingId == ids.CancelledDropIn);
+        Assert.Equal(ids.SecondClient, cancelled.ClientId);
+        Assert.Equal("Bella Cancelada", cancelled.ClientName);
+        Assert.Equal(BookingStatus.Cancelled, cancelled.Status);
+
+        Assert.DoesNotContain(roster, row => row.AppointmentId == ids.SessionStarted);
+        Assert.DoesNotContain(roster, row => row.AppointmentId == ids.IndividualAppointment);
+        Assert.DoesNotContain(roster, row => row.AppointmentId == ids.SessionOfOtherBusiness);
+        Assert.DoesNotContain(roster, row => row.Bookings.Any(booking => booking.BookingId == ids.ForeignDropIn));
+
+        // The other tenant sees its own annotation and nothing of business A's.
+        var otherRoster = await repository.ListUpcomingRosterAsync(ids.BusinessB, FixedNow);
+        var otherSession = Assert.Single(otherRoster);
+        Assert.Equal(ids.SessionOfOtherBusiness, otherSession.AppointmentId);
+        var foreign = Assert.Single(otherSession.Bookings);
+        Assert.Equal(ids.ForeignDropIn, foreign.BookingId);
+        Assert.Equal("Otra Alumna", foreign.ClientName);
+        Assert.Equal(BookingModality.DropIn, foreign.Modality);
+
+        output.WriteLine("Roster assertions passed: upcoming class sessions of the business ordered by start, empty sessions kept, drop-in annotations with booking id and client name, cancelled annotation kept with its status, and the fixed annotation, the individual turn, the started session and the other business all excluded.");
+    }
+
+    [Fact]
+    public async Task Cancelling_a_drop_in_marks_the_owner_and_releases_the_place_for_the_same_client()
+    {
+        var target = await ResolveTargetAsync("_Cancel");
+        if (target is null)
+            return;
+
+        var ids = await SeedCancellationAsync(target.ConnectionString, FixedNow);
+
+        await using var session = new DbSession(target.ConnectionString);
+        var clock = new FakeClock { Now = FixedNow };
+        var service = new ClassDropInService(new SqlClassDropInRepository(session), session, clock);
+
+        // The unit the service opened committed: the row carries the status, the instant of the single clock read and
+        // the owner as the author of the cancellation.
+        var cancelled = await service.CancelDropInAsync(ids.BusinessA, ids.DropInBooking);
+        Assert.True(cancelled.Succeeded, cancelled.Error?.Code);
+        var row = await ReadBookingAsync(target.ConnectionString, ids.DropInBooking);
+        Assert.Equal(BookingStatus.Cancelled, row.Status);
+        Assert.Equal(FixedNow, row.CancelledAt);
+        Assert.Equal(CancelledBy.Owner, row.CancelledBy);
+
+        // The second cancellation is rejected and the original instant and author survive: the guarded statement
+        // changes nothing once the annotation is cancelled.
+        clock.Now = FixedNow.AddMinutes(1);
+        var again = await service.CancelDropInAsync(ids.BusinessA, ids.DropInBooking);
+        Assert.False(again.Succeeded);
+        Assert.Equal("drop_in_already_cancelled", again.Error!.Code);
+        var unchanged = await ReadBookingAsync(target.ConnectionString, ids.DropInBooking);
+        Assert.Equal(BookingStatus.Cancelled, unchanged.Status);
+        Assert.Equal(FixedNow, unchanged.CancelledAt);
+        Assert.Equal(CancelledBy.Owner, unchanged.CancelledBy);
+
+        // The cancellation released the place: the class was full — the fixed annotation plus the drop-in — and the
+        // released place leaves one non-cancelled booking, which is what lets the same client book it again.
+        Assert.Equal(2, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId",
+            ("@appointmentId", ids.Session)));
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId AND Status <> @cancelled",
+            ("@appointmentId", ids.Session), ("@cancelled", BookingStatus.Cancelled)));
+        clock.Now = FixedNow.AddMinutes(2);
+        var rebooked = await service.BookForClientAsync(ids.BusinessA, ids.Session, ids.Client);
+        Assert.True(rebooked.Succeeded, rebooked.Error?.Code);
+        var rebookedRow = await ReadBookingAsync(target.ConnectionString, rebooked.Value.BookingId);
+        Assert.Equal(ids.Session, rebookedRow.AppointmentId);
+        Assert.Equal(ids.Client, rebookedRow.ClientId);
+        Assert.Equal(BookingModality.DropIn, rebookedRow.Modality);
+        Assert.Equal(BookingStatus.Pending, rebookedRow.Status);
+        Assert.Null(rebookedRow.CancelledAt);
+        Assert.Equal(3, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId", ("@appointmentId", ids.Session)));
+        Assert.Equal(2, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId AND Status <> @cancelled",
+            ("@appointmentId", ids.Session), ("@cancelled", BookingStatus.Cancelled)));
+
+        // A fixed annotation is not a drop-in, so it is answered exactly like a booking of another business or a
+        // booking that does not exist, and none of the three is written.
+        var fixedResult = await service.CancelDropInAsync(ids.BusinessA, ids.FixedBooking);
+        var foreignResult = await service.CancelDropInAsync(ids.BusinessA, ids.ForeignDropIn);
+        var missingResult = await service.CancelDropInAsync(ids.BusinessA, int.MaxValue);
+        Assert.False(fixedResult.Succeeded);
+        Assert.False(foreignResult.Succeeded);
+        Assert.False(missingResult.Succeeded);
+        Assert.Equal("drop_in_not_found", missingResult.Error!.Code);
+        Assert.Equal(missingResult.Error!.Code, fixedResult.Error!.Code);
+        Assert.Equal(missingResult.Error!.Message, fixedResult.Error!.Message);
+        Assert.Equal(missingResult.Error!.Code, foreignResult.Error!.Code);
+        Assert.Equal(BookingStatus.Pending, (await ReadBookingAsync(target.ConnectionString, ids.FixedBooking)).Status);
+        Assert.Equal(BookingStatus.Pending, (await ReadBookingAsync(target.ConnectionString, ids.ForeignDropIn)).Status);
+
+        // A suspended or already started class cannot be cancelled: the annotation keeps its status and no instant.
+        var suspended = await service.CancelDropInAsync(ids.BusinessA, ids.SuspendedDropIn);
+        clock.Now = FixedNow.AddMinutes(3);
+        var started = await service.CancelDropInAsync(ids.BusinessA, ids.StartedDropIn);
+        Assert.False(suspended.Succeeded);
+        Assert.False(started.Succeeded);
+        Assert.Equal("drop_in_not_available", suspended.Error!.Code);
+        Assert.Equal("drop_in_not_available", started.Error!.Code);
+        Assert.Equal(BookingStatus.Pending, (await ReadBookingAsync(target.ConnectionString, ids.SuspendedDropIn)).Status);
+        var startedRow = await ReadBookingAsync(target.ConnectionString, ids.StartedDropIn);
+        Assert.Equal(BookingStatus.Pending, startedRow.Status);
+        Assert.Null(startedRow.CancelledAt);
+        Assert.Null((await ReadBookingAsync(target.ConnectionString, ids.SuspendedDropIn)).CancelledAt);
+
+        output.WriteLine("Cancellation assertions passed: the drop-in was marked Cancelado with CancelledAt from the clock and CancelledBy=Owner, the second attempt was rejected with the original facts intact, the released place let the same client book again, the fixed, foreign and missing bookings were indistinguishable and untouched, and a suspended or started class was refused without writing.");
+    }
+
     /// <summary>
     /// Resolves this test's opt-in target. <c>null</c> means the variable is absent: the test returns N/A without
     /// opening any connection or touching any server.
@@ -662,6 +814,118 @@ public sealed class ClassDropInSqlIntegrationTests(ITestOutputHelper output)
         return new RollbackIds(businessA, session);
     }
 
+    private static async Task<RosterIds> SeedRosterAsync(string connectionString, DateTime now)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var businessA = await InsertBusinessAsync(connection, transaction, "Synthetic T14 Roster Business", "synthetic-t14-roster", now);
+        var businessB = await InsertBusinessAsync(connection, transaction, "Synthetic T14 Roster Other", "synthetic-t14-roster-other", now);
+        var serviceA = await InsertServiceAsync(connection, transaction, businessA, "Synthetic T14 Roster Class", 60, 8);
+        var serviceB = await InsertServiceAsync(connection, transaction, businessB, "Synthetic T14 Roster Other Class", 60, 8);
+        var workerA = await InsertWorkerAsync(connection, transaction, businessA, "Roster", "Teacher", "20181818181");
+        var workerB = await InsertWorkerAsync(connection, transaction, businessB, "Other", "Teacher", "20181818182");
+        var firstClient = await InsertClientAsync(connection, transaction, businessA, "Ana", "Perez", "t14.roster.client1@example.invalid", now);
+        var secondClient = await InsertClientAsync(connection, transaction, businessA, "Bella", "Cancelada", "t14.roster.client2@example.invalid", now);
+        var fixedClient = await InsertClientAsync(connection, transaction, businessA, "Fija", "Estudiante", "t14.roster.fixed@example.invalid", now);
+        var foreignClient = await InsertClientAsync(connection, transaction, businessB, "Otra", "Alumna", "t14.roster.foreign@example.invalid", now);
+
+        // An upcoming class nobody booked as a drop-in: the roster keeps it, with an empty annotation list.
+        var sessionWithoutAnnotations = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Tuesday, new TimeOnly(9, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 10, 9, 0, 0), 60, 4, AppointmentStatus.Scheduled, now);
+
+        // The annotated class: a fixed annotation, a pending drop-in and a cancelled one. Only the last two are
+        // drop-ins, whatever their status is.
+        var sessionUpcoming = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Tuesday, new TimeOnly(17, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 10, 17, 0, 0), 60, 8, AppointmentStatus.Scheduled, now);
+        var enrollment = await InsertEnrollmentAsync(connection, transaction, businessA, fixedClient, now);
+        var fixedBooking = await InsertBookingAsync(connection, transaction, businessA, sessionUpcoming, fixedClient,
+            enrollment, BookingModality.Fixed, BookingStatus.Pending, now);
+        var pendingDropIn = await InsertBookingAsync(connection, transaction, businessA, sessionUpcoming, firstClient,
+            null, BookingModality.DropIn, BookingStatus.Pending, now);
+        var cancelledDropIn = await InsertBookingAsync(connection, transaction, businessA, sessionUpcoming, secondClient,
+            null, BookingModality.DropIn, BookingStatus.Cancelled, now);
+
+        // A class that already started and an individual turn inside the window: neither one is a roster entry.
+        var sessionStarted = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Monday, new TimeOnly(7, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 9, 7, 0, 0), 60, 8, AppointmentStatus.Scheduled, now);
+        await InsertBookingAsync(connection, transaction, businessA, sessionStarted, firstClient, null,
+            BookingModality.DropIn, BookingStatus.Pending, now);
+        var individualAppointment = await InsertIndividualAppointmentAsync(connection, transaction, businessA,
+            serviceA, workerA, new DateTime(2026, 3, 9, 9, 0, 0), 60, now);
+        await InsertBookingAsync(connection, transaction, businessA, individualAppointment, firstClient, null,
+            null, BookingStatus.Pending, now);
+
+        // The other tenant: a class at the same instant as business A's, which business A must never see.
+        var sessionOfOtherBusiness = await InsertClassSessionAsync(connection, transaction, businessB,
+            await InsertGridClassAsync(connection, transaction, businessB, serviceB, workerB, DayOfWeek.Tuesday, new TimeOnly(17, 0)),
+            serviceB, workerB, new DateTime(2026, 3, 10, 17, 0, 0), 60, 8, AppointmentStatus.Scheduled, now);
+        var foreignDropIn = await InsertBookingAsync(connection, transaction, businessB, sessionOfOtherBusiness,
+            foreignClient, null, BookingModality.DropIn, BookingStatus.Pending, now);
+
+        await transaction.CommitAsync();
+
+        return new RosterIds(businessA, businessB, serviceA, workerA, firstClient, secondClient, fixedClient,
+            sessionWithoutAnnotations, sessionUpcoming, sessionStarted, individualAppointment, sessionOfOtherBusiness,
+            fixedBooking, pendingDropIn, cancelledDropIn, foreignDropIn);
+    }
+
+    private static async Task<CancellationIds> SeedCancellationAsync(string connectionString, DateTime now)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var businessA = await InsertBusinessAsync(connection, transaction, "Synthetic T14 Cancel Business", "synthetic-t14-cancel", now);
+        var businessB = await InsertBusinessAsync(connection, transaction, "Synthetic T14 Cancel Other", "synthetic-t14-cancel-other", now);
+        var serviceA = await InsertServiceAsync(connection, transaction, businessA, "Synthetic T14 Cancel Class", 60, 8);
+        var serviceB = await InsertServiceAsync(connection, transaction, businessB, "Synthetic T14 Cancel Other Class", 60, 8);
+        var workerA = await InsertWorkerAsync(connection, transaction, businessA, "Cancel", "Teacher", "20191919191");
+        var workerB = await InsertWorkerAsync(connection, transaction, businessB, "Other", "Teacher", "20191919192");
+        var client = await InsertClientAsync(connection, transaction, businessA, "Ana", "Perez", "t14.cancel.client@example.invalid", now);
+        var fixedClient = await InsertClientAsync(connection, transaction, businessA, "Fija", "Estudiante", "t14.cancel.fixed@example.invalid", now);
+        var foreignClient = await InsertClientAsync(connection, transaction, businessB, "Otra", "Alumna", "t14.cancel.foreign@example.invalid", now);
+
+        // Capacity 2 with a fixed annotation of another client and the drop-in to cancel: the class is full, and only
+        // the place the cancellation releases lets the same client book it again.
+        var session = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Friday, new TimeOnly(10, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 20, 10, 0, 0), 60, 2, AppointmentStatus.Scheduled, now);
+        var enrollment = await InsertEnrollmentAsync(connection, transaction, businessA, fixedClient, now);
+        var fixedBooking = await InsertBookingAsync(connection, transaction, businessA, session, fixedClient,
+            enrollment, BookingModality.Fixed, BookingStatus.Pending, now);
+        var dropInBooking = await InsertBookingAsync(connection, transaction, businessA, session, client,
+            null, BookingModality.DropIn, BookingStatus.Pending, now);
+
+        // A suspended class and one that already started: both refuse the cancellation without writing.
+        var suspendedSession = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Saturday, new TimeOnly(10, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 21, 10, 0, 0), 60, 8, AppointmentStatus.Suspended, now);
+        var suspendedDropIn = await InsertBookingAsync(connection, transaction, businessA, suspendedSession, client,
+            null, BookingModality.DropIn, BookingStatus.Pending, now);
+        var startedSession = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, DayOfWeek.Monday, new TimeOnly(7, 0)),
+            serviceA, workerA, new DateTime(2026, 3, 9, 7, 0, 0), 60, 8, AppointmentStatus.Scheduled, now);
+        var startedDropIn = await InsertBookingAsync(connection, transaction, businessA, startedSession, client,
+            null, BookingModality.DropIn, BookingStatus.Pending, now);
+
+        // A drop-in of the other tenant, invisible to business A.
+        var sessionOfOtherBusiness = await InsertClassSessionAsync(connection, transaction, businessB,
+            await InsertGridClassAsync(connection, transaction, businessB, serviceB, workerB, DayOfWeek.Friday, new TimeOnly(10, 0)),
+            serviceB, workerB, new DateTime(2026, 3, 20, 10, 0, 0), 60, 8, AppointmentStatus.Scheduled, now);
+        var foreignDropIn = await InsertBookingAsync(connection, transaction, businessB, sessionOfOtherBusiness,
+            foreignClient, null, BookingModality.DropIn, BookingStatus.Pending, now);
+
+        await transaction.CommitAsync();
+
+        return new CancellationIds(businessA, businessB, session, client, dropInBooking, fixedBooking,
+            suspendedSession, suspendedDropIn, startedSession, startedDropIn, foreignDropIn);
+    }
+
     private static Task<int> InsertBusinessAsync(
         SqlConnection connection, SqlTransaction transaction, string name, string slug, DateTime now) =>
         InsertIdAsync(connection, transaction,
@@ -779,7 +1043,7 @@ public sealed class ClassDropInSqlIntegrationTests(ITestOutputHelper output)
         await using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync();
         await using var command = new SqlCommand(
-            "SELECT BusinessId, AppointmentId, ClientId, EnrollmentId, Modality, Status, CancelledAt, CreatedAt FROM Bookings WHERE Id = @id",
+            "SELECT BusinessId, AppointmentId, ClientId, EnrollmentId, Modality, Status, CancelledAt, CreatedAt, CancelledBy FROM Bookings WHERE Id = @id",
             connection);
         AddParameter(command, "@id", bookingId);
         await using var reader = await command.ExecuteReaderAsync();
@@ -792,7 +1056,8 @@ public sealed class ClassDropInSqlIntegrationTests(ITestOutputHelper output)
             reader.IsDBNull(4) ? null : (BookingModality)reader.GetByte(4),
             (BookingStatus)reader.GetByte(5),
             reader.IsDBNull(6) ? null : reader.GetDateTime(6),
-            reader.GetDateTime(7));
+            reader.GetDateTime(7),
+            reader.IsDBNull(8) ? null : (CancelledBy)reader.GetByte(8));
     }
 
     private static async Task<NotificationSnapshot> ReadNotificationAsync(string connectionString, string dedupKey)
@@ -873,6 +1138,37 @@ public sealed class ClassDropInSqlIntegrationTests(ITestOutputHelper output)
 
     private sealed record RollbackIds(int BusinessA, int Session);
 
+    private sealed record RosterIds(
+        int BusinessA,
+        int BusinessB,
+        int ServiceA,
+        int WorkerA,
+        int FirstClient,
+        int SecondClient,
+        int FixedClient,
+        int SessionWithoutAnnotations,
+        int SessionUpcoming,
+        int SessionStarted,
+        int IndividualAppointment,
+        int SessionOfOtherBusiness,
+        int FixedBooking,
+        int PendingDropIn,
+        int CancelledDropIn,
+        int ForeignDropIn);
+
+    private sealed record CancellationIds(
+        int BusinessA,
+        int BusinessB,
+        int Session,
+        int Client,
+        int DropInBooking,
+        int FixedBooking,
+        int SuspendedSession,
+        int SuspendedDropIn,
+        int StartedSession,
+        int StartedDropIn,
+        int ForeignDropIn);
+
     private sealed record BookingSnapshot(
         int BusinessId,
         int AppointmentId,
@@ -881,7 +1177,8 @@ public sealed class ClassDropInSqlIntegrationTests(ITestOutputHelper output)
         BookingModality? Modality,
         BookingStatus Status,
         DateTime? CancelledAt,
-        DateTime CreatedAt);
+        DateTime CreatedAt,
+        CancelledBy? CancelledBy);
 
     private sealed record NotificationSnapshot(NotificationType Type, string Recipient, string Subject, string BodyHtml);
 }
