@@ -63,9 +63,10 @@ public sealed record ClassDropInRosterEntry(int BookingId, int ClientId, string 
 /// <summary>
 /// An upcoming class session of the business with its drop-in annotations, for the owner screen (RF-22). Cancelled
 /// annotations are part of the answer, with <see cref="BookingStatus.Cancelled"/> as their status: the owner has to
-/// know that the place was released and by whom, and the status is what lets the screen tell an active annotation
-/// from a cancelled one without a second query. A suspended session is part of the answer too, because suspending a
-/// class does not cancel its annotations and the owner still needs to see who is booked in it.
+/// know that the place was released and which client's place it was — the entry carries that client's name, never the
+/// owner who cancelled it — and the status is what lets the screen tell an active annotation from a cancelled one
+/// without a second query. A suspended session is part of the answer too, because suspending a class does not cancel
+/// its annotations and the owner still needs to see who is booked in it.
 /// </summary>
 public sealed record ClassDropInRosterSession(
     int AppointmentId,

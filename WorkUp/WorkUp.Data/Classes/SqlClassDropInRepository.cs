@@ -119,10 +119,14 @@ public sealed class SqlClassDropInRepository(DbSession session)
         """;
 
     /// <summary>
-    /// Locks the booking row of the business together with its session inside the caller's transaction, so the rules
-    /// the caller reads here cannot change under it before it writes. The tenant is part of the predicate, so a
-    /// booking of another business is simply not found and is indistinguishable from a missing one. The modality and
-    /// the kind are not filtered: the caller decides what to do with a booking that is not a drop-in of a class.
+    /// Locks the booking row of the business inside the caller's transaction, so two cancellations of the same
+    /// annotation are serialized on that row, and reads its session facts with the same statement. Only the booking
+    /// row carries the hint: the joined session row is read, not write-locked, so a concurrent suspension of the
+    /// class is not blocked here. What makes this read-then-write safe is the guarded cancellation statement, whose
+    /// predicate repeats every rule and changes no row when the state moved in between. The tenant is part of the
+    /// predicate, so a booking of another business is simply not found and is indistinguishable from a missing one.
+    /// The modality and the kind are not filtered: the caller decides what to do with a booking that is not a drop-in
+    /// of a class.
     /// </summary>
     private const string LockDropInForCancellationSql = """
         SELECT b.Id AS BookingId, a.Id AS AppointmentId, a.StartsAt, a.Kind, a.Status AS AppointmentStatus,
@@ -553,8 +557,10 @@ public sealed class SqlClassDropInRepository(DbSession session)
             .AddDateTime2("@dayAfterRangeEnd", dayAfterRangeEnd);
 
     /// <summary>
-    /// The two instants a range-based read needs. <c>DATETIME2</c> has no inclusive maximum for a whole day, so the
-    /// bound is half-open on the end: <c>StartsAt &lt; (toInclusive + 1 day) 00:00</c>.
+    /// The parameters of a roster read: the business, the strictly-future lower bound <c>@fromExclusive</c> and the
+    /// two discriminants of that read. There is no upper bound to compute, because the roster has no end instant: the
+    /// window the owner sees is the caller's business rule, and <c>StartsAt &gt; @fromExclusive</c> is the whole
+    /// range the query needs.
     /// </summary>
     private static void AddRosterParameters(
         SqlParameterCollection parameters, int businessId, DateTime fromExclusive) =>

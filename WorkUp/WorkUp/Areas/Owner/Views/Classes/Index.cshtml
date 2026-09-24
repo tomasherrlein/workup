@@ -12,6 +12,8 @@
         @if (Model.HasAnyActive)
         {
             <a class="btn" asp-action="Week">@Icons.Svg("repeat") Generar semana</a>
+            @* Same gate as "Generar semana": without an active grid class there is no generated class to book a suelta into. *@
+            <a class="btn" asp-action="DropIns">@Icons.Svg("user") Clases sueltas</a>
         }
         <a class="btn btn-primary" asp-action="Create">@Icons.Svg("plus") Nueva clase</a>
     </div>

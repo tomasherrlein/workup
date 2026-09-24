@@ -59,8 +59,12 @@ public interface IClassDropInRepository
         int businessId, DateTime fromExclusive, CancellationToken ct = default);
 
     /// <summary>
-    /// Locks the booking row of the business together with its session inside the caller's transaction, like
-    /// <c>SELECT ... WITH (UPDLOCK, ROWLOCK)</c>, and returns the facts the cancellation rules read (RF-22). It
+    /// Locks the booking row of the business inside the caller's transaction, like
+    /// <c>SELECT ... WITH (UPDLOCK, ROWLOCK)</c>, and returns the facts the cancellation rules read (RF-22). The
+    /// booking row is the lock: it is what makes two cancellations of the same annotation wait for each other instead
+    /// of racing. The session facts the rules need come from the same read, but the joined session row is only read,
+    /// not locked with the hint; the safety of reading first and writing after rests on the guarded cancellation
+    /// statement, which repeats every rule in its predicate and changes no row when the state moved in between. It
     /// returns <c>null</c> when the booking does not belong to the business, so a booking of another tenant and a
     /// booking that does not exist are the same answer and cannot be told apart. It does not filter the modality or
     /// the kind: the caller decides what to do with a booking that is not a drop-in of a class, and it must answer
