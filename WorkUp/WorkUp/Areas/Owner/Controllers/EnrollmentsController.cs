@@ -213,9 +213,11 @@ public sealed class EnrollmentsController(
     ];
 
     /// <summary>
-    /// Fills the form options and, on the first render only, seeds the defaults: the lowest configured frequency, its
-    /// tariff as the agreed price, and the registration day. On a re-render the bound values are kept untouched, so a
-    /// rejected create never overwrites what the owner typed or cleared.
+    /// Fills the form options. On the first render only it preselects the lowest configured frequency and seeds its
+    /// tariff as the model's agreed price: the amount input itself starts empty and that tariff is only its
+    /// placeholder, so leaving the amount untouched lets the service apply the tariff of the frequency the owner
+    /// actually chose (D-20). The registration day is not seeded here: the clock reads it at POST time. On a re-render
+    /// the bound values are kept untouched, so a rejected create never overwrites what the owner typed or cleared.
     /// </summary>
     private async Task<EnrollmentFormViewModel> BuildFormAsync(
         EnrollmentFormViewModel model, bool applyDefaults, CancellationToken ct)
@@ -241,6 +243,16 @@ public sealed class EnrollmentsController(
             model.AgreedPrice ??= model.FrequencyOptions
                 .FirstOrDefault(option => option.Frequency == model.WeeklyFrequency)?.Price;
         }
+
+        // The amount input starts empty on the first render: changing the frequency without touching the amount must
+        // post no amount so the service uses the tariff of the chosen frequency (D-20), never the tariff preseeded for
+        // another one. The tariff of the preselected frequency is therefore only the placeholder. A re-render keeps
+        // the typed value, so the placeholder is informational there.
+        ViewData["AgreedPriceStartsEmpty"] = applyDefaults;
+        ViewData["AgreedPricePlaceholder"] = model.FrequencyOptions
+            .FirstOrDefault(option => option.Frequency == model.WeeklyFrequency) is { } preselected
+                ? Formatting.Money(preselected.Price)
+                : null;
 
         return model;
     }

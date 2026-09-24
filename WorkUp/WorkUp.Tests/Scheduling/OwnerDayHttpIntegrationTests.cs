@@ -8,6 +8,7 @@ using Microsoft.Data.SqlClient;
 using WorkUp.Areas.Owner.Models.Day;
 using WorkUp.Data.DemoData;
 using WorkUp.Domain.Enums;
+using WorkUp.Domain.Rules;
 using WorkUp.Infrastructure;
 using Xunit.Abstractions;
 
@@ -15,7 +16,7 @@ namespace WorkUp.Tests.Scheduling;
 
 /// <summary>
 /// Opt-in, reusable HTTP integration harness for the owner panel. It drives the real MVC host over loopback with
-/// cookies and antiforgery, then verifies the persisted rows with ADO.NET, and it covers three independent flows.
+/// cookies and antiforgery, then verifies the persisted rows with ADO.NET, and it covers four independent flows.
 /// The Jornada (RF-11/RF-15): owner login, one synthetic client through the owner form, GET /panel/Day, a walk-in with
 /// an exact agreed price plus immediate payment and next-visit note, a second overlapping walk-in saved with a
 /// warning, and the anti-CSRF rejection. The week generation (RF-06): yoga owner login, the first real render of
@@ -24,8 +25,12 @@ namespace WorkUp.Tests.Scheduling;
 /// cupo &gt; 1): yoga owner login, the default-week confirm that gives the roster its sessions, the first real render
 /// of GET /panel/Classes/DropIns with its session rows, one client created through the owner form and booked as a
 /// suelta, the owner cancellation that frees the place, the public booking from /r/{slug}/clases with its
-/// confirmation and the client it creates without an account, and the anti-CSRF rejection. It replaces manual scratch
-/// scripts: the same test is the smoke it used to need.
+/// confirmation and the client it creates without an account, and the anti-CSRF rejection. The memberships (RF-05,
+/// RF-20, RF-29): yoga owner login, the tariff configured from the owner Settings screen, the create form that offers
+/// the grid classes and the configured tariff with the amount empty, the pending enrollment created with no amount,
+/// the charge that activates it with one payment and one period matching MembershipCalendar, and the anti-CSRF
+/// rejection; this fourth flow deliberately reuses the T12 harness variables and prefix to avoid duplicating the
+/// isolation harness. It replaces manual scratch scripts: the same test is the smoke it used to need.
 ///
 /// Without <c>WORKUP_T12_HTTP_CONNECTION</c> each test logs N/A and returns before any SQL connection or HTTP
 /// request, so the default suite is unaffected. With it set, the harness refuses to run unless it can prove the
@@ -201,6 +206,60 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
             Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
             output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
             await RunDropInFlowAsync(host.BaseUrl, plan, password);
+        }
+        finally
+        {
+            await StopWebHostAsync(host.Process);
+        }
+
+        output.WriteLine("All HTTP/SQL checkpoints passed; the isolated database and encrypted keyring stay in place (no DROP or DELETE).");
+    }
+
+    [Fact]
+    public async Task Memberships_render_and_activate_on_an_isolated_http_host()
+    {
+        var suppliedConnection = Environment.GetEnvironmentVariable(ConnectionVariable);
+        if (string.IsNullOrWhiteSpace(suppliedConnection))
+        {
+            output.WriteLine($"N/A: {ConnectionVariable} is not set; no SQL connection, database, or HTTP host was used.");
+            return;
+        }
+
+        // Preflight runs before any SQL connection: an unsafe assistant or a reused target stops the run here.
+        var plan = PlanHarness(suppliedConnection);
+        output.WriteLine($"Runtime: database '{plan.DatabaseName}', isolated keyring '{plan.KeysPath}', next free port {plan.Port}.");
+
+        await CreateDatabaseAsync(plan);
+
+        // The demo password exists only in memory and is never written to output or to any log.
+        var password = "T15-" + Guid.NewGuid().ToString("N") + "!aA1";
+
+        // First owned host migrates the fresh database and materializes the isolated encrypted keyring.
+        var migrations = StartWebHost(plan, plan.Port);
+        try
+        {
+            await WaitUntilReadyAsync(migrations);
+            Assert.False(migrations.Process.HasExited, "The owned migration host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned migration host (pid {migrations.Process.Id}) became ready on {migrations.BaseUrl}.");
+        }
+        finally
+        {
+            await StopWebHostAsync(migrations.Process);
+        }
+        AssertKeyringCreated(plan.KeysPath);
+
+        // The explicit T07 seed into the migrated, dedicated database, reusing the real hasher and clock.
+        await SeedDemoAsync(plan.ConnectionString, password);
+        output.WriteLine("SQL: T07 demo seeded (marina.demo and lucia.demo) into the isolated database.");
+
+        // Second owned host serves the authenticated owner flow with a brand-new loopback port.
+        var host = StartWebHost(plan, FindFreeLoopbackPort());
+        try
+        {
+            await WaitUntilReadyAsync(host);
+            Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
+            await RunMembershipFlowAsync(host.BaseUrl, plan, password);
         }
         finally
         {
@@ -716,6 +775,212 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
         // The harness never writes a secret: every diagnostic line reports only booleans, identifiers, counts or paths,
         // and this proves it against the password, every antiforgery token and every cookie of the authenticated run.
         // Short cookie values are skipped because they are not secrets and could match any line by accident.
+        foreach (Cookie cookie in handler.CookieContainer.GetAllCookies())
+        {
+            if (cookie.Value.Length >= 8)
+                secrets.Add(cookie.Value);
+        }
+
+        Assert.NotEmpty(written);
+        var leaked = written.Any(line => secrets.Any(secret => line.Contains(secret, StringComparison.Ordinal)));
+        Assert.False(leaked, "The test output must never contain a password, an antiforgery token or a cookie value.");
+        Note("Secrets: the run wrote no password, antiforgery token or cookie value to the test output.");
+    }
+
+    /// <summary>
+    /// Membership flow (RF-05, RF-20, RF-29) over the real host. This T15 smoke deliberately reuses the T12 harness
+    /// variables (<c>WORKUP_T12_HTTP_CONNECTION</c>, <c>WORKUP_T12_HTTP_KEYS_PATH</c>) and the
+    /// <c>WorkUpDemoT12Http*</c> database prefix instead of duplicating the isolation harness: every fact is opt-in and
+    /// each run needs a fresh, absent database and keyring, so reusing the names never shares state between flows.
+    /// </summary>
+    private async Task RunMembershipFlowAsync(string baseUrl, HarnessPlan plan, string password)
+    {
+        // The membership tariff configured for frequency 1; the money text is what the owner reads in the frequency
+        // option and in the amount placeholder of the create form.
+        const decimal tariff = 12345m;
+        var tariffText = Formatting.Money(tariff);
+
+        // Every diagnostic line goes through Note, so the last checkpoint can prove that no password, antiforgery token
+        // or cookie value ever reached the test output.
+        var written = new List<string>();
+        var secrets = new HashSet<string>(StringComparer.Ordinal) { password };
+        void Note(string line)
+        {
+            output.WriteLine(line);
+            written.Add(line);
+        }
+
+        // The token is a secret: it is remembered for the output check instead of being written anywhere.
+        string ExtractToken(string html)
+        {
+            var token = ExtractAntiforgeryToken(html);
+            secrets.Add(token);
+            return token;
+        }
+
+        using var handler = new HttpClientHandler { CookieContainer = new CookieContainer(), AllowAutoRedirect = false };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(30) };
+
+        // Login as the yoga owner: it is the demo business with class-type services and an active grid.
+        var (loginStatus, loginHtml) = await GetHtmlAsync(client, "/panel/Account/Login");
+        Assert.Equal(HttpStatusCode.OK, loginStatus);
+        var loginResponse = await client.PostAsync("/panel/Account/Login", Form(new Dictionary<string, string>
+        {
+            ["Username"] = "lucia.demo",
+            ["Password"] = password,
+            ["__RequestVerificationToken"] = ExtractToken(loginHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, loginResponse.StatusCode);
+        Assert.True(IsDayRedirect(loginResponse), $"Login did not redirect to the owner Jornada (location '{DescribeRedirect(loginResponse)}').");
+        Note("HTTP: yoga owner login accepted with antiforgery; redirected to the owner Jornada (/panel).");
+
+        await using var connection = new SqlConnection(plan.ConnectionString);
+        await connection.OpenAsync();
+        var businessId = await ScalarIntAsync(connection, "SELECT Id FROM Businesses WHERE Slug = 'estudio-yoga-lucia-demo'");
+
+        // 1. The demo seed configures no membership tariff, so the owner configures frequency 1 through the Settings
+        // screen using the form's own antiforgery token; the stored row is read back from SQL.
+        var (servicesStatus, servicesHtml) = await GetHtmlAsync(client, "/panel/Settings/Services");
+        Assert.Equal(HttpStatusCode.OK, servicesStatus);
+        var setPriceResponse = await client.PostAsync("/panel/Settings/SetMembershipPrice", Form(new Dictionary<string, string>
+        {
+            ["weeklyFrequency"] = "1",
+            ["price"] = "12345",
+            ["__RequestVerificationToken"] = ExtractToken(servicesHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, setPriceResponse.StatusCode);
+        Assert.Equal("/panel/Settings/Services", DescribeRedirect(setPriceResponse));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM MembershipPrices WHERE BusinessId = @businessId AND WeeklyFrequency = 1 AND Price = @price",
+            ("@businessId", businessId), ("@price", tariff)));
+        Note($"SQL: membership tariff {tariffText} stored for frequency 1 of business #{businessId}.");
+
+        // 2. The membership list is a real render: its heading and the filter affordances are present, so the empty
+        // state is not the only thing the page shows.
+        var (listStatus, listHtml) = await GetHtmlAsync(client, "/panel/Enrollments");
+        Assert.Equal(HttpStatusCode.OK, listStatus);
+        Assert.Contains("Abonos", listHtml, StringComparison.Ordinal);
+        Assert.Contains("id=\"filter\"", listHtml, StringComparison.Ordinal);
+        Assert.Contains("Aplicar filtro", listHtml, StringComparison.Ordinal);
+        Note("HTTP: GET /panel/Enrollments -> 200 with its heading and the filter affordances.");
+
+        // The create form is only offered once a client exists (its empty state otherwise replaces the form), so one
+        // synthetic client is created through the owner form before the form is rendered.
+        var (clientFormStatus, clientFormHtml) = await GetHtmlAsync(client, "/panel/Clients/Create");
+        Assert.Equal(HttpStatusCode.OK, clientFormStatus);
+        var memberEmail = $"t15member{Guid.NewGuid():N}@example.invalid";
+        var createClientResponse = await client.PostAsync("/panel/Clients/Create", Form(new Dictionary<string, string>
+        {
+            ["FirstName"] = "Synthetic",
+            ["LastName"] = "T15Member",
+            ["Email"] = memberEmail,
+            ["Phone"] = "0000000000",
+            ["__RequestVerificationToken"] = ExtractToken(clientFormHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, createClientResponse.StatusCode);
+        var clientId = ExtractClientId(createClientResponse);
+        Note($"HTTP: synthetic client #{clientId} created through the owner form.");
+
+        // 3. The create form offers a grid class and shows the configured tariff, and the amount starts empty with the
+        // tariff only as its placeholder, so changing the frequency cannot post a stale amount.
+        var (formStatus, formHtml) = await GetHtmlAsync(client, "/panel/Enrollments/Create");
+        Assert.Equal(HttpStatusCode.OK, formStatus);
+        Assert.Contains("Nueva inscripci", formHtml, StringComparison.Ordinal);
+        var gridClassMatch = Regex.Match(formHtml,
+            "name=\"GridClassIds\"\\s+value=\"(?<id>\\d+)\"", RegexOptions.CultureInvariant);
+        Assert.True(gridClassMatch.Success, "The create form must offer at least one grid class.");
+        var gridClassId = int.Parse(gridClassMatch.Groups["id"].Value, CultureInfo.InvariantCulture);
+        Assert.Contains(tariffText, formHtml, StringComparison.Ordinal);
+        Assert.Contains($"value=\"\" placeholder=\"{tariffText}\"", formHtml, StringComparison.Ordinal);
+        Note($"HTTP: GET /panel/Enrollments/Create -> 200 offering grid class #{gridClassId}, the {tariffText} tariff and an empty amount input.");
+
+        // 4. The pending enrollment is posted with no amount: the service must apply the configured tariff of
+        // frequency 1 instead of trusting a preseeded value.
+        var createEnrollmentResponse = await client.PostAsync("/panel/Enrollments/Create", Form(new Dictionary<string, string>
+        {
+            ["ClientId"] = clientId.ToString(CultureInfo.InvariantCulture),
+            ["WeeklyFrequency"] = "1",
+            ["GridClassIds"] = gridClassId.ToString(CultureInfo.InvariantCulture),
+            ["__RequestVerificationToken"] = ExtractToken(formHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, createEnrollmentResponse.StatusCode);
+        var (afterCreateStatus, afterCreateHtml) = await GetHtmlAsync(client, createEnrollmentResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, afterCreateStatus);
+        Assert.Contains("Synthetic T15Member", afterCreateHtml, StringComparison.Ordinal);
+        Assert.Contains("Pendiente de pago", afterCreateHtml, StringComparison.Ordinal);
+        Note("HTTP: pending enrollment posted with no amount -> 302 -> 200 listing the client as pending payment.");
+
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Enrollments WHERE BusinessId = @businessId AND ClientId = @clientId",
+            ("@businessId", businessId), ("@clientId", clientId)));
+        var enrollmentId = await ScalarIntAsync(connection,
+            "SELECT Id FROM Enrollments WHERE BusinessId = @businessId AND ClientId = @clientId",
+            ("@businessId", businessId), ("@clientId", clientId));
+        Assert.Equal((int)EnrollmentStatus.PendingPayment, await ScalarIntAsync(connection,
+            "SELECT Status FROM Enrollments WHERE Id = @enrollmentId", ("@enrollmentId", enrollmentId)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Enrollments WHERE Id = @enrollmentId AND AgreedPrice = @price",
+            ("@enrollmentId", enrollmentId), ("@price", tariff)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM EnrollmentFixedClasses WHERE EnrollmentId = @enrollmentId",
+            ("@enrollmentId", enrollmentId)));
+        Note($"SQL: exactly one PendingPayment enrollment #{enrollmentId} with the configured tariff and exactly one fixed class.");
+
+        // 5. Charge with no amount: the agreed price (the tariff) is charged, the membership activates and the period
+        // matches MembershipCalendar for the paid instant.
+        var chargeResponse = await client.PostAsync(
+            "/panel/Enrollments/Charge?enrollmentId=" + enrollmentId.ToString(CultureInfo.InvariantCulture),
+            Form(new Dictionary<string, string>
+            {
+                ["__RequestVerificationToken"] = ExtractToken(afterCreateHtml)
+            }));
+        Assert.Equal(HttpStatusCode.Redirect, chargeResponse.StatusCode);
+        var (afterChargeStatus, afterChargeHtml) = await GetHtmlAsync(client, chargeResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, afterChargeStatus);
+        Assert.Contains("Synthetic T15Member", afterChargeHtml, StringComparison.Ordinal);
+        Assert.Contains("Vigente", afterChargeHtml, StringComparison.Ordinal);
+        Note("HTTP: membership charged with no amount -> 302 -> 200 listing it as current (Vigente).");
+
+        Assert.Equal((int)EnrollmentStatus.Active, await ScalarIntAsync(connection,
+            "SELECT Status FROM Enrollments WHERE Id = @enrollmentId", ("@enrollmentId", enrollmentId)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Enrollments WHERE Id = @enrollmentId AND ActivatedAt IS NOT NULL",
+            ("@enrollmentId", enrollmentId)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Payments WHERE BusinessId = @businessId AND EnrollmentId = @enrollmentId AND Concept = @concept AND Amount = @price",
+            ("@businessId", businessId), ("@enrollmentId", enrollmentId),
+            ("@concept", (byte)PaymentConcept.Membership), ("@price", tariff)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM MembershipPeriods WHERE EnrollmentId = @enrollmentId",
+            ("@enrollmentId", enrollmentId)));
+
+        var paidOnText = await ScalarStringAsync(connection,
+            "SELECT CONVERT(varchar(10), PaidAt, 23) FROM Payments WHERE EnrollmentId = @enrollmentId AND Concept = @concept",
+            ("@enrollmentId", enrollmentId), ("@concept", (byte)PaymentConcept.Membership));
+        Assert.False(string.IsNullOrWhiteSpace(paidOnText), "The membership payment must record its paid instant.");
+        var expectedPeriod = MembershipCalendar.FirstPeriod(
+            DateOnly.ParseExact(paidOnText!, "yyyy-MM-dd", CultureInfo.InvariantCulture));
+        var coverageStartText = await ScalarStringAsync(connection,
+            "SELECT CONVERT(varchar(10), CoverageStart, 23) FROM MembershipPeriods WHERE EnrollmentId = @enrollmentId",
+            ("@enrollmentId", enrollmentId));
+        var expiresOnText = await ScalarStringAsync(connection,
+            "SELECT CONVERT(varchar(10), ExpiresOn, 23) FROM MembershipPeriods WHERE EnrollmentId = @enrollmentId",
+            ("@enrollmentId", enrollmentId));
+        Assert.Equal(expectedPeriod.CoverageStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), coverageStartText);
+        Assert.Equal(expectedPeriod.ExpiresOn.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), expiresOnText);
+        Assert.Equal(expectedPeriod.ReferenceDay, await ScalarIntAsync(connection,
+            "SELECT ReferenceDay FROM Enrollments WHERE Id = @enrollmentId", ("@enrollmentId", enrollmentId)));
+        Note($"SQL: enrollment #{enrollmentId} is Active with its activation instant, one Membership payment of the tariff and one period matching MembershipCalendar.");
+
+        // 6. A charge POST without the antiforgery token must be rejected before any business logic runs.
+        var rejected = await client.PostAsync(
+            "/panel/Enrollments/Charge?enrollmentId=" + enrollmentId.ToString(CultureInfo.InvariantCulture),
+            Form(new Dictionary<string, string>()));
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        Note("HTTP: Charge POST without an anti-CSRF token -> 400.");
+
+        // 7. The harness never writes a secret: every diagnostic line reports only booleans, identifiers, counts or
+        // paths, and this proves it against the password, every antiforgery token and every cookie of the run.
         foreach (Cookie cookie in handler.CookieContainer.GetAllCookies())
         {
             if (cookie.Value.Length >= 8)
