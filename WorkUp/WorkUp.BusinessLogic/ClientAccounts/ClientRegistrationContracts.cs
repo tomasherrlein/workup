@@ -44,10 +44,12 @@ public sealed record PendingClientAccount(
     string? PendingFirstName,
     string? PendingLastName);
 
-/// <summary>Builds the absolute verification link for a client account.</summary>
+/// <summary>Builds the absolute links of a client account: email verification (RF-25) and password reset (RF-27).</summary>
 public interface IClientAccountUrlBuilder
 {
     string BuildVerificationUrl(string slug, string token);
+
+    string BuildPasswordResetUrl(string slug, string token);
 }
 
 /// <summary>
@@ -74,6 +76,25 @@ public static class ClientAccountUrlRules
         return new Uri(
             validatedBaseUrl,
             $"{VerificationPathPrefix}{Uri.EscapeDataString(slug)}/cuenta/verificar/{Uri.EscapeDataString(token)}")
+            .AbsoluteUri;
+    }
+
+    /// <summary>
+    /// Recovery link of RF-27. It shares the public client-account prefix of the verification route and, like it,
+    /// derives exclusively from the configured <c>WorkUp:PublicBaseUrl</c>, so no request header can redirect a
+    /// password reset to an attacker-controlled host.
+    /// </summary>
+    public static string BuildPasswordResetUrl(string configuredBaseUrl, string slug, string token)
+    {
+        var validatedBaseUrl = ValidateBaseUrl(configuredBaseUrl);
+        if (string.IsNullOrWhiteSpace(slug))
+            throw new ArgumentException("A business slug is required.", nameof(slug));
+        if (string.IsNullOrWhiteSpace(token))
+            throw new ArgumentException("A password reset token is required.", nameof(token));
+
+        return new Uri(
+            validatedBaseUrl,
+            $"{VerificationPathPrefix}{Uri.EscapeDataString(slug)}/cuenta/restablecer/{Uri.EscapeDataString(token)}")
             .AbsoluteUri;
     }
 }

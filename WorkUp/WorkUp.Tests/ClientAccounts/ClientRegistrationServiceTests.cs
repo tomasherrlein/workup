@@ -757,5 +757,8 @@ public sealed class ClientRegistrationServiceTests
 
         public string BuildVerificationUrl(string slug, string token) =>
             ClientAccountUrlRules.BuildVerificationUrl(BaseUrl, slug, token);
+
+        public string BuildPasswordResetUrl(string slug, string token) =>
+            ClientAccountUrlRules.BuildPasswordResetUrl(BaseUrl, slug, token);
     }
 }

@@ -948,6 +948,9 @@ public sealed class ClientRegistrationSqlIntegrationTests(ITestOutputHelper outp
     {
         public string BuildVerificationUrl(string slug, string token) =>
             ClientAccountUrlRules.BuildVerificationUrl(TrustedBaseUrl, slug, token);
+
+        public string BuildPasswordResetUrl(string slug, string token) =>
+            ClientAccountUrlRules.BuildPasswordResetUrl(TrustedBaseUrl, slug, token);
     }
 
     private sealed record SqlTarget(string DatabaseName, string ConnectionString);
