@@ -11,28 +11,70 @@ namespace WorkUp.Data.Classes;
 /// another tenant is invisible; nothing here commits or rolls back, because each command joins the caller's ambient
 /// transaction through <see cref="DbSession.Transaction"/>, which owns the whole unit.
 /// <para>
-/// The lock statement rides on the booking row with <c>UPDLOCK, HOLDLOCK</c> and reads its session, status included:
-/// two operations on the same annotation — a double attendance with a charge, for instance — are serialized there,
-/// the effective-payment check reads under that same lock, so a second charge can never slip in, and the suspended
-/// class the reader judged cannot change under it. The guarded status statement repeats every storage-expressible
-/// rule — the discriminant, the modality, the open status, the absent cancellation, the absent recorded instant and
-/// the session status — and changes no row when the annotation is no longer open or its class is suspended, which is
-/// what makes a double submission or a suspended class report "no row changed" instead of overwriting the first
-/// record. The coverage and charge rules stay the service's, because the statement cannot express them.
+/// The lock takes two rows in one fixed order: the class session first (<c>Appointments</c>, the row the README calls
+/// the class lock) and the annotation second (<c>Bookings</c>). The session row is resolved without a lock, locked
+/// with an update lock that is held until the caller commits, and only then is the annotation locked and read with
+/// its session. That order is what serializes two operations on the same annotation — a double attendance with a
+/// charge, for instance — and, just as important, it is what keeps every later writer of that same <c>Appointments</c>
+/// row out of the window between the read of the session state and the guarded status write: while this unit runs,
+/// such a writer waits for the lock instead of splitting the note from the status, and the suspension of a class
+/// (RF-10) is one of those writers. <b>TODO (unit 4, suspension):</b> that path does not exist yet, so nothing here
+/// proves its lock order; when it is written it has to take the <c>Appointments</c> row first, because the session
+/// state read below only stays stable while this lock is the one every writer of that row respects. The
+/// effective-payment check reads under that same lock, so a second charge can never slip in, and a class that was
+/// already suspended when the lock was taken is seen as suspended by the read below. The guarded status statement
+/// repeats every storage-expressible rule — the discriminant, the modality, the open status, the absent cancellation,
+/// the absent recorded instant and the session status — and changes no row when the annotation is no longer open or
+/// its class is suspended, which is what makes a double submission or a suspended class report "no row changed"
+/// instead of overwriting the first record. The coverage and charge rules stay the service's, because the statement
+/// cannot express them.
 /// </para>
 /// </summary>
 public sealed class SqlClassAttendanceRepository(DbSession session)
     : SqlRepositoryBase(session), IClassAttendanceRepository
 {
     /// <summary>
+    /// Resolves the class session of the annotation before any row is locked. It carries no hint, so it holds
+    /// nothing: it only translates the booking the caller named into the session whose row must be locked first, so
+    /// the order stays session then annotation (README: the class lock is the <c>Appointments</c> row). The tenant
+    /// rides on both tables, so a foreign booking does not resolve.
+    /// </summary>
+    private const string ResolveSessionSql = """
+        SELECT b.AppointmentId
+          FROM Bookings AS b
+          JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
+         WHERE b.BusinessId = @businessId
+           AND b.Id = @bookingId
+        """;
+
+    /// <summary>
+    /// Locks the class session row of the business inside the caller's transaction, before the annotation row. The
+    /// update lock is held until the caller commits, so no write of that row can land between the read of the session
+    /// state and the guarded status write: the suspension of a class — the write that sets
+    /// <c>Appointments.Status = Suspendido</c> — waits for this unit instead of splitting the operation and leaving
+    /// the observation orphaned.
+    /// The tenant is part of the predicate, so a session of another business is simply not found, and the kind is not
+    /// filtered: the service decides what to do with an appointment that is not a class, so the discriminant is never
+    /// hidden by the port.
+    /// </summary>
+    private const string LockSessionSql = """
+        SELECT a.Id AS AppointmentId
+          FROM Appointments AS a WITH (UPDLOCK, ROWLOCK)
+         WHERE a.Id = @appointmentId
+           AND a.BusinessId = @businessId
+        """;
+
+    /// <summary>
     /// Locks the annotation row of the business inside the caller's transaction and reads it with its session, the
-    /// status of that session, its client, the enrollment status and the class tariff. The tenant rides on the booking
-    /// predicate and on the client, service, appointment and enrollment joins, so a booking of another business is
-    /// simply not found. The kind and the modality are not filtered here: the service decides what to do with a
-    /// booking that is not a class annotation, so the discriminant is never hidden by the query. The enrollment join
-    /// is a <c>LEFT JOIN</c>: a fixed annotation whose enrollment row cannot be resolved still comes back, and its
-    /// missing status is judged as no coverage. The session status travels with the row (RF-10), so the suspension
-    /// rule is judged from this single locked read.
+    /// status of that session, its client, the enrollment status and the class tariff. The session row was already
+    /// locked above, and <c>b.AppointmentId = @appointmentId</c> keeps this read on that very session, so the status
+    /// returned beside the annotation stays valid for the rest of the unit. The tenant rides on the booking predicate
+    /// and on the client, service, appointment and enrollment joins, so a booking of another business is simply not
+    /// found. The kind and the modality are not filtered here: the service decides what to do with a booking that is
+    /// not a class annotation, so the discriminant is never hidden by the query. The enrollment join is a
+    /// <c>LEFT JOIN</c>: a fixed annotation whose enrollment row cannot be resolved still comes back, and its missing
+    /// status is judged as no coverage. The session status travels with the row (RF-10), so the suspension rule is
+    /// judged from this read and no longer changes under it.
     /// </summary>
     private const string LockSql = """
         SELECT b.BusinessId, b.Id AS BookingId, b.ClientId, a.Id AS AppointmentId, a.StartsAt, a.Kind,
@@ -45,6 +87,7 @@ public sealed class SqlClassAttendanceRepository(DbSession session)
           LEFT JOIN Enrollments AS e ON e.Id = b.EnrollmentId AND e.BusinessId = b.BusinessId
          WHERE b.BusinessId = @businessId
            AND b.Id = @bookingId
+           AND b.AppointmentId = @appointmentId
         """;
 
     /// <summary>
@@ -128,10 +171,36 @@ public sealed class SqlClassAttendanceRepository(DbSession session)
     public async Task<ClassAttendanceLock?> LockAsync(
         int businessId, int bookingId, CancellationToken ct = default)
     {
+        // The session is resolved without a lock and locked before the annotation: that is the order the README
+        // prescribes for the class lock. Because the session lock is held until the caller commits, the status
+        // returned below cannot move between this read and the guarded status write: any writer of that row, the
+        // suspension of a class among them, waits for this unit. The suspension path itself is still to be written
+        // and must take that same row first (TODO in the class summary).
+        var resolved = await QuerySingleOrDefaultAsync(
+            ResolveSessionSql,
+            MapMarker,
+            p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId),
+            ct);
+
+        if (resolved is null)
+            return null;
+
+        var lockedSession = await QuerySingleOrDefaultAsync(
+            LockSessionSql,
+            MapMarker,
+            p => p.AddValue("@businessId", businessId).AddValue("@appointmentId", resolved.AppointmentId),
+            ct);
+
+        if (lockedSession is null)
+            return null;
+
         var locked = await QuerySingleOrDefaultAsync(
             LockSql,
             MapRow,
-            p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId),
+            p => p
+                .AddValue("@businessId", businessId)
+                .AddValue("@bookingId", bookingId)
+                .AddValue("@appointmentId", resolved.AppointmentId),
             ct);
 
         if (locked is null)
@@ -237,6 +306,11 @@ public sealed class SqlClassAttendanceRepository(DbSession session)
     };
 
     private sealed record PaymentMarker(int Id);
+
+    /// <summary>The session id resolved or locked before the annotation: both statements only need to name the row.</summary>
+    private sealed record AppointmentMarker(int AppointmentId);
+
+    private static AppointmentMarker MapMarker(SqlDataReader reader) => new(reader.Get<int>("AppointmentId"));
 
     /// <summary>One locked row: the annotation state plus the status of the class it belongs to.</summary>
     private sealed record LockedRow(ClassAttendanceBookingState Annotation, AppointmentStatus SessionStatus);

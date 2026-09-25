@@ -25,15 +25,20 @@ public sealed record ClassAttendanceLock(ClassAttendanceBookingState Annotation,
 public interface IClassAttendanceRepository
 {
     /// <summary>
-    /// Locks the annotation row of the business inside the caller's transaction and reads it with its session, the
+    /// Locks the class session row of the business — the row the README calls the class lock — and then the annotation
+    /// row, in that fixed order, inside the caller's transaction, and reads the annotation with its session, the
     /// session status, its client, the enrollment status and every paid period the coverage rule needs. The lock is
     /// what serializes two operations on the same booking — a double attendance with a charge, for instance — and it
-    /// is held until the caller commits or rolls back. It returns <c>null</c> when the booking does not belong to the
-    /// business, when it does not exist, or when it is missing its session: a foreign and a missing booking are the
-    /// same answer, so nothing about another tenant's rows leaks. The kind and the modality are not filtered here: the
-    /// service decides what to do with a booking that is not a class annotation, so the discriminant is never hidden
-    /// by the port. The session status travels beside the state because a suspended class is refused before any
-    /// write, and that refusal must come from the same locked read as every other rule (RF-10).
+    /// is held until the caller commits or rolls back. The session is locked first, so no writer of that same
+    /// <c>Appointments</c> row can commit between the read of the session state and the guarded status write: it waits
+    /// for the unit instead. <b>TODO (unit 4, suspension):</b> the suspension path does not exist yet, so nothing here
+    /// proves its order; it must lock that session row first to be serialized by this lock. It returns <c>null</c> when
+    /// the booking does not belong to the business, when it does not exist, or when it is missing its session: a
+    /// foreign and a missing booking are the same answer, so nothing about another tenant's rows leaks. The kind and
+    /// the modality are not filtered here: the service decides what to do with a booking that is not a class
+    /// annotation, so the discriminant is never hidden by the port. The session status travels beside the state, read
+    /// under the session lock, so the suspension rule is judged from a read that no concurrent writer of that row can
+    /// invalidate before the write (RF-10).
     /// </summary>
     Task<ClassAttendanceLock?> LockAsync(int businessId, int bookingId, CancellationToken ct = default);
 

@@ -507,6 +507,48 @@ public class ClassAttendanceServiceTests
     }
 
     [Fact]
+    public async Task A_concurrent_suspension_cannot_split_the_note_from_the_guarded_status_write()
+    {
+        // The composition report named this interleaving: the note lands, a suspension commits, and the guarded
+        // status write then refuses, leaving an orphan note for an outer transaction to persist. The class lock of
+        // the README is the Appointments row, taken before the annotation and held until the unit ends, so a
+        // suspension that arrives after the lock cannot land in between: it waits for this unit (fake models the
+        // same refusal). The simulation runs exactly at the reported point, inside the note write.
+        _repository.Booking = State();
+        var suspensionApplied = false;
+        _repository.OnNoteInserted = () => suspensionApplied = _repository.TrySuspendSession();
+
+        var result = await _service.MarkAttendedAsync(
+            1, 500, new ClassAttendanceRequest(Note: "Alergia al amoníaco"));
+
+        Assert.True(result.Succeeded, result.Error?.Code);
+        Assert.False(suspensionApplied);
+        Assert.Equal(AppointmentStatus.Scheduled, _repository.SessionStatus);
+        Assert.Equal(BookingStatus.Attended, _repository.LastWrittenStatus);
+        Assert.Single(_repository.Notes);
+        Assert.Equal(new[] { "note", "status" }, _repository.WriteOrder);
+        Assert.Equal(1, _unit.CommitCount);
+        Assert.Equal(0, _unit.RolledBackCount);
+    }
+
+    [Fact]
+    public async Task The_class_session_lock_defers_the_suspension_only_for_the_unit_and_releases_it_afterwards()
+    {
+        // The lock is not a ban on suspending the class: it only keeps the suspension out of the window the operation
+        // covers. Once the unit ends the suspension can land, and it does not touch the attendance already recorded
+        // (RF-10: suspending a class never alters its annotations).
+        _repository.Booking = State();
+
+        var result = await _service.MarkAttendedAsync(1, 500, new ClassAttendanceRequest());
+
+        Assert.True(result.Succeeded, result.Error?.Code);
+        Assert.False(_repository.SessionLockHeld);
+        Assert.True(_repository.TrySuspendSession());
+        Assert.Equal(AppointmentStatus.Suspended, _repository.SessionStatus);
+        Assert.Equal(BookingStatus.Attended, _repository.Booking!.BookingStatus);
+    }
+
+    [Fact]
     public async Task Attendance_reads_the_clock_once_and_persists_that_instant()
     {
         // A clock that advances one day per read: a second read would be the next day and could not pass unnoticed.

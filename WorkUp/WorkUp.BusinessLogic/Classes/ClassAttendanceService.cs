@@ -15,12 +15,17 @@ namespace WorkUp.BusinessLogic.Classes;
 /// <b>Atomicity when composed.</b> The unit of work may already be open, in which case this service joins it and its
 /// commit is a no-op: whoever opened the transaction decides whether it lands. A failure returned from inside such a
 /// joined transaction therefore cannot rely on a rollback, so no path may leave a persistent write visible while
-/// answering a failure. The observation is the only write that can refuse for a reason the lock does not already
-/// rule out, so it is written <b>before</b> the status and the charge: a note that refuses to land fails the
-/// operation with a stable code while the unit still holds no status write and no payment, and the outer transaction
-/// may commit without keeping a half-done attendance. Every rejection that runs before the writes returns with
-/// nothing written, so composing this service inside a larger unit stays safe. When the service owns its transaction,
-/// every rejection rolls it back and leaves nothing behind as well.
+/// answering a failure. Both writes that can refuse are decided before the write that follows them is attempted: the
+/// repository locks the class session row and then the annotation row, so the session state judged here cannot move
+/// until the unit ends — a writer of that row, the suspension of a class among them, waits for this unit instead of
+/// making the guarded status write refuse after the observation — and the guarded status statement repeats the rules
+/// that are already stable under that lock. The observation is therefore the only write that can still refuse for a
+/// reason the locks do not already rule out, so it is written <b>before</b> the status and the charge: a note that
+/// refuses to land fails the operation
+/// with a stable code while the unit still holds no status write and no payment, and the outer transaction may commit
+/// without keeping a half-done attendance. Every rejection that runs before the writes returns with nothing written,
+/// so composing this service inside a larger unit stays safe. When the service owns its transaction, every rejection
+/// rolls it back and leaves nothing behind as well.
 /// </para>
 /// <para>
 /// <b>Attendance</b> is only enabled for a student with current coverage on the class date: a fixed annotation must
@@ -34,8 +39,9 @@ namespace WorkUp.BusinessLogic.Classes;
 /// <para>
 /// <b>Suspension.</b> A suspended class did not happen (RF-10): its fixed students lose it and a drop-in does not pay
 /// for it. Attendance, absence and the charge are all refused with one stable code before anything is written, and
-/// the rule is read from the same locked statement as the rest, so the refusal cannot be raced by a concurrent
-/// suspension.
+/// the rule is read from the session the lock holds, so the refusal cannot be raced by a concurrent writer of that
+/// row — the suspension of a class among them: such a writer waits for this unit, and one that already landed is seen
+/// here.
 /// </para>
 /// <para>
 /// <b>Absence</b> is allowed for any annotation that is not cancelled whose class was not suspended, including a
@@ -164,8 +170,9 @@ public sealed class ClassAttendanceService(
             return Failure(UnavailableCode, "Esa anotación no admite esta acción.");
 
         // A suspended class did not happen (RF-10): its fixed students lose it, a drop-in does not pay for it, and
-        // nobody is absent from a class that was never taught. The status comes from the same locked read as the rest
-        // of the rules and the guarded write repeats it, so a concurrent suspension cannot be raced.
+        // nobody is absent from a class that was never taught. The status comes from the session row the lock took
+        // first and holds, and the guarded write repeats it, so a concurrent writer of that row cannot be raced: it
+        // either landed before the lock (and is refused here) or waits for this unit.
         if (locked.SessionStatus == AppointmentStatus.Suspended)
             return Failure(SuspendedCode, "Esa clase está suspendida: no se registra asistencia, ausencia ni cobro.");
 

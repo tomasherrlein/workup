@@ -9,7 +9,9 @@ public sealed record FakeClientNote(int BusinessId, int ClientId, int Appointmen
 /// <summary>
 /// In-memory stand-in for the per-student attendance port. It emulates the tenant scope and the guarded status
 /// statement exactly like the SQL predicates: a booking registered under another business is invisible, only an
-/// annotation that is still open changes status, and a suspended class never changes status. It also exposes the
+/// annotation that is still open changes status, and a suspended class never changes status. It also models the class
+/// session lock the real port takes first: <see cref="SessionLockHeld"/> is held from <see cref="LockAsync"/> to the
+/// guarded status write, and <see cref="TrySuspendSession"/> — the competing suspension — respects it. It exposes the
 /// instant and the absence source the last guarded write persisted, so a test can prove the single clock read is what
 /// got stored, and the order of the writes, so a test can pin that the fallible observation precedes the status write
 /// and the charge.
@@ -41,7 +43,37 @@ public sealed class FakeClassAttendanceRepository : IClassAttendanceRepository
     /// <summary>When set, the guarded status write reports "no row changed", like a lost race.</summary>
     public bool RefuseStatusWrite { get; set; }
 
+    /// <summary>
+    /// Invoked right after a note lands and before the operation's next write, so a test can pin the interleaving the
+    /// composition report named: a suspension arriving exactly between the observation and the guarded status write.
+    /// </summary>
+    public Action? OnNoteInserted { get; set; }
+
+    /// <summary>
+    /// Simulates a concurrent suspension of this annotation's class (RF-10) arriving while an operation is in flight.
+    /// The real suspension writes the <c>Appointments</c> row, the very row the port takes an update lock on in
+    /// <see cref="LockAsync"/> and holds until the unit ends, so while that lock is held the suspension cannot land.
+    /// This returns whether it applied instead of forcing the session state, and when it applies it leaves the session
+    /// suspended, which is exactly what the guarded status write then refuses.
+    /// </summary>
+    public bool TrySuspendSession()
+    {
+        if (SessionLockHeld)
+            return false;
+
+        SessionStatus = AppointmentStatus.Suspended;
+        return true;
+    }
+
     public int LockCallCount { get; private set; }
+
+    /// <summary>
+    /// Whether the class session lock is held, mirroring the update lock the real port takes on the
+    /// <c>Appointments</c> row in <see cref="LockAsync"/> and keeps until the unit ends. It is what
+    /// <see cref="TrySuspendSession"/> respects. The fake releases it on the guarded status write, which is the last
+    /// step of the window the lock has to cover: the read of the session state through the guarded write.
+    /// </summary>
+    public bool SessionLockHeld { get; private set; }
 
     public int? LockedBusinessId { get; private set; }
 
@@ -63,10 +95,13 @@ public sealed class FakeClassAttendanceRepository : IClassAttendanceRepository
         LockedBookingId = bookingId;
 
         var booking = Booking;
+        var resolved = booking is not null && booking.BusinessId == businessId && booking.BookingId == bookingId;
+        // The lock is acquired only for an annotation this business can see: a foreign or missing booking returns no
+        // lock, exactly like a lock statement that matches no row. Taking it here is what a session-first statement
+        // does before the annotation row.
+        SessionLockHeld = resolved;
         return Task.FromResult(
-            booking is not null && booking.BusinessId == businessId && booking.BookingId == bookingId
-                ? new ClassAttendanceLock(booking, SessionStatus)
-                : null);
+            resolved ? new ClassAttendanceLock(booking!, SessionStatus) : null);
     }
 
     public Task<bool> HasEffectivePaymentAsync(int businessId, int bookingId, CancellationToken ct = default)
@@ -79,6 +114,9 @@ public sealed class FakeClassAttendanceRepository : IClassAttendanceRepository
         int businessId, int bookingId, BookingStatus status, DateTime now, CancellationToken ct = default)
     {
         WriteOrder.Add("status");
+
+        // The guarded write is the last step the session lock covers; the fake releases it here either way.
+        SessionLockHeld = false;
 
         if (RefuseStatusWrite
             || SessionStatus == AppointmentStatus.Suspended
@@ -110,6 +148,7 @@ public sealed class FakeClassAttendanceRepository : IClassAttendanceRepository
             return Task.FromResult(false);
 
         Notes.Add(new FakeClientNote(businessId, clientId, appointmentId, note, now));
+        OnNoteInserted?.Invoke();
         return Task.FromResult(true);
     }
 }

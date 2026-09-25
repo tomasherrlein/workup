@@ -430,6 +430,81 @@ public sealed class ClassAttendanceSqlIntegrationTests(ITestOutputHelper output)
         output.WriteLine("Race assertions passed: two concurrent attendances with a charge ended with exactly one status write and exactly one payment row for the annotation.");
     }
 
+    [Fact]
+    public async Task A_concurrent_suspension_waits_for_the_class_session_lock_the_attendance_holds()
+    {
+        var target = await ResolveTargetAsync("_Suspension");
+        if (target is null)
+            return;
+
+        var ids = await SeedDropInAsync(target.ConnectionString, "synthetic-t16-suspension", "t16.suspension");
+
+        await using var session = new DbSession(target.ConnectionString);
+        var repository = new SqlClassAttendanceRepository(session);
+
+        // The attendance locks the class session row first and writes the observation, and stays open: the suspension
+        // that arrives now is exactly the interleaving the composition report named, a suspension between the note and
+        // the guarded status write.
+        await using var transaction = await session.BeginAsync();
+        Assert.NotNull(await repository.LockAsync(ids.BusinessA, ids.Booking));
+        Assert.True(await repository.InsertNoteAsync(
+            ids.BusinessA, ids.Client, ids.Session, "Alergia al amoníaco", FixedNow));
+
+        // A second connection runs the write a suspension of a class will issue (RF-10): it asks for the Appointments
+        // row this unit already holds, so it cannot land. The lock timeout is the runtime proof that the session lock,
+        // and not a rule evaluated once, is what keeps such a writer out of the window.
+        var suspensionLanded = await SuspensionLandedAsync(target.ConnectionString, ids.BusinessA, ids.Session);
+        Assert.False(suspensionLanded, "The suspension landed while the attendance unit held the class session lock.");
+
+        // With the suspension held out, the guarded status write changes the row and the observation stays with it.
+        Assert.True(await repository.SetStatusAsync(
+            ids.BusinessA, ids.Booking, BookingStatus.Attended, FixedNow));
+        await transaction.CommitAsync();
+
+        var booking = await ReadBookingAsync(target.ConnectionString, ids.Booking);
+        Assert.Equal(BookingStatus.Attended, booking.Status);
+        Assert.Equal(FixedNow, booking.AttendanceRecordedAt);
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM ClientNotes WHERE ClientId = @clientId AND AppointmentId = @appointmentId AND Text = @text",
+            ("@clientId", ids.Client), ("@appointmentId", ids.Session), ("@text", "Alergia al amoníaco")));
+        Assert.Equal(1, await ReadScalarAsync<byte>(target.ConnectionString,
+            "SELECT Status FROM Appointments WHERE Id = @id", ("@id", ids.Session)));
+
+        output.WriteLine("Suspension assertions passed: the competing suspension could not land while the attendance unit held the class session lock, the attendance and its observation committed together, and the class was still Scheduled afterwards.");
+    }
+
+    /// <summary>
+    /// Runs a suspension write of a class session from its own connection and reports whether it landed. It asks for
+    /// the <c>Appointments</c> row the attendance unit holds, so a lock timeout means the suspension was serialized
+    /// behind that unit instead of slipping in; a landed write means the row was free and the lock is not held. Every
+    /// parameter of the statement is bound here, exactly as the repository binds its own SQL, so the only outcome the
+    /// statement can report is the lock: a statement that cannot run at all would throw instead of answering.
+    /// </summary>
+    private static async Task<bool> SuspensionLandedAsync(string connectionString, int businessId, int appointmentId)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "SET LOCK_TIMEOUT 3000; UPDATE Appointments SET Status = @suspended, SuspendedAt = @now, SuspensionReason = @reason WHERE Id = @id AND BusinessId = @businessId AND Kind = @classSession",
+            connection);
+        AddParameter(command, "@suspended", AppointmentStatus.Suspended);
+        AddParameter(command, "@now", FixedNow.AddMinutes(5));
+        AddParameter(command, "@reason", "Feriado nacional");
+        AddParameter(command, "@id", appointmentId);
+        AddParameter(command, "@businessId", businessId);
+        AddParameter(command, "@classSession", AppointmentKind.ClassSession);
+
+        try
+        {
+            await command.ExecuteNonQueryAsync();
+            return true;
+        }
+        catch (SqlException exception) when (exception.Number == 1222)
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Resolves this test's opt-in target. <c>null</c> means the variable is absent: the test returns N/A without
     /// opening any connection or touching any server.
