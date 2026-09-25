@@ -16,9 +16,9 @@ namespace WorkUp.Areas.Owner.Controllers;
 
 /// <summary>
 /// Grilla semanal de clases (RF-04), generación de la semana (RF-06), clases sueltas (RF-22, RF-07 cupo &gt; 1) y
-/// detalle de una clase generada con su asistencia, atención sin turno, cancelación de una anotación y suspensión de
-/// la fecha (RF-10, RF-11, RF-12). Reachable once the business has a class-type service (Settings shortcut and
-/// navigation hide it otherwise).
+/// detalle de una clase generada con su asistencia, atención sin turno, cancelación de una anotación, suspensión de
+/// la fecha (RF-10, RF-11, RF-12) y el cobro posterior de una suelta ya asistida (T18, D-20). Reachable once the
+/// business has a class-type service (Settings shortcut and navigation hide it otherwise).
 /// <para>
 /// The drop-in roster, the detail page and its actions need more collaborators than the grid. They are optional only so
 /// a caller that never reaches those screens (the grid and week tests, for instance) can keep the shorter constructor;
@@ -38,10 +38,17 @@ public class ClassesController(
     ClassAttendanceService? attendanceService = null,
     ClassWalkInService? walkInService = null,
     ClassDateActionsService? dateActionsService = null,
-    BusinessSettingsService? settingsService = null) : OwnerControllerBase
+    BusinessSettingsService? settingsService = null,
+    ClassDropInChargeService? dropInChargeService = null) : OwnerControllerBase
 {
     /// <summary>Message of a rejected amount or observation, shared by every action that accepts them.</summary>
     private const string ChargeOrNoteMessage = "Revisá el importe y la observación (máximo 1000 caracteres).";
+
+    /// <summary>
+    /// Message of a rejected late-charge amount or price reason. The same sentence the charge service uses for its own
+    /// invalid-charge code, so the owner reads one rule whatever layer rejects the value.
+    /// </summary>
+    private const string InvalidChargeMessage = "Revisá el importe y el motivo del precio.";
 
     /// <summary>
     /// Forward window of the owner roster (RF-22): today plus the next 30 days, the same window the public offer
@@ -426,7 +433,8 @@ public class ClassesController(
                 student.FixedState,
                 CanAttend(student, detail),
                 CanMarkAbsent(student, detail),
-                CanCancel(student, detail, now)))
+                CanCancel(student, detail, now),
+                CanCharge(student, detail)))
             .ToList();
 
         // The walk-in picker only offers the business's own clients, exactly like the drop-in roster.
@@ -464,6 +472,37 @@ public class ClassesController(
                 ? $"Asistencia registrada. Cobro de {Formatting.Money(charged)} registrado."
                 : "Asistencia registrada."
             : AttendanceMessage(result.Error!), result.Succeeded);
+    }
+
+    /// <summary>
+    /// Registers the drop-in charge the owner forgot when she marked the attendance (T18, RF-11, D-20) and redirects
+    /// back to the class (POST/redirect/GET). The panel offers it only on an already <c>Atendido</c> drop-in of a
+    /// non-suspended class, and the charge service refuses everything else under its own lock; the amount is mandatory
+    /// because the whole operation is the charge. It writes the payment and nothing else: the attendance is never
+    /// re-marked, no observation is written and no email is queued, so nothing on this path promises any of them. An
+    /// annotation with an effective payment is refused — a wrong charge is corrected by annulling it in the ledger,
+    /// which is what then lets the corrected one land here.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ChargeDropIn(int id, int appointmentId,
+        [ModelBinder(typeof(InvariantDecimalModelBinder))] decimal? amount, string? priceReason,
+        CancellationToken ct = default)
+    {
+        if (dropInChargeService is null)
+            return NotFound();
+
+        // The amount and the reason are judged before the transaction exists, so a malformed form never touches
+        // storage; the service applies the same limits to the same columns.
+        if (!IsValidChargeAmount(amount) || !IsValidPriceReason(priceReason))
+            return ReturnToClass(appointmentId, InvalidChargeMessage, success: false);
+
+        var result = await dropInChargeService.ChargeAsync(
+            BusinessId, id, new ClassAttendanceCharge(amount!.Value, priceReason), ct);
+
+        return ReturnToClass(appointmentId, result.Succeeded
+            ? $"Cobro de {Formatting.Money(result.Value.Amount)} registrado."
+            : ChargeMessage(result.Error!), result.Succeeded);
     }
 
     /// <summary>
@@ -612,6 +651,30 @@ public class ClassesController(
         amount is null
         || (amount is > 0 and <= 9999999999.99m && decimal.Round(amount.Value, 2) == amount.Value);
 
+    /// <summary>
+    /// Whether the screen offers the late charge of a drop-in (T18, D-20): the class is still <c>Programado</c> and
+    /// not suspended, and the annotation is a <c>Suelta</c> already marked as present. There is deliberately no
+    /// window: the whole point of the action is that the owner registers the money after realising the omission, and a
+    /// class that already ended is still chargeable. Whether an effective payment exists is not knowable from the
+    /// detail read, so the screen may offer a charge the server refuses as a duplicate.
+    /// </summary>
+    private static bool CanCharge(ClassDetailStudent student, ClassDetail detail) =>
+        detail.Session.Status == AppointmentStatus.Scheduled
+        && !detail.Suspended
+        && student.IsDropIn
+        && student.Status == BookingStatus.Attended;
+
+    /// <summary>
+    /// Whether the mandatory amount of the late charge can be stored. Unlike the optional charge of an attendance, a
+    /// missing amount is not a valid request here, because the operation is the charge: the same ceiling and the same
+    /// two decimals as the stored column, judged before the service is reached.
+    /// </summary>
+    private static bool IsValidChargeAmount(decimal? amount) =>
+        amount is > 0 and <= 9999999999.99m && decimal.Round(amount.Value, 2) == amount.Value;
+
+    /// <summary>Whether the optional price reason of the late charge fits the stored column. A missing one is valid.</summary>
+    private static bool IsValidPriceReason(string? reason) => reason is null || reason.Length <= 200;
+
     /// <summary>Whether the optional observation fits the client's record. A missing note is valid.</summary>
     private static bool IsValidNote(string? note) => note is null || note.Length <= 1000;
 
@@ -647,6 +710,24 @@ public class ClassesController(
         "class_attendance_note_failed" => "No pudimos guardar la observación. Volvé a intentar.",
         "class_attendance_unavailable" => "Esa anotación no admite esta acción.",
         _ => "No pudimos registrar la acción. Volvé a intentar."
+    };
+
+    /// <summary>
+    /// Turns the stable code of a rejected late charge into the sentence the owner reads, with the same rule as the
+    /// other mappers: a known code gets its message, an unknown one never reaches the screen as a code. The already
+    /// charged sentence is what tells the owner that a duplicate is refused and that the correction runs through the
+    /// annulment of the ledger.
+    /// </summary>
+    private static string ChargeMessage(BusinessError error) => error.Code switch
+    {
+        "class_charge_not_found" => "No encontramos esa anotación de la clase.",
+        "class_charge_invalid_charge" => InvalidChargeMessage,
+        "class_charge_not_available" => "Esa clase está suspendida: no se puede registrar el cobro.",
+        "class_charge_not_drop_in" => "Sólo se cobra la clase suelta; el abono se registra aparte.",
+        "class_charge_cancelled" => "Esa anotación está cancelada: el lugar ya fue liberado.",
+        "class_charge_not_attended" => "Sólo se registra el cobro de una clase marcada como presente.",
+        "class_charge_already_charged" => "Esa clase suelta ya tiene un cobro vigente.",
+        _ => "No pudimos registrar el cobro. Volvé a intentar."
     };
 
     /// <summary>

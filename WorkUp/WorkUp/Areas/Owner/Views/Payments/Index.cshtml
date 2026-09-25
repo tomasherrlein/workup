@@ -1,0 +1,150 @@
+@using System.Globalization
+@using WorkUp.ViewModels.Payments
+@model PaymentLedgerIndexViewModel
+@{
+    ViewData["Title"] = "Cobros";
+}
+<div class="page-header">
+    <div>
+        <h1>Cobros</h1>
+        <p>Historial de cobros con su concepto y su origen. Un cobro no se edita ni se borra: se anula con un motivo o se le registra una devolución.</p>
+    </div>
+</div>
+
+<form method="get" class="agenda-filters" aria-label="Filtros de cobros">
+    <div class="field">
+        <label for="from">Desde</label>
+        <input id="from" name="from" type="date" value="@(Model.From?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))" />
+    </div>
+    <div class="field">
+        <label for="to">Hasta</label>
+        <input id="to" name="to" type="date" value="@(Model.To?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))" />
+    </div>
+    <div class="field">
+        <label for="clientId">Clienta</label>
+        <select id="clientId" name="clientId">
+            <option value="">Todas</option>
+            @foreach (var option in Model.Clients)
+            {
+                <option value="@option.Id" selected="@option.IsSelected">@option.Name</option>
+            }
+        </select>
+    </div>
+    <div class="field">
+        <label for="concept">Concepto</label>
+        <select id="concept" name="concept">
+            @foreach (var option in Model.ConceptOptions)
+            {
+                <option value="@option.Concept" selected="@option.IsSelected">@option.Label</option>
+            }
+        </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Ver cobros</button>
+    @if (Model.HasFilters)
+    {
+        <a class="btn" asp-action="Index">Limpiar filtros</a>
+    }
+</form>
+
+@if (!Model.HasItems)
+{
+    <div class="empty-state">
+        <p>@Model.EmptyMessage</p>
+    </div>
+}
+else
+{
+    <ul class="rows" aria-label="Cobros">
+        @foreach (var item in Model.Items)
+        {
+            <li class="row row-flat">
+                <div class="row-time">@Formatting.ShortDate(item.PaidAt)</div>
+                <div class="row-main">
+                    <div class="row-title">
+                        <strong>@item.ClientName</strong>
+                        <span class="num">@Formatting.Money(item.Amount)</span>
+                    </div>
+                    <div class="row-tags">
+                        <partial name="_StatusTag" model="item.StateTag" />
+                    </div>
+                    <div class="row-sub">
+                        @{
+                            var referenceText = item.ReferenceLabel is { } reference ? $" · {reference}" : "";
+                        }
+                        @item.ConceptLabel@referenceText
+                    </div>
+                    @if (item.Annulled)
+                    {
+                        var annulledText = item.AnnulledAt is { } annulledAt
+                            ? $"Anulado el {Formatting.ShortDate(annulledAt)}"
+                            : "Anulado";
+                        var byText = string.IsNullOrWhiteSpace(item.AnnulledBy) ? "" : $" por {item.AnnulledBy}";
+                        var reasonText = string.IsNullOrWhiteSpace(item.AnnulmentReason) ? "" : $" · Motivo: {item.AnnulmentReason}";
+                        <div class="row-sub">@annulledText@byText@reasonText</div>
+                    }
+                    @if (item.HasRefund)
+                    {
+                        <div class="row-sub">
+                            Devuelto: @Formatting.Money(item.RefundedAmount) · Resta por devolver: @Formatting.Money(item.RemainingAmount)
+                        </div>
+                    }
+                    <div class="row-actions">
+                        @if (item.CanAnnul)
+                        {
+                            <form asp-action="Annul" asp-route-paymentId="@item.PaymentId" method="post"
+                                  data-confirm="¿Anular este cobro? Es una corrección financiera: no revierte el servicio ni la cobertura.">
+                                <div class="field">
+                                    <label for="annul-reason-@item.PaymentId">Motivo de la anulación</label>
+                                    <input id="annul-reason-@item.PaymentId" name="reason" maxlength="300" required />
+                                </div>
+                                <p class="hint">Anular es una corrección financiera: no revierte el servicio ni la cobertura y no transfiere dinero.</p>
+                                <button type="submit" class="btn btn-destructive">Anular cobro</button>
+                            </form>
+                        }
+                        @if (item.CanRefund)
+                        {
+                            <form asp-action="Refund" asp-route-paymentId="@item.PaymentId" method="post">
+                                <div class="field">
+                                    <label for="refund-amount-@item.PaymentId">Importe a devolver</label>
+                                    <input id="refund-amount-@item.PaymentId" name="amount" type="number" min="0.01"
+                                           max="@item.RemainingAmount.ToString("0.00", CultureInfo.InvariantCulture)" step="0.01" required />
+                                </div>
+                                <div class="field">
+                                    <label for="refund-date-@item.PaymentId">Fecha de la devolución</label>
+                                    <input id="refund-date-@item.PaymentId" name="refundedOn" type="date"
+                                           value="@Model.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)"
+                                           max="@Model.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)" required />
+                                </div>
+                                <div class="field">
+                                    <label for="refund-reason-@item.PaymentId">Motivo de la devolución</label>
+                                    <input id="refund-reason-@item.PaymentId" name="reason" maxlength="300" required />
+                                </div>
+                                <p class="hint">Registrá una devolución ya hecha por fuera del sistema. El sistema no transfiere dinero automáticamente.</p>
+                                <button type="submit" class="btn">Registrar devolución</button>
+                            </form>
+                        }
+                    </div>
+                </div>
+            </li>
+        }
+    </ul>
+
+    @if (Model.TotalPages > 1)
+    {
+        <nav class="actions" aria-label="Páginas de cobros">
+            @if (Model.HasPrevious)
+            {
+                <a class="btn" asp-action="Index" asp-route-from="@Model.From" asp-route-to="@Model.To"
+                   asp-route-clientId="@Model.ClientId" asp-route-concept="@Model.Concept"
+                   asp-route-page="@(Model.Page - 1)">Anterior</a>
+            }
+            <span class="muted">Página @Model.Page de @Model.TotalPages</span>
+            @if (Model.HasNext)
+            {
+                <a class="btn" asp-action="Index" asp-route-from="@Model.From" asp-route-to="@Model.To"
+                   asp-route-clientId="@Model.ClientId" asp-route-concept="@Model.Concept"
+                   asp-route-page="@(Model.Page + 1)">Siguiente</a>
+            }
+        </nav>
+    }
+}

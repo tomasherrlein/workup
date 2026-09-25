@@ -9,8 +9,15 @@ namespace WorkUp.ViewModels.Classes;
 /// modality, the booking status and — for a fixed student — the derived membership state of the class date (never
 /// persisted, D-16, D-23). A cancelled annotation stays on the roster so the owner sees whose place was released, and
 /// it is shown as «Cancelada (lugar liberado)»; an absence is shown as «Ausente», and only that status feeds the
-/// absence count. The three <c>Can…</c> flags are the courtesy of the screen, never the rule: the service revalidates
+/// absence count. The four <c>Can…</c> flags are the courtesy of the screen, never the rule: the service revalidates
 /// every action under its own lock.
+/// <para>
+/// <see cref="CanCharge"/> is the late charge of a drop-in (T18, D-20): the owner marked the attendance and forgot the
+/// money, and no other path can register it. It is a courtesy of the same kind as the others — the screen only
+/// offers it for an already attended drop-in of a non-suspended class, and the charge service refuses everything
+/// else. Nothing here can know whether an effective payment already exists, because the detail read carries no
+/// payment: the duplicate is rejected by the server and the sentence the owner reads says so.
+/// </para>
 /// </summary>
 public sealed record ClassDetailStudentViewModel(
     int BookingId,
@@ -20,7 +27,8 @@ public sealed record ClassDetailStudentViewModel(
     ClassFixedStudentState? FixedState,
     bool CanAttend,
     bool CanMarkAbsent,
-    bool CanCancel)
+    bool CanCancel,
+    bool CanCharge)
 {
     /// <summary>The label the roster shows for an annotation whose place was released (RF-22).</summary>
     public const string CancelledLabel = "Cancelada (lugar liberado)";

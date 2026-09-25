@@ -43,7 +43,14 @@ namespace WorkUp.Tests.Scheduling;
 /// grid class — both refused with the first usable date and no write — and the change that finally commits, asserted
 /// in SQL as the old window closed the day before and the new one opened on it while the enrollment, its payment, its
 /// period and the annotation of a generated session stayed untouched; this sixth flow also reuses the same T12 harness
-/// variables and prefix. It replaces manual scratch scripts: the same test is the smoke it used to need.
+/// variables and prefix. The payment ledger (RF-11, RF-28, D-20): yoga owner login, the confirmed week, a seeded
+/// attended drop-in without a charge, the late charge that registers its payment from the class detail, GET
+/// /panel/Payments with the charge and its annotation origin, the antiforgery-protected annulment whose responsible is
+/// the authenticated owner, the corrected charge, the partial refund dated today and the two refusals -- a refund past
+/// what is left and an annulment of an already refunded payment -- all asserted in SQL as the original charge
+/// retained, one annulment and one refund, and the enrollment, its period, the attendance, the notes and the outbox
+/// untouched; this seventh flow also reuses the same T12 harness variables and prefix. It replaces manual scratch
+/// scripts: the same test is the smoke it used to need.
 ///
 /// Without <c>WORKUP_T12_HTTP_CONNECTION</c> each test logs N/A and returns before any SQL connection or HTTP
 /// request, so the default suite is unaffected. With it set, the harness refuses to run unless it can prove the
@@ -384,6 +391,60 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
             Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
             output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
             await RunFixedScheduleChangeFlowAsync(host.BaseUrl, plan, password);
+        }
+        finally
+        {
+            await StopWebHostAsync(host.Process);
+        }
+
+        output.WriteLine("All HTTP/SQL checkpoints passed; the isolated database and encrypted keyring stay in place (no DROP or DELETE).");
+    }
+
+    [Fact]
+    public async Task Payment_ledger_annuls_and_refunds_a_late_drop_in_charge_on_an_isolated_http_host()
+    {
+        var suppliedConnection = Environment.GetEnvironmentVariable(ConnectionVariable);
+        if (string.IsNullOrWhiteSpace(suppliedConnection))
+        {
+            output.WriteLine($"N/A: {ConnectionVariable} is not set; no SQL connection, database, or HTTP host was used.");
+            return;
+        }
+
+        // Preflight runs before any SQL connection: an unsafe assistant or a reused target stops the run here.
+        var plan = PlanHarness(suppliedConnection);
+        output.WriteLine($"Runtime: database '{plan.DatabaseName}', isolated keyring '{plan.KeysPath}', next free port {plan.Port}.");
+
+        await CreateDatabaseAsync(plan);
+
+        // The demo password exists only in memory and is never written to output or to any log.
+        var password = "T18-" + Guid.NewGuid().ToString("N") + "!aA1";
+
+        // First owned host migrates the fresh database and materializes the isolated encrypted keyring.
+        var migrations = StartWebHost(plan, plan.Port);
+        try
+        {
+            await WaitUntilReadyAsync(migrations);
+            Assert.False(migrations.Process.HasExited, "The owned migration host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned migration host (pid {migrations.Process.Id}) became ready on {migrations.BaseUrl}.");
+        }
+        finally
+        {
+            await StopWebHostAsync(migrations.Process);
+        }
+        AssertKeyringCreated(plan.KeysPath);
+
+        // The explicit T07 seed into the migrated, dedicated database, reusing the real hasher and clock.
+        await SeedDemoAsync(plan.ConnectionString, password);
+        output.WriteLine("SQL: T07 demo seeded (marina.demo and lucia.demo) into the isolated database.");
+
+        // Second owned host serves the authenticated owner flow with a brand-new loopback port.
+        var host = StartWebHost(plan, FindFreeLoopbackPort());
+        try
+        {
+            await WaitUntilReadyAsync(host);
+            Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
+            await RunPaymentLedgerFlowAsync(host.BaseUrl, plan, password);
         }
         finally
         {
@@ -1794,6 +1855,306 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// The payment ledger flow (RF-11, RF-28, D-20) over the real host, opt-in like the others. It drives the late
+    /// charge of an already attended drop-in from the class detail, then the two manual corrections of the Cobros
+    /// history: the annulment with the authenticated owner as responsible -- financial only, so the coverage, the
+    /// attendance, the notes and the outbox stay untouched -- and the partial refund capped by the amount charged,
+    /// with the two corrections never coexisting. The T16 fixture seeds the membership baseline that must survive
+    /// untouched and the class session; the attended drop-in without a charge is seeded beside it. Every fact is
+    /// scoped by the booking or the payment, so an unexpectedly seeded row cannot change the answer.
+    /// </summary>
+    private async Task RunPaymentLedgerFlowAsync(string baseUrl, HarnessPlan plan, string password)
+    {
+        // Every diagnostic line goes through Note, so the last checkpoint can prove that no password, antiforgery
+        // token or cookie value ever reached the test output.
+        var written = new List<string>();
+        var secrets = new HashSet<string>(StringComparer.Ordinal) { password };
+        void Note(string line)
+        {
+            output.WriteLine(line);
+            written.Add(line);
+        }
+
+        // The token is a secret: it is remembered for the output check instead of being written anywhere.
+        string ExtractToken(string html)
+        {
+            var token = ExtractAntiforgeryToken(html);
+            secrets.Add(token);
+            return token;
+        }
+
+        const decimal OriginalCharge = 4000.00m;
+        const decimal CorrectedCharge = 4200.00m;
+        const decimal PartialRefund = 1500.00m;
+        const decimal ExcessRefund = 3000.00m;
+        const string AnnulReason = "Cobro mal registrado T18";
+        const string RefundReason = "Devolución acordada T18";
+
+        using var handler = new HttpClientHandler { CookieContainer = new CookieContainer(), AllowAutoRedirect = false };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(30) };
+
+        // Login as the yoga owner: it is the demo business with class-type services and an active grid.
+        var (loginStatus, loginHtml) = await GetHtmlAsync(client, "/panel/Account/Login");
+        Assert.Equal(HttpStatusCode.OK, loginStatus);
+        var loginResponse = await client.PostAsync("/panel/Account/Login", Form(new Dictionary<string, string>
+        {
+            ["Username"] = "lucia.demo",
+            ["Password"] = password,
+            ["__RequestVerificationToken"] = ExtractToken(loginHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, loginResponse.StatusCode);
+        Assert.True(IsDayRedirect(loginResponse), $"Login did not redirect to the owner Jornada (location '{DescribeRedirect(loginResponse)}').");
+        Note("HTTP: yoga owner login accepted with antiforgery; redirected to the owner Jornada (/panel).");
+
+        // Generation is what gives the flow real class sessions; the week page also supplies the confirm token.
+        var (weekStatus, weekHtml) = await GetHtmlAsync(client, "/panel/Classes/Week");
+        Assert.Equal(HttpStatusCode.OK, weekStatus);
+        var confirmResponse = await client.PostAsync("/panel/Classes/ConfirmWeek", Form(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = ExtractToken(weekHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, confirmResponse.StatusCode);
+        var (confirmStatus, confirmHtml) = await GetHtmlAsync(client, confirmResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, confirmStatus);
+        Assert.Contains("Semana generada", confirmHtml, StringComparison.Ordinal);
+        Note("HTTP: POST /panel/Classes/ConfirmWeek with no date -> 302 -> 200 with the generated week.");
+
+        await using var connection = new SqlConnection(plan.ConnectionString);
+        await connection.OpenAsync();
+        var businessId = await ScalarIntAsync(connection, "SELECT Id FROM Businesses WHERE Slug = 'estudio-yoga-lucia-demo'");
+
+        // The business clock the app reads: Argentina, fixed offset, truncated to whole seconds.
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/Argentina/Buenos_Aires");
+        var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zone);
+        now = new DateTime(now.Ticks - now.Ticks % TimeSpan.TicksPerSecond, DateTimeKind.Unspecified);
+        var today = DateOnly.FromDateTime(now);
+
+        // One real generated class session carries the seeded roster: the T16 fixture (a synthetic Active enrollment
+        // whose period covers the class date, its membership payment and a fixed annotation) and, beside it, one
+        // synthetic attended drop-in with no charge -- the omission this flow exists to correct.
+        var sessionId = await ScalarIntAsync(connection, """
+            SELECT MIN(Id)
+              FROM Appointments
+             WHERE BusinessId = @businessId AND Kind = @kind AND GridClassId IS NOT NULL
+            """, ("@businessId", businessId), ("@kind", (byte)AppointmentKind.ClassSession));
+        var gridClassId = await ScalarIntAsync(connection,
+            "SELECT GridClassId FROM Appointments WHERE Id = @id", ("@id", sessionId));
+        Assert.True(sessionId > 0 && gridClassId > 0, "The confirmed week must persist a class session of the grid.");
+
+        var fixture = await SeedClassRosterFixtureAsync(connection, businessId, sessionId, gridClassId, today, now);
+        var (dropInClientId, dropInBookingId) = await SeedAttendedDropInAsync(connection, businessId, sessionId, now);
+
+        // The outbox and the observations are a baseline captured before the money corrections, so the assertion is a
+        // delta and never an absolute total that an injected seed row could break.
+        var notesBefore = await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM ClientNotes WHERE AppointmentId = @id", ("@id", sessionId));
+        var notificationsBefore = await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId", ("@businessId", businessId));
+        Note($"SQL: seeded the T16 enrollment #{fixture.EnrollmentId} and the attended drop-in annotation #{dropInBookingId} (client #{dropInClientId}) on session #{sessionId}.");
+
+        // The class detail is the page the panel reaches the late charge from: it must offer the form on the attended
+        // drop-in, and it supplies the antiforgery token of the write.
+        var (detailStatus, detailHtml) = await GetHtmlAsync(client, $"/panel/Classes/Detail/{sessionId}");
+        Assert.Equal(HttpStatusCode.OK, detailStatus);
+        Assert.Contains($"/panel/Classes/ChargeDropIn/{dropInBookingId}", detailHtml, StringComparison.Ordinal);
+        var detailToken = ExtractToken(detailHtml);
+        Note($"HTTP: GET /panel/Classes/Detail/{sessionId} -> 200 and it offers the late charge of annotation #{dropInBookingId}.");
+
+        async Task<HttpResponseMessage> ChargeAsync(decimal amount, string token) =>
+            await client.PostAsync($"/panel/Classes/ChargeDropIn/{dropInBookingId}", Form(new Dictionary<string, string>
+            {
+                ["appointmentId"] = sessionId.ToString(CultureInfo.InvariantCulture),
+                ["amount"] = amount.ToString("0.00", CultureInfo.InvariantCulture),
+                ["priceReason"] = "Cobro tardío T18",
+                ["__RequestVerificationToken"] = token
+            }));
+
+        var firstCharge = await ChargeAsync(OriginalCharge, detailToken);
+        Assert.Equal(HttpStatusCode.Redirect, firstCharge.StatusCode);
+        var paymentId = await ScalarIntAsync(connection, """
+            SELECT MAX(Id)
+              FROM Payments
+             WHERE BusinessId = @businessId AND BookingId = @bookingId AND Concept = @concept
+            """,
+            ("@businessId", businessId), ("@bookingId", dropInBookingId), ("@concept", (byte)PaymentConcept.DropInClass));
+        Assert.True(paymentId > 0, "The late charge must persist its payment.");
+        Note($"HTTP: POST ChargeDropIn for annotation #{dropInBookingId} with {OriginalCharge:0.00} -> 302; SQL payment #{paymentId}.");
+
+        // The Cobros history is the ledger the owner corrects from: it lists the drop-in charge with its concept and
+        // its concrete origin, and it renders the two correction forms.
+        var (ledgerStatus, ledgerHtml) = await GetHtmlAsync(client, "/panel/Payments");
+        Assert.Equal(HttpStatusCode.OK, ledgerStatus);
+        Assert.Contains("Clase suelta", ledgerHtml, StringComparison.Ordinal);
+        Assert.Contains($"Reserva #{dropInBookingId}", ledgerHtml, StringComparison.Ordinal);
+        Assert.Contains("Cobrado", ledgerHtml, StringComparison.Ordinal);
+        var ledgerToken = ExtractToken(ledgerHtml);
+        Note("HTTP: GET /panel/Payments -> 200 with the late charge as 'Clase suelta' and its annotation origin.");
+
+        // A POST without the antiforgery token must be rejected before any business logic runs.
+        var rejected = await client.PostAsync($"/panel/Payments/Annul?paymentId={paymentId}",
+            Form(new Dictionary<string, string> { ["reason"] = AnnulReason }));
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        Note("HTTP: Annul POST without an anti-CSRF token -> 400.");
+
+        // The owner annuls with a reason; the person responsible is the authenticated username, never a form field.
+        var annul = await client.PostAsync($"/panel/Payments/Annul?paymentId={paymentId}", Form(new Dictionary<string, string>
+        {
+            ["reason"] = AnnulReason,
+            ["__RequestVerificationToken"] = ledgerToken
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, annul.StatusCode);
+        var (afterAnnulStatus, afterAnnulHtml) = await GetHtmlAsync(client, annul.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, afterAnnulStatus);
+        Assert.Contains("Cobro anulado.", afterAnnulHtml, StringComparison.Ordinal);
+        Assert.Contains("Anulado", afterAnnulHtml, StringComparison.Ordinal);
+        Assert.Contains(AnnulReason, afterAnnulHtml, StringComparison.Ordinal);
+        Assert.Contains("lucia.demo", afterAnnulHtml, StringComparison.Ordinal);
+        Note($"HTTP: POST Annul of payment #{paymentId} with its reason -> 302 -> 200 with the annulled row and the owner as responsible.");
+
+        // The corrected charge lands on the same annotation now that the wrong one is annulled.
+        var secondCharge = await ChargeAsync(CorrectedCharge, detailToken);
+        Assert.Equal(HttpStatusCode.Redirect, secondCharge.StatusCode);
+        var correctedPaymentId = await ScalarIntAsync(connection, """
+            SELECT MAX(Id)
+              FROM Payments
+             WHERE BusinessId = @businessId AND BookingId = @bookingId AND Concept = @concept
+            """,
+            ("@businessId", businessId), ("@bookingId", dropInBookingId), ("@concept", (byte)PaymentConcept.DropInClass));
+        Assert.True(correctedPaymentId > paymentId, "The corrected charge must be a new payment row.");
+        Note($"HTTP: corrected POST ChargeDropIn of {CorrectedCharge:0.00} -> 302; SQL payment #{correctedPaymentId}.");
+
+        async Task<HttpResponseMessage> RefundAsync(decimal amount, string token) =>
+            await client.PostAsync($"/panel/Payments/Refund?paymentId={correctedPaymentId}", Form(new Dictionary<string, string>
+            {
+                ["amount"] = amount.ToString("0.00", CultureInfo.InvariantCulture),
+                ["refundedOn"] = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                ["reason"] = RefundReason,
+                ["__RequestVerificationToken"] = token
+            }));
+
+        var partial = await RefundAsync(PartialRefund, ledgerToken);
+        Assert.Equal(HttpStatusCode.Redirect, partial.StatusCode);
+        var (afterRefundStatus, afterRefundHtml) = await GetHtmlAsync(client, partial.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, afterRefundStatus);
+        // Razor encodes accented flash text as entities; assert an ASCII-safe fragment and the ledger state below.
+        Assert.Contains("registrada.", afterRefundHtml, StringComparison.Ordinal);
+        Assert.Contains("Devuelto", afterRefundHtml, StringComparison.Ordinal);
+        Assert.Contains("Resta por devolver", afterRefundHtml, StringComparison.Ordinal);
+        Note($"HTTP: partial refund of {PartialRefund:0.00} on payment #{correctedPaymentId} dated today -> 302 -> 200 with the returned total and what is left.");
+
+        // The cumulative cap is a rule the panel maps to words: a refund past what is left is refused and writes nothing.
+        var overCap = await RefundAsync(ExcessRefund, ledgerToken);
+        Assert.Equal(HttpStatusCode.Redirect, overCap.StatusCode);
+        var (overCapStatus, overCapHtml) = await GetHtmlAsync(client, overCap.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, overCapStatus);
+        Assert.Contains("Las devoluciones no pueden superar el importe cobrado.", overCapHtml, StringComparison.Ordinal);
+        Note("HTTP: refund past the remaining amount -> 302 -> 200 with the cap sentence and no extra refund row.");
+
+        // An annulment and a refund never coexist: the already refunded payment refuses the annulment.
+        var annulRefunded = await client.PostAsync($"/panel/Payments/Annul?paymentId={correctedPaymentId}", Form(new Dictionary<string, string>
+        {
+            ["reason"] = AnnulReason,
+            ["__RequestVerificationToken"] = ledgerToken
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, annulRefunded.StatusCode);
+        var (annulRefundedStatus, annulRefundedHtml) = await GetHtmlAsync(client, annulRefunded.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, annulRefundedStatus);
+        Assert.Contains("Ese cobro tiene devoluciones: no se puede anular.", annulRefundedHtml, StringComparison.Ordinal);
+        Note("HTTP: Annul on the refunded payment -> 302 -> 200 with the coexistence refusal.");
+
+        // SQL verification runs after every HTTP checkpoint so one run reports the whole behavior. Every count is
+        // scoped by the booking or the payment so an unexpectedly seeded row cannot change the answer.
+        Assert.Equal(2, await ScalarIntAsync(connection, """
+            SELECT COUNT(*) FROM Payments
+             WHERE BusinessId = @businessId AND BookingId = @bookingId AND Concept = @concept
+            """,
+            ("@businessId", businessId), ("@bookingId", dropInBookingId), ("@concept", (byte)PaymentConcept.DropInClass)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*) FROM Payments WHERE Id = @id AND BookingId = @bookingId AND Amount = @amount
+            """,
+            ("@id", paymentId), ("@bookingId", dropInBookingId), ("@amount", OriginalCharge)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*) FROM Payments WHERE Id = @id AND BookingId = @bookingId AND Amount = @amount
+            """,
+            ("@id", correctedPaymentId), ("@bookingId", dropInBookingId), ("@amount", CorrectedCharge)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*) FROM PaymentAnnulments
+             WHERE PaymentId = @paymentId AND Reason = @reason AND AnnulledBy = @annulledBy
+            """,
+            ("@paymentId", paymentId), ("@reason", AnnulReason), ("@annulledBy", "lucia.demo")));
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM PaymentAnnulments WHERE PaymentId = @paymentId", ("@paymentId", correctedPaymentId)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*) FROM Refunds
+             WHERE PaymentId = @paymentId AND Amount = @amount
+               AND CONVERT(varchar(10), RefundedOn, 23) = @refundedOn
+            """,
+            ("@paymentId", correctedPaymentId), ("@amount", PartialRefund),
+            ("@refundedOn", today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))));
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Refunds WHERE PaymentId = @paymentId", ("@paymentId", paymentId)));
+        Note("SQL: the original charge is retained, exactly one annulment and one partial refund exist, and none of them coexists on the same payment.");
+
+        // The annulment is financial only: the enrollment, its paid period, the attendance and the fixed annotation
+        // are exactly the seeded ones, and the corrected charge never re-marked the attendance.
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Enrollments WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*) FROM Enrollments WHERE Id = @id AND Status = @status AND ActivatedAt IS NOT NULL
+            """,
+            ("@id", fixture.EnrollmentId), ("@status", (byte)EnrollmentStatus.Active)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*) FROM MembershipPeriods
+             WHERE Id = @periodId AND EnrollmentId = @enrollmentId
+               AND CONVERT(varchar(10), CoverageStart, 23) = @coverageStart
+               AND CONVERT(varchar(10), ExpiresOn, 23) = @expiresOn
+            """,
+            ("@periodId", fixture.PeriodId), ("@enrollmentId", fixture.EnrollmentId),
+            ("@coverageStart", today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
+            ("@expiresOn", today.AddMonths(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*) FROM Payments
+             WHERE Id = @id AND EnrollmentId = @enrollmentId AND Concept = @concept AND Amount = @amount
+            """,
+            ("@id", fixture.MembershipPaymentId), ("@enrollmentId", fixture.EnrollmentId),
+            ("@concept", (byte)PaymentConcept.Membership), ("@amount", MembershipFixtureAmount)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*) FROM Bookings
+             WHERE Id = @id AND Modality = @modality AND Status = @status AND AttendanceRecordedAt IS NOT NULL
+            """,
+            ("@id", dropInBookingId), ("@modality", (byte)BookingModality.DropIn), ("@status", (byte)BookingStatus.Attended)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*) FROM Bookings
+             WHERE Id = @id AND EnrollmentId = @enrollmentId AND Status = @status
+            """,
+            ("@id", fixture.FixedBookingId), ("@enrollmentId", fixture.EnrollmentId), ("@status", (byte)BookingStatus.Pending)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Appointments WHERE Id = @id AND Status = @status AND SuspendedAt IS NULL",
+            ("@id", sessionId), ("@status", (byte)AppointmentStatus.Scheduled)));
+        Note("SQL: the enrollment, its period, its paid payment, the fixed annotation and the attendance are untouched; the class stayed Programado.");
+
+        // No observation and no notice is a by-product of the money corrections (D-07, D-20).
+        Assert.Equal(notesBefore, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM ClientNotes WHERE AppointmentId = @id", ("@id", sessionId)));
+        Assert.Equal(notificationsBefore, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Note("SQL: the money corrections wrote no observation and queued no email.");
+
+        // The harness never writes a secret: every diagnostic line reports only booleans, identifiers, counts or paths,
+        // and this proves it against the password, every antiforgery token and every cookie of the run.
+        foreach (Cookie cookie in handler.CookieContainer.GetAllCookies())
+        {
+            if (cookie.Value.Length >= 8)
+                secrets.Add(cookie.Value);
+        }
+
+        Assert.NotEmpty(written);
+        var leaked = written.Any(line => secrets.Any(secret => line.Contains(secret, StringComparison.Ordinal)));
+        Assert.False(leaked, "The test output must never contain a password, an antiforgery token or a cookie value.");
+        Note("Secrets: the run wrote no password, antiforgery token or cookie value to the test output.");
+    }
+
+    /// <summary>
     /// The refused change wrote nothing: the enrollment still has its single open fixed window and no second row, so a
     /// rejected date never leaves a half-moved schedule behind.
     /// </summary>
@@ -1900,6 +2261,40 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
 
         await transaction.CommitAsync();
         return new ClassRosterFixture(clientId, email, enrollmentId, periodId, membershipPaymentId, bookingId);
+    }
+
+    /// <summary>
+    /// One synthetic attended drop-in without a charge: a fresh client (the active-booking index allows one booking per
+    /// client and session, so it cannot reuse the fixed student of the T16 fixture) and its <c>Suelta</c> annotation
+    /// already marked as present on the class session that fixture seeded, with no payment. That missing charge is
+    /// exactly what the late-charge flow exists to register. It writes only those two rows, in one transaction, and
+    /// returns their identifiers so the flow can scope its assertions to the booking.
+    /// </summary>
+    private static async Task<(int ClientId, int BookingId)> SeedAttendedDropInAsync(
+        SqlConnection connection, int businessId, int appointmentId, DateTime now)
+    {
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var email = $"t18.dropin{Guid.NewGuid():N}@example.invalid";
+        var clientId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO Clients (BusinessId, FirstName, LastName, Email, Phone, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @firstName, @lastName, @email, @phone, @createdAt)
+            """,
+            ("@businessId", businessId), ("@firstName", "Synthetic"), ("@lastName", "T18DropIn"),
+            ("@email", email), ("@phone", "0000000000"), ("@createdAt", now));
+
+        var bookingId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO Bookings (BusinessId, AppointmentId, ClientId, EnrollmentId, Modality, Status, AbsenceSource, CancelledBy, CreatedAt, CancelledAt, AttendanceRecordedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @appointmentId, @clientId, NULL, @modality, @status, NULL, NULL, @createdAt, NULL, @attendedAt)
+            """,
+            ("@businessId", businessId), ("@appointmentId", appointmentId), ("@clientId", clientId),
+            ("@modality", BookingModality.DropIn), ("@status", BookingStatus.Attended),
+            ("@createdAt", now), ("@attendedAt", now));
+
+        await transaction.CommitAsync();
+        return (clientId, bookingId);
     }
 
     /// <summary>

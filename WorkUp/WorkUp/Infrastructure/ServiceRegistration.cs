@@ -4,6 +4,7 @@ using WorkUp.BusinessLogic.Catalog;
 using WorkUp.BusinessLogic.Classes;
 using WorkUp.BusinessLogic.Clients;
 using WorkUp.BusinessLogic.Enrollments;
+using WorkUp.BusinessLogic.Payments;
 using WorkUp.BusinessLogic.Staff;
 using WorkUp.BusinessLogic.Expenses;
 using WorkUp.BusinessLogic.Supplies;
@@ -15,6 +16,7 @@ using WorkUp.Data.Classes;
 using WorkUp.Data.Clients;
 using WorkUp.Data.Enrollments;
 using WorkUp.Data.DemoData;
+using WorkUp.Data.Payments;
 using WorkUp.Data.Staff;
 using WorkUp.Data.Expenses;
 using WorkUp.Data.Supplies;
@@ -94,12 +96,13 @@ public static class ServiceRegistration
         services.AddScoped<IWeekGenerationRepository, SqlWeekGenerationRepository>();
         services.AddScoped<WeekGenerationService>();
 
-        // Class detail, attendance, walk-in and date actions (T16)
+        // Class detail, attendance, walk-in, date actions and the late charge of a drop-in (T16, T18)
         services.AddScoped<IClassDetailRepository, SqlClassDetailRepository>();
         services.AddScoped<ClassDetailService>();
         services.AddScoped<IClassAttendanceRepository, SqlClassAttendanceRepository>();
         services.AddScoped<ClassAttendanceService>();
         services.AddScoped<ClassWalkInService>();
+        services.AddScoped<ClassDropInChargeService>();
         services.AddScoped<IClassDateActionsRepository, SqlClassDateActionsRepository>();
         services.AddScoped<ClassDateActionsService>();
 
@@ -153,6 +156,10 @@ public static class ServiceRegistration
         // Guided fixed-schedule change (T17)
         services.AddScoped<IFixedScheduleChangeRepository, SqlFixedScheduleChangeRepository>();
         services.AddScoped<FixedScheduleChangeService>();
+
+        // Payments: charges, annulments and refunds (T18)
+        services.AddScoped<IPaymentLedgerRepository, SqlPaymentLedgerRepository>();
+        services.AddScoped<PaymentLedgerService>();
 
         return services;
     }
