@@ -1,0 +1,34 @@
+@model WorkUp.ViewModels.ClientAccounts.ClientResetPasswordViewModel
+@{
+    ViewData["Title"] = "Elegí tu contraseña nueva";
+    var slug = ViewContext.RouteData.Values["slug"] as string ?? "";
+}
+<section class="public-booking" aria-labelledby="account-reset-title">
+    <h1 id="account-reset-title">Elegí tu contraseña nueva</h1>
+    <p>Vas a usar esta contraseña para ingresar a tu cuenta de @ViewData["BusinessName"].</p>
+
+    <form method="post" action="/r/@slug/cuenta/restablecer" class="form">
+        @Html.AntiForgeryToken()
+        <div asp-validation-summary="All" class="notice notice-error" role="alert"></div>
+        <input asp-for="Token" type="hidden" />
+        <div class="field">
+            <label asp-for="NewPassword"></label>
+            <input asp-for="NewPassword" type="password" autocomplete="new-password" minlength="8" maxlength="100" required />
+            <p class="hint">Al menos 8 caracteres.</p>
+            <span asp-validation-for="NewPassword" class="field-error"></span>
+        </div>
+        <div class="field">
+            <label asp-for="ConfirmPassword"></label>
+            <input asp-for="ConfirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="100" required />
+            <span asp-validation-for="ConfirmPassword" class="field-error"></span>
+        </div>
+        <div class="actions">
+            <button class="btn btn-primary btn-block" type="submit">Guardar contraseña</button>
+        </div>
+    </form>
+
+    <p class="muted">El enlace vence a los 30 minutos y sirve una sola vez.</p>
+</section>
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

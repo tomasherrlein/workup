@@ -3,6 +3,7 @@ using WorkUp.BusinessLogic.Businesses;
 using WorkUp.BusinessLogic.Catalog;
 using WorkUp.BusinessLogic.Classes;
 using WorkUp.BusinessLogic.Clients;
+using WorkUp.BusinessLogic.ClientAccounts;
 using WorkUp.BusinessLogic.Enrollments;
 using WorkUp.BusinessLogic.Payments;
 using WorkUp.BusinessLogic.Reports;
@@ -15,6 +16,7 @@ using WorkUp.Data.Businesses;
 using WorkUp.Data.Catalog;
 using WorkUp.Data.Classes;
 using WorkUp.Data.Clients;
+using WorkUp.Data.ClientAccounts;
 using WorkUp.Data.Enrollments;
 using WorkUp.Data.DemoData;
 using WorkUp.Data.Payments;
@@ -166,6 +168,13 @@ public static class ServiceRegistration
         // Reports: period result and indicators (T19)
         services.AddScoped<IReportsRepository, SqlReportsRepository>();
         services.AddScoped<ReportsService>();
+
+        // Public client account: registration, verification, sign-in and recovery (T20)
+        services.AddSingleton<IClientAccountUrlBuilder, ClientAccountUrlBuilder>();
+        services.AddScoped<IClientRegistrationRepository, SqlClientRegistrationRepository>();
+        services.AddScoped<ClientRegistrationService>();
+        services.AddScoped<IClientAccessRepository, SqlClientAccessRepository>();
+        services.AddScoped<ClientAccessService>();
 
         return services;
     }

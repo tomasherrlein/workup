@@ -1,0 +1,48 @@
+@model WorkUp.ViewModels.ClientAccounts.ClientRegisterViewModel
+@{
+    ViewData["Title"] = "Crear mi cuenta";
+    var slug = ViewContext.RouteData.Values["slug"] as string ?? "";
+}
+<section class="public-booking" aria-labelledby="account-register-title">
+    <h1 id="account-register-title">Creá tu cuenta</h1>
+    <p>Con tu cuenta vas a poder ver y gestionar tus turnos en @ViewData["BusinessName"]. Te vamos a pedir confirmar tu email.</p>
+
+    <form method="post" action="/r/@slug/cuenta/registrarse" class="form">
+        @Html.AntiForgeryToken()
+        <div asp-validation-summary="All" class="notice notice-error" role="alert"></div>
+        <div class="field">
+            <label asp-for="FirstName"></label>
+            <input asp-for="FirstName" autocomplete="given-name" maxlength="60" required />
+            <span asp-validation-for="FirstName" class="field-error"></span>
+        </div>
+        <div class="field">
+            <label asp-for="LastName"></label>
+            <input asp-for="LastName" autocomplete="family-name" maxlength="60" required />
+            <span asp-validation-for="LastName" class="field-error"></span>
+        </div>
+        <div class="field">
+            <label asp-for="Email"></label>
+            <input asp-for="Email" type="email" autocomplete="email" maxlength="254" required />
+            <span asp-validation-for="Email" class="field-error"></span>
+        </div>
+        <div class="field">
+            <label asp-for="Password"></label>
+            <input asp-for="Password" type="password" autocomplete="new-password" minlength="8" maxlength="100" required />
+            <p class="hint">Al menos 8 caracteres.</p>
+            <span asp-validation-for="Password" class="field-error"></span>
+        </div>
+        <div class="field">
+            <label asp-for="ConfirmPassword"></label>
+            <input asp-for="ConfirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="100" required />
+            <span asp-validation-for="ConfirmPassword" class="field-error"></span>
+        </div>
+        <div class="actions">
+            <button class="btn btn-primary btn-block" type="submit">Crear mi cuenta</button>
+        </div>
+    </form>
+
+    <p class="muted">¿Ya tenés cuenta? <a href="/r/@slug/cuenta/ingresar">Ingresá</a>.</p>
+</section>
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}
