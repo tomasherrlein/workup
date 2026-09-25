@@ -16,7 +16,7 @@ namespace WorkUp.Tests.Scheduling;
 
 /// <summary>
 /// Opt-in, reusable HTTP integration harness for the owner panel. It drives the real MVC host over loopback with
-/// cookies and antiforgery, then verifies the persisted rows with ADO.NET, and it covers four independent flows.
+/// cookies and antiforgery, then verifies the persisted rows with ADO.NET, and it covers five independent flows.
 /// The Jornada (RF-11/RF-15): owner login, one synthetic client through the owner form, GET /panel/Day, a walk-in with
 /// an exact agreed price plus immediate payment and next-visit note, a second overlapping walk-in saved with a
 /// warning, and the anti-CSRF rejection. The week generation (RF-06): yoga owner login, the first real render of
@@ -30,7 +30,14 @@ namespace WorkUp.Tests.Scheduling;
 /// the grid classes and the configured tariff with the amount empty, the pending enrollment created with no amount,
 /// the charge that activates it with one payment and one period matching MembershipCalendar, and the anti-CSRF
 /// rejection; this fourth flow deliberately reuses the T12 harness variables and prefix to avoid duplicating the
-/// isolation harness. It replaces manual scratch scripts: the same test is the smoke it used to need.
+/// isolation harness. The class roster (RF-10, RF-11, RF-12, RF-22): yoga owner login, the generated week, two of its
+/// synthetic sessions shifted — one still ahead of the clock and one already inside its arrival window — the class
+/// link followed from the drop-in roster and from the Jornada, the detail render with its roster, occupancy and stored
+/// end, the antiforgery-protected attendance with a drop-in charge and the absence, the cancellation of an already
+/// recorded annotation before the start, the at-arrival walk-in inside the stored window with its charge and zero
+/// email, the suspension with its mandatory reason and deduplicated notices, the no-token rejection, and the SQL rows
+/// behind every one of them; this fifth flow reuses the same T12 harness variables and prefix. It replaces manual
+/// scratch scripts: the same test is the smoke it used to need.
 ///
 /// Without <c>WORKUP_T12_HTTP_CONNECTION</c> each test logs N/A and returns before any SQL connection or HTTP
 /// request, so the default suite is unaffected. With it set, the harness refuses to run unless it can prove the
@@ -49,6 +56,9 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
     private const string KeysLeafPrefix = "WorkUpDemoT12Keys";
     private const string DatabasePrefix = "WorkUpDemoT12Http";
     private const decimal ExpectedPrice = 100.25m;
+
+    /// <summary>Agreed price of the synthetic T16 fixed enrollment; the flow asserts its payment is never mutated.</summary>
+    private const decimal MembershipFixtureAmount = 6500m;
 
     private static readonly TimeSpan ReadinessBudget = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan ReadinessPoll = TimeSpan.FromMilliseconds(500);
@@ -260,6 +270,60 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
             Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
             output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
             await RunMembershipFlowAsync(host.BaseUrl, plan, password);
+        }
+        finally
+        {
+            await StopWebHostAsync(host.Process);
+        }
+
+        output.WriteLine("All HTTP/SQL checkpoints passed; the isolated database and encrypted keyring stay in place (no DROP or DELETE).");
+    }
+
+    [Fact]
+    public async Task Class_roster_attendance_and_suspension_run_on_an_isolated_http_host()
+    {
+        var suppliedConnection = Environment.GetEnvironmentVariable(ConnectionVariable);
+        if (string.IsNullOrWhiteSpace(suppliedConnection))
+        {
+            output.WriteLine($"N/A: {ConnectionVariable} is not set; no SQL connection, database, or HTTP host was used.");
+            return;
+        }
+
+        // Preflight runs before any SQL connection: an unsafe assistant or a reused target stops the run here.
+        var plan = PlanHarness(suppliedConnection);
+        output.WriteLine($"Runtime: database '{plan.DatabaseName}', isolated keyring '{plan.KeysPath}', next free port {plan.Port}.");
+
+        await CreateDatabaseAsync(plan);
+
+        // The demo password exists only in memory and is never written to output or to any log.
+        var password = "T16-" + Guid.NewGuid().ToString("N") + "!aA1";
+
+        // First owned host migrates the fresh database and materializes the isolated encrypted keyring.
+        var migrations = StartWebHost(plan, plan.Port);
+        try
+        {
+            await WaitUntilReadyAsync(migrations);
+            Assert.False(migrations.Process.HasExited, "The owned migration host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned migration host (pid {migrations.Process.Id}) became ready on {migrations.BaseUrl}.");
+        }
+        finally
+        {
+            await StopWebHostAsync(migrations.Process);
+        }
+        AssertKeyringCreated(plan.KeysPath);
+
+        // The explicit T07 seed into the migrated, dedicated database, reusing the real hasher and clock.
+        await SeedDemoAsync(plan.ConnectionString, password);
+        output.WriteLine("SQL: T07 demo seeded (marina.demo and lucia.demo) into the isolated database.");
+
+        // Second owned host serves the authenticated owner flow with a brand-new loopback port.
+        var host = StartWebHost(plan, FindFreeLoopbackPort());
+        try
+        {
+            await WaitUntilReadyAsync(host);
+            Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
+            await RunClassRosterFlowAsync(host.BaseUrl, plan, password);
         }
         finally
         {
@@ -993,6 +1057,617 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
         Note("Secrets: the run wrote no password, antiforgery token or cookie value to the test output.");
     }
 
+    /// <summary>
+    /// Class roster, attendance and suspension flow (RF-10, RF-11, RF-12, RF-22) over the real host. This T16 smoke
+    /// deliberately reuses the T12 harness variables (<c>WORKUP_T12_HTTP_CONNECTION</c>,
+    /// <c>WORKUP_T12_HTTP_KEYS_PATH</c>) and the <c>WorkUpDemoT12Http*</c> database prefix instead of duplicating the
+    /// isolation harness: every fact is opt-in and each run needs a fresh, absent database and keyring, so reusing the
+    /// names never shares state between flows.
+    /// <para>
+    /// The app reads the real business clock (the simulated clock of T26 does not exist yet), so this flow never fakes
+    /// time: it generates the week through the owner screen and then <b>shifts two of those generated sessions</b> —
+    /// and only those synthetic fixture rows — so one is still ahead of the clock and the other is already inside its
+    /// own arrival window. Nothing else the harness writes is anything but the synthetic clients, the synthetic
+    /// enrollment and the class annotations it asserts.
+    /// </para>
+    /// </summary>
+    private async Task RunClassRosterFlowAsync(string baseUrl, HarnessPlan plan, string password)
+    {
+        // Every diagnostic line goes through Note, so the last checkpoint can prove that no password, antiforgery token
+        // or cookie value ever reached the test output.
+        var written = new List<string>();
+        var secrets = new HashSet<string>(StringComparer.Ordinal) { password };
+        void Note(string line)
+        {
+            output.WriteLine(line);
+            written.Add(line);
+        }
+
+        // The token is a secret: it is remembered for the output check instead of being written anywhere.
+        string ExtractToken(string html)
+        {
+            var token = ExtractAntiforgeryToken(html);
+            secrets.Add(token);
+            return token;
+        }
+
+        const decimal AttendanceCharge = 4321.00m;
+        const decimal WalkInCharge = 987.65m;
+        const string SuspensionReason = "Paro del gremio T16";
+
+        using var handler = new HttpClientHandler { CookieContainer = new CookieContainer(), AllowAutoRedirect = false };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(30) };
+
+        // Login as the yoga owner: it is the demo business with class-type services and an active grid.
+        var (loginStatus, loginHtml) = await GetHtmlAsync(client, "/panel/Account/Login");
+        Assert.Equal(HttpStatusCode.OK, loginStatus);
+        var loginResponse = await client.PostAsync("/panel/Account/Login", Form(new Dictionary<string, string>
+        {
+            ["Username"] = "lucia.demo",
+            ["Password"] = password,
+            ["__RequestVerificationToken"] = ExtractToken(loginHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, loginResponse.StatusCode);
+        Assert.True(IsDayRedirect(loginResponse), $"Login did not redirect to the owner Jornada (location '{DescribeRedirect(loginResponse)}').");
+        Note("HTTP: yoga owner login accepted with antiforgery; redirected to the owner Jornada (/panel).");
+
+        // Generation is what gives the roster real sessions; the week page also supplies the confirm token.
+        var (weekStatus, weekHtml) = await GetHtmlAsync(client, "/panel/Classes/Week");
+        Assert.Equal(HttpStatusCode.OK, weekStatus);
+        var confirmResponse = await client.PostAsync("/panel/Classes/ConfirmWeek", Form(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = ExtractToken(weekHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, confirmResponse.StatusCode);
+        var (confirmStatus, confirmHtml) = await GetHtmlAsync(client, confirmResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, confirmStatus);
+        Assert.Contains("Semana generada", confirmHtml, StringComparison.Ordinal);
+        Note("HTTP: POST /panel/Classes/ConfirmWeek with no date -> 302 -> 200 with the generated week.");
+
+        await using var connection = new SqlConnection(plan.ConnectionString);
+        await connection.OpenAsync();
+        var businessId = await ScalarIntAsync(connection, "SELECT Id FROM Businesses WHERE Slug = 'estudio-yoga-lucia-demo'");
+
+        // Two of the generated sessions are shifted, and only those two fixture rows: one stays ahead so the pre-start
+        // actions and the suspension are open, the other is moved into its own arrival window so the walk-in is
+        // judged after the start. The app keeps reading the real clock; the fixture is what moves.
+        var sessionFutureId = await ScalarIntAsync(connection, """
+            SELECT MIN(Id)
+              FROM Appointments
+             WHERE BusinessId = @businessId AND Kind = @kind AND GridClassId IS NOT NULL
+            """, ("@businessId", businessId), ("@kind", (byte)AppointmentKind.ClassSession));
+        var sessionStartedId = await ScalarIntAsync(connection, """
+            SELECT MAX(Id)
+              FROM Appointments
+             WHERE BusinessId = @businessId AND Kind = @kind AND GridClassId IS NOT NULL
+            """, ("@businessId", businessId), ("@kind", (byte)AppointmentKind.ClassSession));
+        Assert.NotEqual(sessionFutureId, sessionStartedId);
+
+        // The business clock the app reads: Argentina, fixed offset, truncated to whole seconds.
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/Argentina/Buenos_Aires");
+        var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zone);
+        now = new DateTime(now.Ticks - now.Ticks % TimeSpan.TicksPerSecond, DateTimeKind.Unspecified);
+
+        // Two days ahead: far outside the 24-hour immediate-reminder window, so the owner bookings queue no email.
+        var futureStarts = now.AddHours(48);
+        var futureEnds = futureStarts.AddHours(1);
+        // Ten minutes into its own class, and never before midnight, so the session date is always today and the
+        // Jornada publishes its class link.
+        var startedStarts = now.AddMinutes(-10);
+        if (startedStarts.Date != now.Date)
+            startedStarts = new DateTime(now.Year, now.Month, now.Day, 0, 0, 0, DateTimeKind.Unspecified);
+        var startedEnds = startedStarts.AddHours(1);
+
+        Assert.Equal(1, await ExecuteAsync(connection, """
+            UPDATE Appointments
+               SET StartsAt = @startsAt, EndsAt = @endsAt
+             WHERE Id = @id AND BusinessId = @businessId AND Kind = @kind AND GridClassId IS NOT NULL
+            """,
+            ("@startsAt", futureStarts), ("@endsAt", futureEnds), ("@id", sessionFutureId),
+            ("@businessId", businessId), ("@kind", (byte)AppointmentKind.ClassSession)));
+        Assert.Equal(1, await ExecuteAsync(connection, """
+            UPDATE Appointments
+               SET StartsAt = @startsAt, EndsAt = @endsAt
+             WHERE Id = @id AND BusinessId = @businessId AND Kind = @kind AND GridClassId IS NOT NULL
+            """,
+            ("@startsAt", startedStarts), ("@endsAt", startedEnds), ("@id", sessionStartedId),
+            ("@businessId", businessId), ("@kind", (byte)AppointmentKind.ClassSession)));
+
+        var futureCapacity = await ScalarIntAsync(connection,
+            "SELECT MaxCapacity FROM Appointments WHERE Id = @id", ("@id", sessionFutureId));
+        var futureGridClassId = await ScalarIntAsync(connection,
+            "SELECT GridClassId FROM Appointments WHERE Id = @id", ("@id", sessionFutureId));
+        var futureServiceName = await ScalarStringAsync(connection, """
+            SELECT s.Name
+              FROM Appointments AS a
+              JOIN Services AS s ON s.Id = a.ServiceId AND s.BusinessId = a.BusinessId
+             WHERE a.Id = @id AND a.BusinessId = @businessId
+            """, ("@id", sessionFutureId), ("@businessId", businessId));
+        Assert.False(string.IsNullOrWhiteSpace(futureServiceName), "The shifted session must resolve its service name.");
+
+        // One synthetic fixed enrollment with an active period that covers the class date, so the roster shows real
+        // coverage and the flow can prove that cancelling a date and suspending a class touch no enrollment or payment.
+        var today = DateOnly.FromDateTime(now);
+        var fixture = await SeedClassRosterFixtureAsync(connection, businessId, sessionFutureId, futureGridClassId, today, now);
+        Note($"SQL: shifted session #{sessionFutureId} two days ahead and session #{sessionStartedId} into its window; seeded the fixed enrollment #{fixture.EnrollmentId} of client #{fixture.ClientId}.");
+
+        var dropInOne = await CreateSyntheticClientAsync(client, "T16DropInOne", ExtractToken);
+        var dropInTwo = await CreateSyntheticClientAsync(client, "T16DropInTwo", ExtractToken);
+        var walkInClient = await CreateSyntheticClientAsync(client, "T16WalkIn", ExtractToken);
+        Note($"HTTP: synthetic clients #{dropInOne.ClientId}, #{dropInTwo.ClientId} and #{walkInClient.ClientId} created through the owner form.");
+
+        // The drop-in roster lists the shifted future session and publishes the class link this flow follows.
+        var (futureRosterStatus, futureRosterHtml) = await GetHtmlAsync(client, $"/panel/Classes/DropIns?session={sessionFutureId}");
+        Assert.Equal(HttpStatusCode.OK, futureRosterStatus);
+        Assert.Contains($"drop-in-client-{sessionFutureId}", futureRosterHtml, StringComparison.Ordinal);
+        var futureDetailLink = ExtractClassDetailLink(futureRosterHtml, sessionFutureId);
+        Note($"HTTP: GET /panel/Classes/DropIns -> 200 with the booking form and the class link for session #{sessionFutureId}.");
+
+        async Task BookDropInAsync(int clientId)
+        {
+            var response = await client.PostAsync("/panel/Classes/BookDropIn", Form(new Dictionary<string, string>
+            {
+                ["appointmentId"] = sessionFutureId.ToString(CultureInfo.InvariantCulture),
+                ["clientId"] = clientId.ToString(CultureInfo.InvariantCulture),
+                ["__RequestVerificationToken"] = ExtractToken(futureRosterHtml)
+            }));
+            Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        }
+
+        await BookDropInAsync(dropInOne.ClientId);
+        await BookDropInAsync(dropInTwo.ClientId);
+        var (afterBooksStatus, afterBooksHtml) = await GetHtmlAsync(client, $"/panel/Classes/DropIns?session={sessionFutureId}");
+        Assert.Equal(HttpStatusCode.OK, afterBooksStatus);
+        Assert.Contains("Synthetic T16DropInOne", afterBooksHtml, StringComparison.Ordinal);
+        Assert.Contains("Synthetic T16DropInTwo", afterBooksHtml, StringComparison.Ordinal);
+        Note($"HTTP: two sueltas booked into session #{sessionFutureId} -> 302 -> 200 with both annotations listed.");
+
+        // The detail page is reached through the link the roster published, and it renders the roster, the occupancy
+        // resolved by the single capacity rule and the persisted end of the shifted session.
+        var (detailStatus, detailHtml) = await GetHtmlAsync(client, futureDetailLink);
+        Assert.Equal(HttpStatusCode.OK, detailStatus);
+        Assert.Contains(futureServiceName!, detailHtml, StringComparison.Ordinal);
+        Assert.Contains("Synthetic T16Fixed", detailHtml, StringComparison.Ordinal);
+        Assert.Contains("Synthetic T16DropInOne", detailHtml, StringComparison.Ordinal);
+        Assert.Contains("Synthetic T16DropInTwo", detailHtml, StringComparison.Ordinal);
+        Assert.Contains("Fija", detailHtml, StringComparison.Ordinal);
+        Assert.Contains("Suelta", detailHtml, StringComparison.Ordinal);
+        // Three non-cancelled annotations hold a place before any action: the fixed one and both sueltas.
+        Assert.Contains($"3 de {futureCapacity} lugares ocupados", detailHtml, StringComparison.Ordinal);
+        Assert.Contains($"Hasta {Formatting.Time(TimeOnly.FromDateTime(futureEnds))}", detailHtml, StringComparison.Ordinal);
+        // The arrival window is closed two days before the class, so the page never offers the walk-in there.
+        Assert.DoesNotContain("owner-walk-in-form", detailHtml, StringComparison.Ordinal);
+        Note($"HTTP: GET {futureDetailLink} -> 200 with the roster, '3 de {futureCapacity} lugares ocupados' and the stored end {Formatting.Time(TimeOnly.FromDateTime(futureEnds))}.");
+
+        var detailToken = ExtractToken(detailHtml);
+        var fixedBookingId = fixture.FixedBookingId;
+        var dropInOneBookingId = await ScalarIntAsync(connection, """
+            SELECT TOP 1 Id
+              FROM Bookings
+             WHERE BusinessId = @businessId AND AppointmentId = @appointmentId AND ClientId = @clientId
+               AND Modality = @modality
+             ORDER BY Id
+            """,
+            ("@businessId", businessId), ("@appointmentId", sessionFutureId), ("@clientId", dropInOne.ClientId),
+            ("@modality", (byte)BookingModality.DropIn));
+        var dropInTwoBookingId = await ScalarIntAsync(connection, """
+            SELECT TOP 1 Id
+              FROM Bookings
+             WHERE BusinessId = @businessId AND AppointmentId = @appointmentId AND ClientId = @clientId
+               AND Modality = @modality
+             ORDER BY Id
+            """,
+            ("@businessId", businessId), ("@appointmentId", sessionFutureId), ("@clientId", dropInTwo.ClientId),
+            ("@modality", (byte)BookingModality.DropIn));
+
+        // Attendance with the optional drop-in charge and observation, one of the three antiforgery-protected POSTs.
+        var attendResponse = await client.PostAsync($"/panel/Classes/Attend/{dropInOneBookingId}", Form(new Dictionary<string, string>
+        {
+            ["appointmentId"] = sessionFutureId.ToString(CultureInfo.InvariantCulture),
+            ["amount"] = "4321.00",
+            ["nextVisitNote"] = "T16 HTTP attendance note",
+            ["__RequestVerificationToken"] = detailToken
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, attendResponse.StatusCode);
+        var (afterAttendStatus, afterAttendHtml) = await GetHtmlAsync(client, attendResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, afterAttendStatus);
+        Assert.Contains("Asistencia registrada.", afterAttendHtml, StringComparison.Ordinal);
+        Assert.Contains(Formatting.Money(AttendanceCharge), afterAttendHtml, StringComparison.Ordinal);
+        Note($"HTTP: attendance of drop-in booking #{dropInOneBookingId} with a {Formatting.Money(AttendanceCharge)} charge -> 302 -> 200 with its flash.");
+
+        // The absence of a fixed student is a fact and never depends on coverage.
+        var absentResponse = await client.PostAsync($"/panel/Classes/MarkAbsent/{fixedBookingId}", Form(new Dictionary<string, string>
+        {
+            ["appointmentId"] = sessionFutureId.ToString(CultureInfo.InvariantCulture),
+            ["__RequestVerificationToken"] = detailToken
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, absentResponse.StatusCode);
+        var (afterAbsentStatus, afterAbsentHtml) = await GetHtmlAsync(client, absentResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, afterAbsentStatus);
+        Assert.Contains("Ausencia registrada.", afterAbsentHtml, StringComparison.Ordinal);
+        Note($"HTTP: absence of fixed booking #{fixedBookingId} -> 302 -> 200 with its flash.");
+
+        // The cancellation of an already recorded annotation: the attendance fact stops counting and the place is
+        // released, while the enrollment and the charge stay exactly as they were.
+        var cancelResponse = await client.PostAsync($"/panel/Classes/CancelBooking/{dropInOneBookingId}", Form(new Dictionary<string, string>
+        {
+            ["appointmentId"] = sessionFutureId.ToString(CultureInfo.InvariantCulture),
+            ["__RequestVerificationToken"] = detailToken
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, cancelResponse.StatusCode);
+        var (afterCancelStatus, afterCancelHtml) = await GetHtmlAsync(client, cancelResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, afterCancelStatus);
+        Assert.Contains("cancelada: el lugar", afterCancelHtml, StringComparison.Ordinal);
+        Note($"HTTP: already recorded booking #{dropInOneBookingId} cancelled before the start -> 302 -> 200 with the released-place flash.");
+
+        // The class link of the session that already started is published by the Jornada, and its arrival window is
+        // what opens the walk-in form.
+        var (dayStatus, dayHtml) = await GetHtmlAsync(client, "/panel/Day");
+        Assert.Equal(HttpStatusCode.OK, dayStatus);
+        var startedDetailLink = ExtractClassDetailLink(dayHtml, sessionStartedId);
+        Note($"HTTP: GET /panel/Day -> 200 with the class link of the in-progress session #{sessionStartedId}.");
+        var (startedDetailStatus, startedDetailHtml) = await GetHtmlAsync(client, startedDetailLink);
+        Assert.Equal(HttpStatusCode.OK, startedDetailStatus);
+        Assert.Contains("owner-walk-in-form", startedDetailHtml, StringComparison.Ordinal);
+        Assert.Contains($"Hasta {Formatting.Time(TimeOnly.FromDateTime(startedEnds))}", startedDetailHtml, StringComparison.Ordinal);
+
+        // No booking of the future session may have queued an email: the 48-hour shift is outside the immediate
+        // reminder window, so the outbox is empty before the suspension.
+        var notificationsBeforeWalkIn = await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId", ("@businessId", businessId));
+        Assert.Equal(0, notificationsBeforeWalkIn);
+
+        var walkInResponse = await client.PostAsync(
+            $"/panel/Classes/RegisterWalkIn?appointmentId={sessionStartedId.ToString(CultureInfo.InvariantCulture)}",
+            Form(new Dictionary<string, string>
+            {
+                ["clientId"] = walkInClient.ClientId.ToString(CultureInfo.InvariantCulture),
+                ["amount"] = "987.65",
+                ["nextVisitNote"] = "T16 HTTP walk-in note",
+                ["__RequestVerificationToken"] = ExtractToken(startedDetailHtml)
+            }));
+        Assert.Equal(HttpStatusCode.Redirect, walkInResponse.StatusCode);
+        var (afterWalkInStatus, afterWalkInHtml) = await GetHtmlAsync(client, walkInResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, afterWalkInStatus);
+        Assert.Contains("Llegada registrada.", afterWalkInHtml, StringComparison.Ordinal);
+        Assert.Contains(Formatting.Money(WalkInCharge), afterWalkInHtml, StringComparison.Ordinal);
+        var notificationsAfterWalkIn = await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId", ("@businessId", businessId));
+        Assert.Equal(notificationsBeforeWalkIn, notificationsAfterWalkIn);
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId AND Recipient = @email",
+            ("@businessId", businessId), ("@email", walkInClient.Email)));
+        Note($"HTTP/SQL: at-arrival walk-in of client #{walkInClient.ClientId} inside the stored window with a {Formatting.Money(WalkInCharge)} charge -> 302 -> 200 with its flash, and the outbox stayed empty.");
+
+        // A suspension notice that a retry would leave is pre-seeded for the drop-in that stays open, so the real
+        // suspension exercises the outbox deduplication: the seeded key is never duplicated and the other student
+        // still gets her notice.
+        await InsertSuspensionNotificationAsync(connection, businessId, dropInTwo.Email,
+            SuspensionDedupKey(sessionFutureId, dropInTwoBookingId), now);
+
+        // A POST without the antiforgery token must be rejected before any business logic runs.
+        var rejected = await client.PostAsync($"/panel/Classes/Suspend/{sessionFutureId}", Form(new Dictionary<string, string>
+        {
+            ["reason"] = SuspensionReason
+        }));
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        Note("HTTP: Suspend POST without an anti-CSRF token -> 400.");
+
+        var suspendResponse = await client.PostAsync($"/panel/Classes/Suspend/{sessionFutureId}", Form(new Dictionary<string, string>
+        {
+            ["reason"] = SuspensionReason,
+            ["__RequestVerificationToken"] = detailToken
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, suspendResponse.StatusCode);
+        var (afterSuspendStatus, afterSuspendHtml) = await GetHtmlAsync(client, suspendResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, afterSuspendStatus);
+        Assert.Contains("Clase suspendida.", afterSuspendHtml, StringComparison.Ordinal);
+        Assert.Contains("1 aviso", afterSuspendHtml, StringComparison.Ordinal);
+        Note($"HTTP: suspension of session #{sessionFutureId} with its mandatory reason -> 302 -> 200 with the flash of one queued notice (the seeded one was deduplicated).");
+
+        // SQL verification runs after every HTTP checkpoint so one run reports the whole behavior.
+        Assert.Equal((int)AppointmentStatus.Suspended, await ScalarIntAsync(connection,
+            "SELECT Status FROM Appointments WHERE Id = @id", ("@id", sessionFutureId)));
+        Assert.Equal(SuspensionReason, await ScalarStringAsync(connection,
+            "SELECT SuspensionReason FROM Appointments WHERE Id = @id", ("@id", sessionFutureId)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Appointments WHERE Id = @id AND SuspendedAt IS NOT NULL", ("@id", sessionFutureId)));
+        Assert.Equal(futureStarts.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+            await ScalarStringAsync(connection, "SELECT CONVERT(varchar(19), StartsAt, 120) FROM Appointments WHERE Id = @id", ("@id", sessionFutureId)));
+        Assert.Equal(futureEnds.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+            await ScalarStringAsync(connection, "SELECT CONVERT(varchar(19), EndsAt, 120) FROM Appointments WHERE Id = @id", ("@id", sessionFutureId)));
+        Assert.Equal(startedStarts.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+            await ScalarStringAsync(connection, "SELECT CONVERT(varchar(19), StartsAt, 120) FROM Appointments WHERE Id = @id", ("@id", sessionStartedId)));
+        Assert.Equal(startedEnds.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+            await ScalarStringAsync(connection, "SELECT CONVERT(varchar(19), EndsAt, 120) FROM Appointments WHERE Id = @id", ("@id", sessionStartedId)));
+
+        Assert.Equal((int)BookingStatus.Absent, await ScalarIntAsync(connection,
+            "SELECT Status FROM Bookings WHERE Id = @id", ("@id", fixedBookingId)));
+        Assert.Equal((int)AbsenceSource.Owner, await ScalarIntAsync(connection,
+            "SELECT AbsenceSource FROM Bookings WHERE Id = @id", ("@id", fixedBookingId)));
+        Assert.Equal((int)BookingStatus.Cancelled, await ScalarIntAsync(connection,
+            "SELECT Status FROM Bookings WHERE Id = @id", ("@id", dropInOneBookingId)));
+        Assert.Equal((int)CancelledBy.Owner, await ScalarIntAsync(connection,
+            "SELECT CancelledBy FROM Bookings WHERE Id = @id", ("@id", dropInOneBookingId)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE Id = @id AND CancelledAt IS NOT NULL", ("@id", dropInOneBookingId)));
+        Assert.Equal((int)BookingStatus.Pending, await ScalarIntAsync(connection,
+            "SELECT Status FROM Bookings WHERE Id = @id", ("@id", dropInTwoBookingId)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM ClientNotes WHERE AppointmentId = @id AND Text = @text",
+            ("@id", sessionFutureId), ("@text", "T16 HTTP attendance note")));
+        Note($"SQL: booking statuses asserted (fixed #{fixedBookingId} Ausente, suelta #{dropInOneBookingId} Cancelada by the owner, suelta #{dropInTwoBookingId} Pendiente) and the attendance note landed.");
+
+        var walkInBookingId = await ScalarIntAsync(connection, """
+            SELECT TOP 1 Id
+              FROM Bookings
+             WHERE BusinessId = @businessId AND AppointmentId = @appointmentId AND ClientId = @clientId
+               AND Modality = @modality
+             ORDER BY Id
+            """,
+            ("@businessId", businessId), ("@appointmentId", sessionStartedId), ("@clientId", walkInClient.ClientId),
+            ("@modality", (byte)BookingModality.DropIn));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE BusinessId = @businessId AND AppointmentId = @appointmentId",
+            ("@businessId", businessId), ("@appointmentId", sessionStartedId)));
+        Assert.Equal((int)BookingStatus.Attended, await ScalarIntAsync(connection,
+            "SELECT Status FROM Bookings WHERE Id = @id", ("@id", walkInBookingId)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE Id = @id AND AttendanceRecordedAt IS NOT NULL AND AbsenceSource IS NULL",
+            ("@id", walkInBookingId)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM Payments
+             WHERE BusinessId = @businessId AND BookingId = @bookingId AND Concept = @concept AND Amount = @amount
+            """,
+            ("@businessId", businessId), ("@bookingId", dropInOneBookingId),
+            ("@concept", (byte)PaymentConcept.DropInClass), ("@amount", AttendanceCharge)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM Payments
+             WHERE BusinessId = @businessId AND BookingId = @bookingId AND Concept = @concept AND Amount = @amount
+            """,
+            ("@businessId", businessId), ("@bookingId", walkInBookingId),
+            ("@concept", (byte)PaymentConcept.DropInClass), ("@amount", WalkInCharge)));
+        Note($"SQL: PaymentConcept.DropInClass asserted for the attendance charge of booking #{dropInOneBookingId} and for the walk-in charge of booking #{walkInBookingId}.");
+
+        // The date actions write the class and its annotations only: the enrollment, its fixed assignment, its paid
+        // period and every payment survive untouched, and nothing is refunded or annulled (D-24).
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Enrollments WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Assert.Equal((int)EnrollmentStatus.Active, await ScalarIntAsync(connection,
+            "SELECT Status FROM Enrollments WHERE Id = @id", ("@id", fixture.EnrollmentId)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Enrollments WHERE Id = @id AND ActivatedAt IS NOT NULL", ("@id", fixture.EnrollmentId)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM MembershipPeriods
+             WHERE Id = @periodId AND EnrollmentId = @enrollmentId
+               AND CONVERT(varchar(10), CoverageStart, 23) = @coverageStart
+               AND CONVERT(varchar(10), ExpiresOn, 23) = @expiresOn
+            """,
+            ("@periodId", fixture.PeriodId), ("@enrollmentId", fixture.EnrollmentId),
+            ("@coverageStart", today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
+            ("@expiresOn", today.AddMonths(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM EnrollmentFixedClasses WHERE EnrollmentId = @id AND ValidTo IS NULL",
+            ("@id", fixture.EnrollmentId)));
+        Assert.Equal(fixture.EnrollmentId, await ScalarIntAsync(connection,
+            "SELECT EnrollmentId FROM Bookings WHERE Id = @id", ("@id", fixedBookingId)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM Payments
+             WHERE Id = @id AND EnrollmentId = @enrollmentId AND Concept = @concept AND Amount = @amount
+               AND NOT EXISTS (SELECT 1 FROM PaymentAnnulments AS pa WHERE pa.PaymentId = Payments.Id)
+            """,
+            ("@id", fixture.MembershipPaymentId), ("@enrollmentId", fixture.EnrollmentId),
+            ("@concept", (byte)PaymentConcept.Membership), ("@amount", MembershipFixtureAmount)));
+        Assert.Equal(3, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Payments WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Assert.Equal(0, await ScalarIntAsync(connection, "SELECT COUNT(*) FROM PaymentAnnulments"));
+        Assert.Equal(0, await ScalarIntAsync(connection, "SELECT COUNT(*) FROM Refunds"));
+        Note("SQL: no unwanted enrollment or payment mutation: one Active enrollment, its period and fixed assignment intact, its membership payment and both drop-in charges untouched, zero annulments and zero refunds.");
+
+        Assert.Equal(2, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Assert.Equal(2, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId AND Type = @type",
+            ("@businessId", businessId), ("@type", (byte)NotificationType.ClassSuspended)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId AND DedupKey = @key AND Recipient = @email",
+            ("@businessId", businessId), ("@key", SuspensionDedupKey(sessionFutureId, fixedBookingId)),
+            ("@email", fixture.Email)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId AND DedupKey = @key",
+            ("@businessId", businessId), ("@key", SuspensionDedupKey(sessionFutureId, dropInTwoBookingId))));
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId AND DedupKey = @key",
+            ("@businessId", businessId), ("@key", SuspensionDedupKey(sessionFutureId, dropInOneBookingId))));
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId AND Type = @type",
+            ("@businessId", businessId), ("@type", (byte)NotificationType.DropInReminder)));
+        Note($"SQL: NotificationType.ClassSuspended asserted with the key suspension:appointment:{{id}}:booking:{{id}} — one real notice for the absent student, the seeded notice deduplicated once, none for the cancelled annotation and zero emails for the walk-in.");
+
+        // The harness never writes a secret: every diagnostic line reports only booleans, identifiers, counts or paths,
+        // and this proves it against the password, every antiforgery token and every cookie of the run. Short cookie
+        // values are skipped because they are not secrets and could match any line by accident.
+        foreach (Cookie cookie in handler.CookieContainer.GetAllCookies())
+        {
+            if (cookie.Value.Length >= 8)
+                secrets.Add(cookie.Value);
+        }
+
+        Assert.NotEmpty(written);
+        var leaked = written.Any(line => secrets.Any(secret => line.Contains(secret, StringComparison.Ordinal)));
+        Assert.False(leaked, "The test output must never contain a password, an antiforgery token or a cookie value.");
+        Note("Secrets: the run wrote no password, antiforgery token or cookie value to the test output.");
+    }
+
+    /// <summary>
+    /// One synthetic fixed enrollment for the class roster flow: a client, an Active enrollment with its fixed grid
+    /// assignment, one paid period covering the class date and one pending fixed annotation on the shifted session.
+    /// It writes only those rows, in one transaction, and returns their identifiers so the flow can assert they were
+    /// never mutated afterwards.
+    /// </summary>
+    private static async Task<ClassRosterFixture> SeedClassRosterFixtureAsync(
+        SqlConnection connection, int businessId, int appointmentId, int gridClassId, DateOnly today, DateTime now)
+    {
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var email = $"t16.fixed{Guid.NewGuid():N}@example.invalid";
+        var clientId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO Clients (BusinessId, FirstName, LastName, Email, Phone, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @firstName, @lastName, @email, @phone, @createdAt)
+            """,
+            ("@businessId", businessId), ("@firstName", "Synthetic"), ("@lastName", "T16Fixed"),
+            ("@email", email), ("@phone", "0000000000"), ("@createdAt", now));
+
+        var enrollmentId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO Enrollments (BusinessId, ClientId, WeeklyFrequency, Status, AgreedPrice, ReferenceDay, CreatedAt, ActivatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @clientId, @frequency, @status, @price, @referenceDay, @createdAt, @activatedAt)
+            """,
+            ("@businessId", businessId), ("@clientId", clientId), ("@frequency", 1),
+            ("@status", EnrollmentStatus.Active), ("@price", MembershipFixtureAmount),
+            ("@referenceDay", today.Day), ("@createdAt", now), ("@activatedAt", now));
+
+        await InsertIdAsync(connection, transaction, """
+            INSERT INTO EnrollmentFixedClasses (EnrollmentId, GridClassId, ValidFrom, ValidTo)
+            OUTPUT INSERTED.Id
+            VALUES (@enrollmentId, @gridClassId, @validFrom, NULL)
+            """,
+            ("@enrollmentId", enrollmentId),
+            ("@gridClassId", gridClassId),
+            ("@validFrom", today));
+
+        var membershipPaymentId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO Payments (BusinessId, ClientId, Concept, BookingId, EnrollmentId, Amount, ListPrice, PriceReason, PaidAt, RecordedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @clientId, @concept, NULL, @enrollmentId, @amount, @listPrice, NULL, @paidAt, @recordedAt)
+            """,
+            ("@businessId", businessId), ("@clientId", clientId), ("@concept", PaymentConcept.Membership),
+            ("@enrollmentId", enrollmentId), ("@amount", MembershipFixtureAmount),
+            ("@listPrice", MembershipFixtureAmount), ("@paidAt", now), ("@recordedAt", now));
+
+        var periodId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO MembershipPeriods (EnrollmentId, CoverageStart, ExpiresOn, PaymentId, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@enrollmentId, @coverageStart, @expiresOn, @paymentId, @createdAt)
+            """,
+            ("@enrollmentId", enrollmentId), ("@coverageStart", today), ("@expiresOn", today.AddMonths(1)),
+            ("@paymentId", membershipPaymentId), ("@createdAt", now));
+
+        var bookingId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO Bookings (BusinessId, AppointmentId, ClientId, EnrollmentId, Modality, Status, AbsenceSource, CancelledBy, CreatedAt, CancelledAt, AttendanceRecordedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @appointmentId, @clientId, @enrollmentId, @modality, @status, NULL, NULL, @createdAt, NULL, NULL)
+            """,
+            ("@businessId", businessId), ("@appointmentId", appointmentId), ("@clientId", clientId),
+            ("@enrollmentId", enrollmentId), ("@modality", BookingModality.Fixed),
+            ("@status", BookingStatus.Pending), ("@createdAt", now));
+
+        await transaction.CommitAsync();
+        return new ClassRosterFixture(clientId, email, enrollmentId, periodId, membershipPaymentId, bookingId);
+    }
+
+    /// <summary>
+    /// One outbox row written outside the service, so the flow can pre-seed the notice a retry would leave and prove
+    /// that the real suspension deduplicates it instead of queuing a second email.
+    /// </summary>
+    private static async Task<int> InsertSuspensionNotificationAsync(
+        SqlConnection connection, int businessId, string recipient, string dedupKey, DateTime createdAt)
+    {
+        await using var command = new SqlCommand("""
+            INSERT INTO Notifications (BusinessId, Type, Recipient, Subject, BodyHtml, DedupKey, Status, Attempts, LastError, CreatedAt, SentAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @type, @recipient, @subject, @bodyHtml, @dedupKey, @status, 0, NULL, @createdAt, NULL)
+            """, connection);
+        command.Parameters.AddWithValue("@businessId", businessId);
+        command.Parameters.AddWithValue("@type", (byte)NotificationType.ClassSuspended);
+        command.Parameters.AddWithValue("@recipient", recipient);
+        command.Parameters.AddWithValue("@subject", "Clase suspendida");
+        command.Parameters.AddWithValue("@bodyHtml", "<p>Hola</p>");
+        command.Parameters.AddWithValue("@dedupKey", dedupKey);
+        command.Parameters.AddWithValue("@status", (byte)NotificationStatus.Pending);
+        command.Parameters.AddWithValue("@createdAt", createdAt);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>The stable suspension key of the SRS error handling: one notice per student and class.</summary>
+    private static string SuspensionDedupKey(int appointmentId, int bookingId) =>
+        $"suspension:appointment:{appointmentId}:booking:{bookingId}";
+
+    /// <summary>Posts a synthetic client through the owner form and returns its id and stored email.</summary>
+    private static async Task<(int ClientId, string Email)> CreateSyntheticClientAsync(
+        HttpClient client, string lastName, Func<string, string> extractToken)
+    {
+        var (status, html) = await GetHtmlAsync(client, "/panel/Clients/Create");
+        Assert.Equal(HttpStatusCode.OK, status);
+        var email = $"t16.{lastName.ToLowerInvariant()}{Guid.NewGuid():N}@example.invalid";
+        var response = await client.PostAsync("/panel/Clients/Create", Form(new Dictionary<string, string>
+        {
+            ["FirstName"] = "Synthetic",
+            ["LastName"] = lastName,
+            ["Email"] = email,
+            ["Phone"] = "0000000000",
+            ["__RequestVerificationToken"] = extractToken(html)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        return (ExtractClientId(response), email);
+    }
+
+    /// <summary>Reads the published class link of one session, so the flow follows the page instead of guessing it.</summary>
+    private static string ExtractClassDetailLink(string html, int appointmentId)
+    {
+        var match = Regex.Match(html,
+            $"href=\"(?<href>[^\"]*?/panel/Classes/Detail/{appointmentId})\"", RegexOptions.CultureInvariant);
+        if (!match.Success)
+            throw new InvalidOperationException($"The page did not publish the class link for session {appointmentId}.");
+        return match.Groups["href"].Value;
+    }
+
+    /// <summary>Runs one non-query against the isolated database and reports the affected rows.</summary>
+    private static async Task<int> ExecuteAsync(
+        SqlConnection connection, string sql, params (string Name, object Value)[] args)
+    {
+        await using var command = CreateCommand(connection, sql, args);
+        return await command.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>One insert that returns its identity, with the same parameter shapes the fixture helpers use.</summary>
+    private static async Task<int> InsertIdAsync(
+        SqlConnection connection, SqlTransaction transaction, string sql,
+        params (string Name, object? Value)[] args)
+    {
+        await using var command = new SqlCommand(sql, connection, transaction);
+        foreach (var (name, value) in args)
+            AddParameter(command, name, value);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
+    }
+
+    private static void AddParameter(SqlCommand command, string name, object? value)
+    {
+        switch (value)
+        {
+            case DateTime dateTime:
+                command.Parameters.Add(name, SqlDbType.DateTime2).Value = dateTime;
+                return;
+            case DateOnly date:
+                command.Parameters.Add(name, SqlDbType.Date).Value = date.ToDateTime(TimeOnly.MinValue);
+                return;
+            case null:
+                command.Parameters.AddWithValue(name, DBNull.Value);
+                return;
+            case Enum enumeration:
+                command.Parameters.AddWithValue(name, Convert.ToByte(enumeration, CultureInfo.InvariantCulture));
+                return;
+            default:
+                command.Parameters.AddWithValue(name, value);
+                return;
+        }
+    }
+
     private static async Task AssertWalkInRowAsync(SqlConnection connection, int businessId, int appointmentId,
         int clientId, string note)
     {
@@ -1390,6 +2065,10 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
 
     private sealed record HarnessPlan(string ConnectionString, string DatabaseName, string KeysPath,
         string WebHostPath, string WebRoot, int Port);
+
+    /// <summary>Identifiers of the synthetic fixed enrollment the T16 flow seeds and then proves untouched.</summary>
+    private sealed record ClassRosterFixture(
+        int ClientId, string Email, int EnrollmentId, int PeriodId, int MembershipPaymentId, int FixedBookingId);
 
     private sealed record RunningHost(Process Process, string BaseUrl);
 }
