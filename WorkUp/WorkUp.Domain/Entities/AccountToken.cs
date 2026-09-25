@@ -3,7 +3,11 @@ using WorkUp.Domain.Enums;
 
 namespace WorkUp.Domain.Entities;
 
-/// <summary>Single-use token for email verification (RF-25) or password reset, valid 30 minutes (RF-27).</summary>
+/// <summary>
+/// Single-use token for email verification (RF-25) or password reset (RF-27). Lifetimes differ by purpose: the
+/// verification link lives 48 h (plan assumption for T20, D-18) and the recovery link 30 minutes (RF-27); both are
+/// stored only as their SHA-256 hash.
+/// </summary>
 public class AccountToken : Entity
 {
     public int ClientAccountId { get; set; }
