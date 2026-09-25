@@ -42,6 +42,16 @@ public sealed class ClassAttendanceSqlIntegrationTests(ITestOutputHelper output)
     /// </summary>
     private static readonly DateTime WalkInNow = new(2026, 3, 12, 18, 10, 0);
 
+    /// <summary>
+    /// The attendance instant the late-charge fixture stores: inside the class the owner marked as present at the desk.
+    /// </summary>
+    private static readonly DateTime AttendanceRecordedAt = new(2026, 3, 12, 18, 5, 0);
+
+    /// <summary>
+    /// The single clock read of the late charge (T18): after the class, the day the owner noticed the omission.
+    /// </summary>
+    private static readonly DateTime LateChargeNow = new(2026, 3, 13, 9, 0, 0);
+
     [Fact]
     public async Task Drop_in_attendance_with_a_charge_is_stored_once_with_the_recorded_instant()
     {
@@ -832,6 +842,122 @@ public sealed class ClassAttendanceSqlIntegrationTests(ITestOutputHelper output)
         }
     }
 
+    [Fact]
+    public async Task Late_charge_lands_on_an_attended_drop_in_refuses_the_duplicate_and_takes_the_corrected_charge_after_an_annulment()
+    {
+        var target = await ResolveTargetAsync("_LaterCharge");
+        if (target is null)
+            return;
+
+        var ids = await SeedLaterChargeAsync(target.ConnectionString, LateChargeNow);
+
+        await using var session = new DbSession(target.ConnectionString);
+        var service = new ClassDropInChargeService(
+            new SqlClassAttendanceRepository(session), session, new FakeClock { Now = LateChargeNow });
+
+        // The forgotten charge of an already attended drop-in that has no effective payment: the path T16 declared
+        // missing, because a second attendance is refused and no other flow writes DropInClass. The answer names the
+        // class, the annotation and the client of the locked read.
+        var charged = await service.ChargeAsync(ids.BusinessA, ids.Booking,
+            new ClassAttendanceCharge(450m, "Clase suelta con descuento"));
+        Assert.True(charged.Succeeded, charged.Error?.Code);
+        Assert.Equal(ids.Session, charged.Value.AppointmentId);
+        Assert.Equal(ids.Booking, charged.Value.BookingId);
+        Assert.Equal(ids.Client, charged.Value.ClientId);
+        Assert.Equal(450m, charged.Value.Amount);
+        Assert.Equal(100m, charged.Value.ListPrice);
+        Assert.Equal(LateChargeNow, charged.Value.PaidAt);
+
+        // Exactly one payment, of the drop-in concept, tied to the annotation and to no enrollment, with the agreed
+        // amount beside the class list price and the single instant of the clock read.
+        var written = await ReadSinglePaymentAsync(target.ConnectionString, ids.Booking);
+        Assert.Equal(ids.BusinessA, written.BusinessId);
+        Assert.Equal(ids.Client, written.ClientId);
+        Assert.Equal(PaymentConcept.DropInClass, written.Concept);
+        Assert.Equal(ids.Booking, written.BookingId);
+        Assert.Null(written.EnrollmentId);
+        Assert.Equal(450m, written.Amount);
+        Assert.Equal(100m, written.ListPrice);
+        Assert.Equal("Clase suelta con descuento", written.PriceReason);
+        Assert.Equal(LateChargeNow, written.PaidAt);
+        Assert.Equal(LateChargeNow, written.RecordedAt);
+
+        // A second charge of the same annotation is refused by the effective-payment read taken under the lock, and
+        // the duplicate leaves storage exactly as it was.
+        var duplicate = await service.ChargeAsync(ids.BusinessA, ids.Booking, new ClassAttendanceCharge(450m));
+        Assert.False(duplicate.Succeeded);
+        Assert.Equal("class_charge_already_charged", duplicate.Error!.Code);
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Payments WHERE BookingId = @bookingId", ("@bookingId", ids.Booking)));
+
+        // Annulling the wrong charge in the ledger is what makes it stop counting, and the annulment never rewrites
+        // the row: the correction is a new payment, never an edit of the annulled one.
+        var paymentId = await ReadScalarAsync<int>(target.ConnectionString,
+            "SELECT Id FROM Payments WHERE BookingId = @bookingId", ("@bookingId", ids.Booking));
+        await ExecuteAsync(target.ConnectionString,
+            "INSERT INTO PaymentAnnulments (PaymentId, Reason, AnnulledAt, AnnulledBy) VALUES (@paymentId, 'Importe equivocado', @now, 'Owner')",
+            ("@paymentId", paymentId), ("@now", LateChargeNow.AddMinutes(5)));
+
+        var corrected = await service.ChargeAsync(ids.BusinessA, ids.Booking,
+            new ClassAttendanceCharge(600m, "Precio corregido"));
+        Assert.True(corrected.Succeeded, corrected.Error?.Code);
+        Assert.Equal(2, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Payments WHERE BookingId = @bookingId", ("@bookingId", ids.Booking)));
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM PaymentAnnulments WHERE PaymentId = @paymentId", ("@paymentId", paymentId)));
+
+        // The annulled original survives untouched: same amount, same reason, same list price and the very instants
+        // it was written with.
+        var annulled = await ReadPaymentByIdAsync(target.ConnectionString, paymentId);
+        Assert.Equal(written.Amount, annulled.Amount);
+        Assert.Equal(written.ListPrice, annulled.ListPrice);
+        Assert.Equal(written.PriceReason, annulled.PriceReason);
+        Assert.Equal(written.PaidAt, annulled.PaidAt);
+        Assert.Equal(written.RecordedAt, annulled.RecordedAt);
+
+        // The corrected charge is that second row, with its own amount, reason and instant.
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Payments WHERE BookingId = @bookingId AND Amount = @amount AND PriceReason = @reason AND PaidAt = @now AND RecordedAt = @now",
+            ("@bookingId", ids.Booking), ("@amount", 600m), ("@reason", "Precio corregido"),
+            ("@now", LateChargeNow)));
+
+        // The charge writes money and nothing else: the annotation is still the attendance it was, with its recorded
+        // instant, no absence source and no cancellation, and its class is still scheduled.
+        var booking = await ReadBookingAsync(target.ConnectionString, ids.Booking);
+        Assert.Equal(BookingStatus.Attended, booking.Status);
+        Assert.Equal(AttendanceRecordedAt, booking.AttendanceRecordedAt);
+        Assert.Null(booking.AbsenceSource);
+        Assert.Null(booking.CancelledAt);
+        Assert.Equal((byte)AppointmentStatus.Scheduled, await ReadScalarAsync<byte>(target.ConnectionString,
+            "SELECT Status FROM Appointments WHERE Id = @id", ("@id", ids.Session)));
+
+        // No observation and no notice are written by a charge, in this business or in any other, and the charge adds
+        // no annotation to the class.
+        Assert.Equal(0, await CountAsync(target.ConnectionString, "SELECT COUNT(*) FROM ClientNotes"));
+        Assert.Equal(0, await CountAsync(target.ConnectionString, "SELECT COUNT(*) FROM Notifications"));
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId", ("@appointmentId", ids.Session)));
+
+        // The scope is the named business in both directions: the neighbour's annotation is invisible, and naming a
+        // foreign business makes this business's annotation invisible instead of charging it.
+        var foreignBooking = await service.ChargeAsync(ids.BusinessA, ids.ForeignBooking,
+            new ClassAttendanceCharge(450m));
+        Assert.False(foreignBooking.Succeeded);
+        Assert.Equal("class_charge_not_found", foreignBooking.Error!.Code);
+        var foreignBusiness = await service.ChargeAsync(ids.ForeignBusiness, ids.Booking,
+            new ClassAttendanceCharge(450m));
+        Assert.False(foreignBusiness.Succeeded);
+        Assert.Equal("class_charge_not_found", foreignBusiness.Error!.Code);
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Payments WHERE BusinessId = @businessId", ("@businessId", ids.ForeignBusiness)));
+        var neighbour = await ReadBookingAsync(target.ConnectionString, ids.ForeignBooking);
+        Assert.Equal(BookingStatus.Attended, neighbour.Status);
+        Assert.Equal(AttendanceRecordedAt, neighbour.AttendanceRecordedAt);
+        Assert.Equal(2, await CountAsync(target.ConnectionString, "SELECT COUNT(*) FROM Payments"));
+
+        output.WriteLine("Late-charge assertions passed: one DropInClass payment landed on an already attended drop-in with the class list price and the single recorded instant, the duplicate was refused with storage unchanged, the annulment freed the annotation for the corrected charge without rewriting the original row, and the charge changed no attendance, no note and no notice in either business.");
+    }
+
     /// <summary>
     /// Resolves this test's opt-in target. <c>null</c> means the variable is absent: the test returns N/A without
     /// opening any connection or touching any server.
@@ -1109,6 +1235,44 @@ public sealed class ClassAttendanceSqlIntegrationTests(ITestOutputHelper output)
         return new AnnulmentIds(ids.BusinessA, ids.Client, ids.Booking, payment);
     }
 
+    /// <summary>
+    /// Two tenants, each with one scheduled class and one drop-in annotation already marked as present and carrying no
+    /// charge at all: the seed the late charge of a forgotten drop-in needs (T18, D-20). The second tenant is the real
+    /// neighbour the tenant scope of the charge is judged against.
+    /// </summary>
+    private static async Task<LaterChargeIds> SeedLaterChargeAsync(string connectionString, DateTime now)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var tenant = await InsertTenantAsync(connection, transaction, "synthetic-t18-later-charge",
+            "synthetic-t18-later-charge", "20201818181", 8, now);
+        var client = await InsertClientAsync(connection, transaction, tenant.BusinessId, "Suelta", "Asistida",
+            "t18.later.charge@example.invalid", now);
+        var session = await InsertClassSessionAsync(connection, transaction, tenant.BusinessId,
+            await InsertGridClassAsync(connection, transaction, tenant.BusinessId, tenant.ServiceId, tenant.WorkerId,
+                DayOfWeek.Thursday, new TimeOnly(18, 0)),
+            tenant.ServiceId, tenant.WorkerId, ClassStartsAt, 60, 8, AppointmentStatus.Scheduled, null, now);
+        var booking = await InsertBookingAsync(connection, transaction, tenant.BusinessId, session, client,
+            null, BookingModality.DropIn, BookingStatus.Attended, now, AttendanceRecordedAt);
+
+        var foreign = await InsertTenantAsync(connection, transaction, "synthetic-t18-later-charge-b",
+            "synthetic-t18-later-charge-b", "20201818182", 8, now);
+        var foreignClient = await InsertClientAsync(connection, transaction, foreign.BusinessId, "Ajena", "Asistida",
+            "t18.later.charge.b@example.invalid", now);
+        var foreignSession = await InsertClassSessionAsync(connection, transaction, foreign.BusinessId,
+            await InsertGridClassAsync(connection, transaction, foreign.BusinessId, foreign.ServiceId,
+                foreign.WorkerId, DayOfWeek.Thursday, new TimeOnly(18, 0)),
+            foreign.ServiceId, foreign.WorkerId, ClassStartsAt, 60, 8, AppointmentStatus.Scheduled, null, now);
+        var foreignBooking = await InsertBookingAsync(connection, transaction, foreign.BusinessId, foreignSession,
+            foreignClient, null, BookingModality.DropIn, BookingStatus.Attended, now, AttendanceRecordedAt);
+
+        await transaction.CommitAsync();
+        return new LaterChargeIds(tenant.BusinessId, client, session, booking,
+            foreign.BusinessId, foreignClient, foreignSession, foreignBooking);
+    }
+
     /// <summary>Two tenants, each with its own class, plus one annotation of the first one.</summary>
     private static async Task<TenantIds> SeedTenantAsync(string connectionString, DateTime now)
     {
@@ -1253,13 +1417,15 @@ public sealed class ClassAttendanceSqlIntegrationTests(ITestOutputHelper output)
     /// </summary>
     private static Task<int> InsertBookingAsync(
         SqlConnection connection, SqlTransaction transaction, int businessId, int appointmentId, int clientId,
-        int? enrollmentId, BookingModality? modality, BookingStatus status, DateTime createdAt) =>
+        int? enrollmentId, BookingModality? modality, BookingStatus status, DateTime createdAt,
+        DateTime? attendanceRecordedAt = null, AbsenceSource? absenceSource = null) =>
         InsertIdAsync(connection, transaction,
-            "INSERT INTO Bookings (BusinessId, AppointmentId, ClientId, EnrollmentId, Modality, Status, CreatedAt, CancelledAt) OUTPUT INSERTED.Id VALUES (@businessId, @appointmentId, @clientId, @enrollmentId, @modality, @status, @createdAt, @cancelledAt)",
+            "INSERT INTO Bookings (BusinessId, AppointmentId, ClientId, EnrollmentId, Modality, Status, CreatedAt, CancelledAt, AttendanceRecordedAt, AbsenceSource) OUTPUT INSERTED.Id VALUES (@businessId, @appointmentId, @clientId, @enrollmentId, @modality, @status, @createdAt, @cancelledAt, @attendanceRecordedAt, @absenceSource)",
             ("@businessId", businessId), ("@appointmentId", appointmentId), ("@clientId", clientId),
             ("@enrollmentId", enrollmentId), ("@modality", modality), ("@status", status),
             ("@createdAt", createdAt),
-            ("@cancelledAt", status == BookingStatus.Cancelled ? createdAt : null));
+            ("@cancelledAt", status == BookingStatus.Cancelled ? createdAt : null),
+            ("@attendanceRecordedAt", attendanceRecordedAt), ("@absenceSource", absenceSource));
 
     private static async Task<int> InsertIdAsync(
         SqlConnection connection, SqlTransaction transaction, string sql, params (string Name, object? Value)[] parameters)
@@ -1341,20 +1507,39 @@ public sealed class ClassAttendanceSqlIntegrationTests(ITestOutputHelper output)
         AddParameter(command, "@bookingId", bookingId);
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync(), $"Booking {bookingId} has no payment.");
-        var payment = new PaymentSnapshot(
-            reader.GetInt32(0),
-            reader.IsDBNull(1) ? null : reader.GetInt32(1),
-            (PaymentConcept)reader.GetByte(2),
-            reader.IsDBNull(3) ? null : reader.GetInt32(3),
-            reader.IsDBNull(4) ? null : reader.GetInt32(4),
-            reader.GetDecimal(5),
-            reader.IsDBNull(6) ? null : reader.GetDecimal(6),
-            reader.IsDBNull(7) ? null : reader.GetString(7),
-            reader.GetDateTime(8),
-            reader.GetDateTime(9));
+        var payment = MapPayment(reader);
         Assert.False(await reader.ReadAsync(), $"Booking {bookingId} has more than one payment.");
         return payment;
     }
+
+    /// <summary>
+    /// One payment read by its own id, so a test can prove that an annulled row was left exactly as it was written
+    /// instead of being rewritten by the correction.
+    /// </summary>
+    private static async Task<PaymentSnapshot> ReadPaymentByIdAsync(string connectionString, int paymentId)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "SELECT BusinessId, ClientId, Concept, BookingId, EnrollmentId, Amount, ListPrice, PriceReason, PaidAt, RecordedAt FROM Payments WHERE Id = @id",
+            connection);
+        AddParameter(command, "@id", paymentId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), $"Payment {paymentId} was not found.");
+        return MapPayment(reader);
+    }
+
+    private static PaymentSnapshot MapPayment(SqlDataReader reader) => new(
+        reader.GetInt32(0),
+        reader.IsDBNull(1) ? null : reader.GetInt32(1),
+        (PaymentConcept)reader.GetByte(2),
+        reader.IsDBNull(3) ? null : reader.GetInt32(3),
+        reader.IsDBNull(4) ? null : reader.GetInt32(4),
+        reader.GetDecimal(5),
+        reader.IsDBNull(6) ? null : reader.GetDecimal(6),
+        reader.IsDBNull(7) ? null : reader.GetString(7),
+        reader.GetDateTime(8),
+        reader.GetDateTime(9));
 
     private static SqlCommand Create(
         SqlConnection connection, SqlTransaction? transaction, string sql, (string Name, object? Value)[] parameters)
@@ -1424,6 +1609,14 @@ public sealed class ClassAttendanceSqlIntegrationTests(ITestOutputHelper output)
         int BusinessA, int FixedCurrent, int FixedExpired, int DropIn, int FixedPending);
 
     private sealed record AnnulmentIds(int BusinessA, int Client, int Booking, int Payment);
+
+    /// <summary>
+    /// Two tenants, each with one scheduled class and one drop-in already marked as present with no charge at all: the
+    /// shape the late charge of a forgotten drop-in needs (T18, D-20).
+    /// </summary>
+    private sealed record LaterChargeIds(
+        int BusinessA, int Client, int Session, int Booking,
+        int ForeignBusiness, int ForeignClient, int ForeignSession, int ForeignBooking);
 
     private sealed record TenantIds(
         int BusinessA, int BusinessB, int Client, int ForeignClient, int Session, int ForeignSession, int Booking);

@@ -370,6 +370,37 @@ public class PaymentLedgerServiceTests
         Assert.Equal(0, _repository.RefundInsertAttempts);
     }
 
+    [Fact]
+    public async Task A_refund_dated_after_today_is_refused()
+    {
+        // A manual refund is money that already went back, so the day the owner types cannot be in the future: it
+        // would record a completed correction in a period that has not happened yet. "Today" is the business day of
+        // the clock read, the only source of now, and the rejection happens before the write.
+        _repository.Payments.Add(NewPayment(paidAt: new DateTime(2026, 3, 10, 10, 0, 0)));
+
+        var result = await _service.RefundAsync(
+            1, new RefundPaymentRequest(500, 1000m, D(2026, 3, 21), "Motivo"));
+
+        AssertRolledBack(result, "payment_refund_in_future");
+        Assert.Empty(_repository.Refunds);
+        Assert.Equal(0, _repository.RefundInsertAttempts);
+    }
+
+    [Fact]
+    public async Task A_refund_dated_today_is_accepted()
+    {
+        // The boundary of the rule, and the accepted past policy around it: the day of the clock read is not the
+        // future, and every earlier day stays accepted exactly as before.
+        _repository.Payments.Add(NewPayment(paidAt: new DateTime(2026, 3, 10, 10, 0, 0)));
+
+        var today = await _service.RefundAsync(
+            1, new RefundPaymentRequest(500, 1000m, D(2026, 3, 20), "Motivo de hoy"));
+
+        Assert.True(today.Succeeded, today.Error?.Code);
+        Assert.Equal(D(2026, 3, 20), today.Value.RefundedOn);
+        Assert.Equal(1, _clock.ReadCount);
+    }
+
     [Theory]
     [InlineData("", "payment_invalid_reason")]
     [InlineData("   ", "payment_invalid_reason")]
@@ -498,6 +529,34 @@ public class PaymentLedgerServiceTests
         Assert.False(result.Succeeded);
         Assert.Equal("payment_not_found", result.Error!.Code);
         Assert.Equal(0, _repository.ListCallCount);
+    }
+
+    [Fact]
+    public async Task The_ledger_list_is_refused_before_storage_for_an_inverted_period()
+    {
+        // From later than To would filter every row out and quietly show an empty history instead of telling the
+        // owner the range is impossible. The service rejects it before storage, so the read never runs.
+        _repository.Payments.Add(NewPayment());
+
+        var result = await _service.ListAsync(
+            1, new PaymentLedgerQuery(From: D(2026, 3, 10), To: D(2026, 3, 1)));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("payment_invalid_range", result.Error!.Code);
+        Assert.Equal(0, _repository.ListCallCount);
+    }
+
+    [Fact]
+    public async Task The_ledger_list_clamps_the_requested_page_size_to_the_service_contract()
+    {
+        for (var day = 1; day <= 3; day++)
+            _repository.Payments.Add(NewPayment(id: day, paidAt: new DateTime(2026, 3, day, 10, 0, 0)));
+
+        var huge = await _service.ListAsync(1, new PaymentLedgerQuery(PageSize: 100000));
+        var zero = await _service.ListAsync(1, new PaymentLedgerQuery(PageSize: 0));
+
+        Assert.Equal(PaymentLedgerService.MaxPageSize, huge.Value.PageSize);
+        Assert.Equal(PaymentLedgerService.DefaultPageSize, zero.Value.PageSize);
     }
 
     /// <summary>Clock that counts its reads, so a test can prove the operation read the current time exactly once.</summary>

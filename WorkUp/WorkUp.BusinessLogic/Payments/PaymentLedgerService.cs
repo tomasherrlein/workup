@@ -48,6 +48,15 @@ public sealed class PaymentLedgerService(
 
     public const string RefundExceedsAmountCode = "payment_refund_exceeds_amount";
 
+    public const string InvalidRangeCode = "payment_invalid_range";
+
+    /// <summary>
+    /// A refund dated after the business's today. It is its own code because it is a different fact from a refund
+    /// dated before the payment, and the owner fixes it differently: one is a date already returned, the other is a
+    /// date that has not happened yet.
+    /// </summary>
+    public const string InvalidFutureDateCode = "payment_refund_in_future";
+
     /// <summary>Same limits as the stored columns: <c>Reason</c> 300, <c>AnnulledBy</c> 60 (001_schema.sql).</summary>
     public const int MaxReasonLength = 300;
 
@@ -136,8 +145,8 @@ public sealed class PaymentLedgerService(
     /// Registers a manual refund linked to one payment (D-20). The amount may be partial and the date is the day the
     /// money was returned as the owner typed it; the recording instant comes from the clock. It is refused for a
     /// payment of another business or a missing one, for an annulled payment, for an amount that does not fit or is
-    /// not positive, for a date before the payment and for a refund that would push the accumulated refunds past the
-    /// amount charged.
+    /// not positive, for a date after the business's today — a completed refund cannot be dated in the future — for a
+    /// date before the payment and for a refund that would push the accumulated refunds past the amount charged.
     /// </summary>
     public async Task<Result<PaymentRefundOutcome>> RefundAsync(
         int businessId, RefundPaymentRequest request, CancellationToken ct = default)
@@ -170,6 +179,15 @@ public sealed class PaymentLedgerService(
 
         // The single clock read of the refund: the instant it was recorded. The chosen day is the owner's input.
         var now = clock.Now;
+
+        // The refund is money that already went back, so its day cannot be in the future: a date after the business's
+        // today would record a completed correction in a period that has not happened yet. Every earlier day keeps
+        // the accepted policy below, and the only source of "today" is the clock read above.
+        if (request.RefundedOn > DateOnly.FromDateTime(now))
+            return Result<PaymentRefundOutcome>.Failure(
+                InvalidFutureDateCode,
+                "La devolución no puede tener una fecha posterior a hoy.",
+                nameof(request.RefundedOn));
 
         if (request.RefundedOn < DateOnly.FromDateTime(state.Payment.PaidAt))
             return Result<PaymentRefundOutcome>.Failure(
@@ -218,7 +236,8 @@ public sealed class PaymentLedgerService(
     /// <summary>
     /// The payment history of the business (RF-28), tenant-scoped and filtered by period, client and concept, in
     /// recent-first order and paged by the service. The page size is clamped to the contract, so a caller cannot ask
-    /// for an unbounded page. Reading the history writes nothing.
+    /// for an unbounded page. An inverted period (<c>From</c> later than <c>To</c>) is refused before the read
+    /// instead of silently returning an empty history. Reading the history writes nothing.
     /// </summary>
     public async Task<Result<PaymentLedgerPage>> ListAsync(
         int businessId, PaymentLedgerQuery query, CancellationToken ct = default)
@@ -227,6 +246,15 @@ public sealed class PaymentLedgerService(
             return Result<PaymentLedgerPage>.Failure(NotFoundCode, NotFoundMessage);
 
         query ??= new PaymentLedgerQuery();
+
+        // An inverted period would filter every row out and quietly show an empty history instead of telling the
+        // owner the range is impossible. It is rejected before the read, so storage is never asked to run it.
+        if (query.From is { } from && query.To is { } to && from > to)
+            return Result<PaymentLedgerPage>.Failure(
+                InvalidRangeCode,
+                "La fecha desde no puede ser posterior a la fecha hasta.",
+                nameof(query.From));
+
         var rows = await repository.ListAsync(businessId, query, ct);
 
         var ordered = rows
