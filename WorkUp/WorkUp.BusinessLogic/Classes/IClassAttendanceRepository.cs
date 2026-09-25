@@ -31,8 +31,9 @@ public interface IClassAttendanceRepository
     /// what serializes two operations on the same booking — a double attendance with a charge, for instance — and it
     /// is held until the caller commits or rolls back. The session is locked first, so no writer of that same
     /// <c>Appointments</c> row can commit between the read of the session state and the guarded status write: it waits
-    /// for the unit instead. <b>TODO (unit 4, suspension):</b> the suspension path does not exist yet, so nothing here
-    /// proves its order; it must lock that session row first to be serialized by this lock. It returns <c>null</c> when
+    /// for the unit instead, and the suspension path in <c>ClassDateActionsService</c> — which now exists — takes the
+    /// same row first, so it is serialized by this lock like every other writer of the session. It returns <c>null</c>
+    /// when
     /// the booking does not belong to the business, when it does not exist, or when it is missing its session: a
     /// foreign and a missing booking are the same answer, so nothing about another tenant's rows leaks. The kind and
     /// the modality are not filtered here: the service decides what to do with a booking that is not a class

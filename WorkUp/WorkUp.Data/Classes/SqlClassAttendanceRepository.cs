@@ -18,9 +18,9 @@ namespace WorkUp.Data.Classes;
 /// charge, for instance — and, just as important, it is what keeps every later writer of that same <c>Appointments</c>
 /// row out of the window between the read of the session state and the guarded status write: while this unit runs,
 /// such a writer waits for the lock instead of splitting the note from the status, and the suspension of a class
-/// (RF-10) is one of those writers. <b>TODO (unit 4, suspension):</b> that path does not exist yet, so nothing here
-/// proves its lock order; when it is written it has to take the <c>Appointments</c> row first, because the session
-/// state read below only stays stable while this lock is the one every writer of that row respects. The
+/// (RF-10) is one of those writers: <c>SqlClassDateActionsRepository</c> — the suspension path that now exists — takes
+/// the same <c>Appointments</c> row first, so the session state read below stays stable while this lock is the one
+/// every writer of that row respects. The
 /// effective-payment check reads under that same lock, so a second charge can never slip in, and a class that was
 /// already suspended when the lock was taken is seen as suspended by the read below. The guarded status statement
 /// repeats every storage-expressible rule — the discriminant, the modality, the open status, the absent cancellation,
@@ -174,8 +174,8 @@ public sealed class SqlClassAttendanceRepository(DbSession session)
         // The session is resolved without a lock and locked before the annotation: that is the order the README
         // prescribes for the class lock. Because the session lock is held until the caller commits, the status
         // returned below cannot move between this read and the guarded status write: any writer of that row, the
-        // suspension of a class among them, waits for this unit. The suspension path itself is still to be written
-        // and must take that same row first (TODO in the class summary).
+        // suspension of a class among them, waits for this unit. That path lives in SqlClassDateActionsRepository and
+        // takes the same row first, so the two directions agree on the lock order.
         var resolved = await QuerySingleOrDefaultAsync(
             ResolveSessionSql,
             MapMarker,

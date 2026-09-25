@@ -33,15 +33,18 @@ public enum ClassFixedStudentState
 
 /// <summary>
 /// The dated class session the detail shows (RF-10, RF-11, RF-12, RF-22): its identity, the service and the worker,
-/// the capacity, the appointment status and the suspension reason when it was suspended. <see cref="SuspensionReason"/>
-/// is only present with <see cref="AppointmentStatus.Suspended"/>; suspending a class never alters the grid or its
-/// annotations (RF-10, D-15).
+/// its persisted start and end, the capacity, the appointment status and the suspension reason when it was suspended.
+/// <see cref="EndsAt"/> is the end stored with the generated session and the only end the walk-in window may use: a
+/// tariff edited after the session was generated changes neither the class the client can attend nor the window the
+/// server accepts. <see cref="SuspensionReason"/> is only present with <see cref="AppointmentStatus.Suspended"/>;
+/// suspending a class never alters the grid or its annotations (RF-10, D-15).
 /// </summary>
 public sealed record ClassDetailSession(
     int AppointmentId,
     int ServiceId,
     int WorkerId,
     DateTime StartsAt,
+    DateTime EndsAt,
     int MaxCapacity,
     AppointmentStatus Status,
     string? SuspensionReason)
@@ -49,6 +52,8 @@ public sealed record ClassDetailSession(
     public DateOnly Date => DateOnly.FromDateTime(StartsAt);
 
     public TimeOnly StartTime => TimeOnly.FromDateTime(StartsAt);
+
+    public TimeOnly EndTime => TimeOnly.FromDateTime(EndsAt);
 
     public bool Suspended => Status == AppointmentStatus.Suspended;
 }
@@ -129,14 +134,16 @@ public sealed record ClassDetailBookingRow(
 /// A class session with every annotation it holds, as storage returns it (RF-10, RF-11, RF-22). The read is scoped by
 /// business and matched by id: a foreign or missing session is not found, never an error, and a session that is not a
 /// <c>ClassSession</c> is not found either. The <see cref="Kind"/> discriminant travels with the row so the service
-/// can reject an individual turn even if an implementation forgot to filter it. The service derives the states and
-/// the occupancy from this shape; the read only supplies the facts.
+/// can reject an individual turn even if an implementation forgot to filter it. <see cref="EndsAt"/> is the persisted
+/// end of the generated session, the same value the walk-in rule reads and the only end the detail projects. The
+/// service derives the states and the occupancy from this shape; the read only supplies the facts.
 /// </summary>
 public sealed record ClassDetailSessionRow(
     int AppointmentId,
     int ServiceId,
     int WorkerId,
     DateTime StartsAt,
+    DateTime EndsAt,
     int MaxCapacity,
     AppointmentKind Kind,
     AppointmentStatus Status,

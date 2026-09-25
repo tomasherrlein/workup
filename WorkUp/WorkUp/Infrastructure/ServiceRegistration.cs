@@ -94,6 +94,15 @@ public static class ServiceRegistration
         services.AddScoped<IWeekGenerationRepository, SqlWeekGenerationRepository>();
         services.AddScoped<WeekGenerationService>();
 
+        // Class detail, attendance, walk-in and date actions (T16)
+        services.AddScoped<IClassDetailRepository, SqlClassDetailRepository>();
+        services.AddScoped<ClassDetailService>();
+        services.AddScoped<IClassAttendanceRepository, SqlClassAttendanceRepository>();
+        services.AddScoped<ClassAttendanceService>();
+        services.AddScoped<ClassWalkInService>();
+        services.AddScoped<IClassDateActionsRepository, SqlClassDateActionsRepository>();
+        services.AddScoped<ClassDateActionsService>();
+
         // Clients (T05)
         services.AddScoped<IClientRepository, SqlClientRepository>();
         services.AddScoped<IClientNoteRepository, SqlClientNoteRepository>();

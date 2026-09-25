@@ -1,6 +1,7 @@
 using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
 using WorkUp.BusinessLogic.Abstractions;
+using WorkUp.BusinessLogic.Businesses;
 using WorkUp.BusinessLogic.Catalog;
 using WorkUp.BusinessLogic.Classes;
 using WorkUp.BusinessLogic.Clients;
@@ -14,12 +15,15 @@ using WorkUp.ViewModels.Classes;
 namespace WorkUp.Areas.Owner.Controllers;
 
 /// <summary>
-/// Grilla semanal de clases (RF-04), generación de la semana (RF-06) y clases sueltas (RF-22, RF-07 cupo &gt; 1).
-/// Reachable once the business has a class-type service (Settings shortcut and navigation hide it otherwise).
+/// Grilla semanal de clases (RF-04), generación de la semana (RF-06), clases sueltas (RF-22, RF-07 cupo &gt; 1) y
+/// detalle de una clase generada con su asistencia, atención sin turno, cancelación de una anotación y suspensión de
+/// la fecha (RF-10, RF-11, RF-12). Reachable once the business has a class-type service (Settings shortcut and
+/// navigation hide it otherwise).
 /// <para>
-/// The drop-in page needs two more collaborators than the grid. They are optional only so a caller that never renders
-/// that page (the grid and week tests, for instance) can keep the shorter constructor; the container always supplies
-/// both, because RF-22 is part of the panel and its services are registered.
+/// The drop-in roster, the detail page and its actions need more collaborators than the grid. They are optional only so
+/// a caller that never reaches those screens (the grid and week tests, for instance) can keep the shorter constructor;
+/// the container always supplies them, because RF-10, RF-11 and RF-22 are part of the panel and their services are
+/// registered. A missing collaborator closes the action that needs it instead of running it unenforced.
 /// </para>
 /// </summary>
 public class ClassesController(
@@ -29,8 +33,16 @@ public class ClassesController(
     WeekGenerationService weekGenerationService,
     IClock clock,
     ClassDropInService? dropInsService = null,
-    ClientsService? clientsService = null) : OwnerControllerBase
+    ClientsService? clientsService = null,
+    ClassDetailService? classDetailService = null,
+    ClassAttendanceService? attendanceService = null,
+    ClassWalkInService? walkInService = null,
+    ClassDateActionsService? dateActionsService = null,
+    BusinessSettingsService? settingsService = null) : OwnerControllerBase
 {
+    /// <summary>Message of a rejected amount or observation, shared by every action that accepts them.</summary>
+    private const string ChargeOrNoteMessage = "Revisá el importe y la observación (máximo 1000 caracteres).";
+
     /// <summary>
     /// Forward window of the owner roster (RF-22): today plus the next 30 days, the same window the public offer
     /// uses. The business service already dropped the sessions that started; this bound only keeps the screen finite.
@@ -348,6 +360,343 @@ public class ClassesController(
             result.Succeeded ? FlashType.Success : FlashType.Error);
         return RedirectToAction(nameof(DropIns));
     }
+
+    /// <summary>
+    /// Read-only detail of one generated class (RF-10, RF-11, RF-12, RF-22): the fixed, drop-in and cancelled roster
+    /// with the derived membership state of every fixed student and the occupancy the read resolved with a single
+    /// capacity rule. The flags the screen offers are advisory — the service revalidates every action under its own
+    /// lock — and the page reads the clock exactly once, so the two date-level actions and the arrival window are
+    /// judged against the same instant. A session that does not exist, belongs to another business or is not a class is
+    /// the same answer.
+    /// </summary>
+    [HttpGet]
+    public async Task<IActionResult> Detail(int id, CancellationToken ct)
+    {
+        ViewData["Title"] = "Detalle de la clase";
+
+        // The detail page is part of the panel, so the container always supplies its collaborators. A caller that used
+        // the shorter constructor gets a closed page instead of a roster whose actions could not be enforced.
+        if (classDetailService is null || clientsService is null)
+            return NotFound();
+
+        var result = await classDetailService.GetAsync(BusinessId, id, ct);
+        if (!result.Succeeded)
+            return NotFound();
+
+        var detail = result.Value;
+
+        // The single clock read of the page: the suspension window, the arrival window and every action offered
+        // derive from this value, so a clock that advances while the page is built cannot split them.
+        var now = clock.Now;
+
+        // Regla 15: the business decides whether attention without a booking exists at all. A missing settings
+        // collaborator simply never offers the form.
+        var allowsWalkIns = settingsService is not null
+            && (await settingsService.GetAsync(BusinessId, ct)).AllowsWalkIns;
+
+        // Same name resolution as the grid, the week and the drop-in roster: the read carries ids, the owner reads
+        // names.
+        var servicesById = (await catalogService.ListAsync(BusinessId, ct)).ToDictionary(s => s.Id);
+        var workersById = (await staffService.ListAsync(BusinessId, ct)).ToDictionary(w => w.Id);
+
+        var service = servicesById.GetValueOrDefault(detail.Session.ServiceId);
+        var session = new ClassDetailSessionViewModel(
+            detail.Session.AppointmentId,
+            detail.Session.Date,
+            detail.Session.StartTime,
+            detail.Session.EndTime,
+            detail.Session.EndsAt,
+            service?.Name ?? "Clase",
+            workersById.TryGetValue(detail.Session.WorkerId, out var worker) ? worker.FullName : string.Empty,
+            detail.Session.MaxCapacity,
+            detail.PlacesTaken,
+            detail.RemainingPlaces,
+            detail.Suspended,
+            detail.Session.SuspensionReason,
+            // The class lock rule is shared with the service: Programado and strictly before the start.
+            ClassCapacity.IsBookable(detail.Session.Status, detail.Session.StartsAt, now),
+            CanRegisterWalkIn(detail, allowsWalkIns, now));
+
+        var students = detail.Students
+            .Select(student => new ClassDetailStudentViewModel(
+                student.BookingId,
+                student.ClientName,
+                student.Status,
+                student.Modality,
+                student.FixedState,
+                CanAttend(student, detail),
+                CanMarkAbsent(student, detail),
+                CanCancel(student, detail, now)))
+            .ToList();
+
+        // The walk-in picker only offers the business's own clients, exactly like the drop-in roster.
+        var clients = (await clientsService.SearchAsync(BusinessId, null, ct))
+            .Select(client => new ClassDropInClientOptionViewModel(client.Id, client.FullName))
+            .ToList();
+
+        return View(new ClassDetailViewModel(session, students, clients));
+    }
+
+    /// <summary>
+    /// Registers the attendance of one student (RF-11) with the optional drop-in charge and the optional observation
+    /// for the next visit, then redirects back to the class (POST/redirect/GET). The charge is only meaningful for a
+    /// drop-in, so the form does not offer the amount for a fixed student; the service refuses it either way, and a
+    /// fixed student's money lives in the membership. Every rejection flashes its sentence and writes nothing.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Attend(int id, int appointmentId,
+        [ModelBinder(typeof(InvariantDecimalModelBinder))] decimal? amount, string? nextVisitNote,
+        CancellationToken ct = default)
+    {
+        if (attendanceService is null)
+            return NotFound();
+
+        if (!IsValidAmount(amount) || !IsValidNote(nextVisitNote))
+            return ReturnToClass(appointmentId, ChargeOrNoteMessage, success: false);
+
+        var request = new ClassAttendanceRequest(
+            amount is { } charge ? new ClassAttendanceCharge(charge) : null, nextVisitNote);
+        var result = await attendanceService.MarkAttendedAsync(BusinessId, id, request, ct);
+
+        return ReturnToClass(appointmentId, result.Succeeded
+            ? amount is { } charged
+                ? $"Asistencia registrada. Cobro de {Formatting.Money(charged)} registrado."
+                : "Asistencia registrada."
+            : AttendanceMessage(result.Error!), result.Succeeded);
+    }
+
+    /// <summary>
+    /// Marks one student as absent (RF-12), then redirects back to the class (POST/redirect/GET). An absence is a fact
+    /// and never depends on the membership coverage, and a suspended class did not happen, so the service is the one
+    /// that refuses it.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> MarkAbsent(int id, int appointmentId, CancellationToken ct = default)
+    {
+        if (attendanceService is null)
+            return NotFound();
+
+        var result = await attendanceService.MarkAbsentAsync(BusinessId, id, ct);
+        return ReturnToClass(appointmentId,
+            result.Succeeded ? "Ausencia registrada." : AttendanceMessage(result.Error!), result.Succeeded);
+    }
+
+    /// <summary>
+    /// Registers the arrival of an existing client who shows up for the class without a booking (RF-11): the walk-in
+    /// annotation, the attendance and the optional charge and observation in one unit, then redirects back to the class
+    /// (POST/redirect/GET). The charge and the observation are independent, and no email is queued (D-07), so neither
+    /// the screen nor the flash promises one. The service revalidates the whole rule under the session lock.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RegisterWalkIn(int appointmentId, int clientId,
+        [ModelBinder(typeof(InvariantDecimalModelBinder))] decimal? amount, string? nextVisitNote,
+        CancellationToken ct = default)
+    {
+        if (walkInService is null)
+            return NotFound();
+
+        // A form submitted without a pick is not a business rejection: say what is missing instead of asking the
+        // service to answer for an empty client id.
+        if (clientId <= 0)
+            return ReturnToClass(appointmentId, "Elegí una alumna con ficha para registrar la llegada.", success: false);
+
+        if (!IsValidAmount(amount) || !IsValidNote(nextVisitNote))
+            return ReturnToClass(appointmentId, ChargeOrNoteMessage, success: false);
+
+        var result = await walkInService.RegisterAsync(BusinessId, new ClassWalkInRequest(
+            appointmentId,
+            clientId,
+            amount is { } charge ? new ClassAttendanceCharge(charge) : null,
+            nextVisitNote), ct);
+
+        return ReturnToClass(appointmentId, result.Succeeded
+            ? amount is { } charged
+                ? $"Llegada registrada. Cobro de {Formatting.Money(charged)} registrado."
+                : "Llegada registrada."
+            : WalkInMessage(result.Error!), result.Succeeded);
+    }
+
+    /// <summary>
+    /// Cancels exactly one annotation of this class date (RF-22) and redirects back to the class
+    /// (POST/redirect/GET). While the class is still <c>Programado</c> and has not started, any non-cancelled
+    /// annotation can be cancelled, a recorded <c>Atendido</c> or <c>Ausente</c> included; the place is released and
+    /// neither the enrollment nor a charge is touched, so nothing is refunded or credited here (D-24, T18).
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> CancelBooking(int id, int appointmentId, CancellationToken ct = default)
+    {
+        if (dateActionsService is null)
+            return NotFound();
+
+        var result = await dateActionsService.CancelBookingAsync(BusinessId, id, ct);
+        return ReturnToClass(appointmentId, result.Succeeded
+            ? "Anotación cancelada: el lugar quedó liberado."
+            : DateActionMessage(result.Error!), result.Succeeded);
+    }
+
+    /// <summary>
+    /// Suspends the whole class of this date (RF-10) with a mandatory reason and redirects back to the class
+    /// (POST/redirect/GET). The suspension writes the session row only, never marks absences and never refunds or
+    /// credits anything; the flash reports how many notices it queued, because the notice count is what the owner
+    /// cannot see on the page.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Suspend(int id, string? reason, CancellationToken ct = default)
+    {
+        if (dateActionsService is null)
+            return NotFound();
+
+        var result = await dateActionsService.SuspendClassAsync(BusinessId, id, reason, ct);
+        return ReturnToClass(id, result.Succeeded
+            ? SuspensionMessage(result.Value)
+            : DateActionMessage(result.Error!), result.Succeeded);
+    }
+
+    /// <summary>
+    /// Whether the arrival form is worth showing: the business admits attention without a booking (Regla 15), the class
+    /// is <c>Programado</c> and not suspended, a place is free, and the clock is inside the arrival window
+    /// <c>[start, end]</c>. The end is the <c>EndsAt</c> stored with the generated session — the same value the server
+    /// judges — never a duration recomputed from the tariff of the moment: a tariff edited after the session was
+    /// generated must not close a window the service still accepts. The service revalidates against that stored end.
+    /// </summary>
+    private static bool CanRegisterWalkIn(ClassDetail detail, bool allowsWalkIns, DateTime now)
+    {
+        if (!allowsWalkIns)
+            return false;
+
+        return detail.Session.Status == AppointmentStatus.Scheduled
+            && !detail.Suspended
+            && detail.RemainingPlaces > 0
+            && now >= detail.Session.StartsAt
+            && now <= detail.Session.EndsAt;
+    }
+
+    /// <summary>
+    /// Whether the screen offers attendance: the class is still <c>Programado</c> and not suspended, the annotation is
+    /// open, and the student has coverage on the class date — a drop-in pays on arrival, so it always has it, while a
+    /// fixed student needs the active state (D-16, D-23). The service is the one that enforces it.
+    /// </summary>
+    private static bool CanAttend(ClassDetailStudent student, ClassDetail detail) =>
+        detail.Session.Status == AppointmentStatus.Scheduled
+        && !detail.Suspended
+        && student.Status is BookingStatus.Pending or BookingStatus.Confirmed
+        && (student.IsDropIn || student.FixedState == ClassFixedStudentState.Active);
+
+    /// <summary>
+    /// Whether the screen offers the absence: the same open annotation and an unsuspended class, with no coverage
+    /// requirement at all, because the absence is a fact.
+    /// </summary>
+    private static bool CanMarkAbsent(ClassDetailStudent student, ClassDetail detail) =>
+        detail.Session.Status == AppointmentStatus.Scheduled
+        && !detail.Suspended
+        && student.Status is BookingStatus.Pending or BookingStatus.Confirmed;
+
+    /// <summary>
+    /// Whether the screen offers the cancellation of one annotation: the class is still <c>Programado</c> and has not
+    /// started, and the annotation was not cancelled already — a recorded attendance or absence can still be
+    /// cancelled before the class, which is what makes the recorded fact stop counting.
+    /// </summary>
+    private static bool CanCancel(ClassDetailStudent student, ClassDetail detail, DateTime now) =>
+        detail.Session.Status == AppointmentStatus.Scheduled
+        && !detail.Suspended
+        && !student.IsCancelled
+        && detail.Session.StartsAt > now;
+
+    /// <summary>Whether the optional amount of an attendance or walk-in can be stored. A missing charge is valid.</summary>
+    private static bool IsValidAmount(decimal? amount) =>
+        amount is null
+        || (amount is > 0 and <= 9999999999.99m && decimal.Round(amount.Value, 2) == amount.Value);
+
+    /// <summary>Whether the optional observation fits the client's record. A missing note is valid.</summary>
+    private static bool IsValidNote(string? note) => note is null || note.Length <= 1000;
+
+    /// <summary>
+    /// Flash the message and redirect back to the class (POST/redirect/GET), or to the drop-in roster when the form
+    /// carried no class id — that id only selects the page the owner returns to, never what the action writes.
+    /// </summary>
+    private IActionResult ReturnToClass(int appointmentId, string message, bool success)
+    {
+        this.Flash(message, success ? FlashType.Success : FlashType.Error);
+        return appointmentId > 0
+            ? RedirectToAction(nameof(Detail), new { id = appointmentId })
+            : RedirectToAction(nameof(DropIns));
+    }
+
+    /// <summary>
+    /// Turns the stable code of a rejected attendance or absence into the sentence the owner reads, with the same rule
+    /// as the other mappers: a known code gets its message, an unknown one never reaches the screen as a code.
+    /// </summary>
+    private static string AttendanceMessage(BusinessError error) => error.Code switch
+    {
+        "class_attendance_not_found" => "No encontramos esa anotación de la clase.",
+        "class_attendance_cancelled" => "Esa anotación está cancelada: el lugar ya fue liberado.",
+        "class_attendance_already_attended" => "Esa alumna ya figura como presente.",
+        "class_attendance_already_absent" => "Esa alumna ya figura como ausente.",
+        "class_attendance_without_coverage" =>
+            "La inscripción no está vigente en la fecha de la clase: renová el abono primero.",
+        "class_attendance_suspended" => "Esa clase está suspendida: no se registra asistencia, ausencia ni cobro.",
+        "class_attendance_charge_not_allowed" => "Sólo se cobra la clase suelta; el abono se registra aparte.",
+        "class_attendance_already_charged" => "Esa clase suelta ya tiene un cobro vigente.",
+        "class_attendance_invalid_charge" => "Revisá el importe y el motivo del precio.",
+        "class_attendance_invalid_note" => ChargeOrNoteMessage,
+        "class_attendance_note_failed" => "No pudimos guardar la observación. Volvé a intentar.",
+        "class_attendance_unavailable" => "Esa anotación no admite esta acción.",
+        _ => "No pudimos registrar la acción. Volvé a intentar."
+    };
+
+    /// <summary>
+    /// Turns the stable code of a rejected walk-in into the sentence the owner reads. No rejection promises an email:
+    /// the walk-in path never queues one (D-07).
+    /// </summary>
+    private static string WalkInMessage(BusinessError error) => error.Code switch
+    {
+        "class_walk_in_invalid_request" => "No pudimos registrar la atención. Volvé a intentar.",
+        "class_walk_in_not_found" => "No encontramos esa clase.",
+        "class_walk_in_client_not_found" => "No encontramos a esa alumna en tu negocio.",
+        "class_walk_in_disabled" => "Este negocio no admite atención sin turno.",
+        "class_walk_in_not_available" =>
+            "Esa clase está suspendida: no se puede registrar una atención sin turno.",
+        "class_walk_in_outside_window" =>
+            "La atención sin turno sólo se puede registrar entre el inicio y el fin de la clase.",
+        "class_walk_in_full" => "La clase está completa. Probá con otro día u horario.",
+        "class_walk_in_already_booked" => "Esa alumna ya está anotada en esa clase.",
+        "class_walk_in_invalid_charge" => "Revisá el importe y el motivo del precio.",
+        "class_walk_in_invalid_note" => ChargeOrNoteMessage,
+        "class_walk_in_note_failed" => "No pudimos guardar la observación. Volvé a intentar.",
+        "class_walk_in_unavailable" => "Esa anotación no admite esta acción.",
+        _ => "No pudimos registrar la atención. Volvé a intentar."
+    };
+
+    /// <summary>
+    /// Turns the stable code of a rejected cancellation or suspension into the sentence the owner reads.
+    /// </summary>
+    private static string DateActionMessage(BusinessError error) => error.Code switch
+    {
+        "class_date_booking_not_found" => "No encontramos esa anotación de la clase.",
+        "class_date_class_not_found" => "No encontramos esa clase.",
+        "class_date_not_available" =>
+            "La clase ya empezó o está suspendida: esa acción ya no está disponible.",
+        "class_date_booking_cancelled" => "Esa anotación ya estaba cancelada: el lugar ya fue liberado.",
+        "class_date_invalid_reason" => "Ingresá un motivo de hasta 300 caracteres.",
+        _ => "No pudimos registrar la acción. Volvé a intentar."
+    };
+
+    /// <summary>
+    /// The suspension outcome as one sentence. It reports the notices that actually landed in the outbox, and it says
+    /// nothing about the students when none landed: a repeated request is refused long before a notice is composed, and
+    /// an outbox that already held the same key is a deduplication hit, not an empty class.
+    /// </summary>
+    private static string SuspensionMessage(ClassSuspensionOutcome outcome) => outcome.NoticesQueued switch
+    {
+        0 => "Clase suspendida.",
+        1 => "Clase suspendida. Quedó 1 aviso para la alumna anotada.",
+        _ => $"Clase suspendida. Quedaron {outcome.NoticesQueued} avisos para las alumnas anotadas."
+    };
 
     /// <summary>
     /// Turns the stable code of a rejected booking into the sentence the owner reads. The codes are the caller's

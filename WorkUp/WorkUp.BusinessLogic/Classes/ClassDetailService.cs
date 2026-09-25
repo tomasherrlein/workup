@@ -84,6 +84,7 @@ public sealed class ClassDetailService(IClassDetailRepository repository, IClock
                 session.ServiceId,
                 session.WorkerId,
                 session.StartsAt,
+                session.EndsAt,
                 session.MaxCapacity,
                 session.Status,
                 session.SuspensionReason),

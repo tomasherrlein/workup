@@ -89,6 +89,17 @@
                                 <div class="row-tags">
                                     <partial name="_StatusTag" model="StatusTag.For(item.AppointmentStatus)" />
                                 </div>
+                                @* RF-10/RF-11: the class roster and the post-start walk-in are only reachable from here.
+                                   The Day view renders started classes too, so the link hangs off the class kind and never
+                                   off the section or the clock; an individual turn keeps its own navigation. *@
+                                @if (item.Kind == AppointmentKind.ClassSession)
+                                {
+                                    <p class="row-sub">
+                                        <a class="btn" asp-area="Owner" asp-controller="Classes" asp-action="Detail" asp-route-id="@item.AppointmentId">
+                                            @Icons.Svg("calendar") Abrir clase
+                                        </a>
+                                    </p>
+                                }
                                 @if (item.Attendees.Count == 0)
                                 {
                                     <p class="owner-day-empty-attendees">Sin anotaciones.</p>

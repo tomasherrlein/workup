@@ -24,11 +24,12 @@ public sealed class SqlClassDetailRepository(DbSession session)
 {
     /// <summary>
     /// The class session of the business, matched by id. The tenant, the id and the kind are the whole predicate, so
-    /// a foreign or individual appointment is simply not found. The suspension reason travels with the row: it is set
-    /// only for a suspended session and never alters the grid or the annotations.
+    /// a foreign or individual appointment is simply not found. The persisted <c>StartsAt</c> and <c>EndsAt</c> travel
+    /// with the row, so the detail never recomputes the end from the tariff of the moment. The suspension reason
+    /// travels with the row too: it is set only for a suspended session and never alters the grid or the annotations.
     /// </summary>
     private const string SelectSessionSql = """
-        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.MaxCapacity, a.Kind, a.Status,
+        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.EndsAt, a.MaxCapacity, a.Kind, a.Status,
                a.SuspensionReason
           FROM Appointments AS a
          WHERE a.Id = @appointmentId
@@ -105,6 +106,7 @@ public sealed class SqlClassDetailRepository(DbSession session)
             session.ServiceId,
             session.WorkerId,
             session.StartsAt,
+            session.EndsAt,
             session.MaxCapacity,
             session.Kind,
             session.Status,
@@ -117,6 +119,7 @@ public sealed class SqlClassDetailRepository(DbSession session)
         reader.Get<int>("ServiceId"),
         reader.Get<int>("WorkerId"),
         reader.Get<DateTime>("StartsAt"),
+        reader.Get<DateTime>("EndsAt"),
         reader.Get<int>("MaxCapacity"),
         reader.GetEnum<AppointmentKind>("Kind"),
         reader.GetEnum<AppointmentStatus>("Status"),
@@ -167,6 +170,7 @@ public sealed class SqlClassDetailRepository(DbSession session)
         int ServiceId,
         int WorkerId,
         DateTime StartsAt,
+        DateTime EndsAt,
         int MaxCapacity,
         AppointmentKind Kind,
         AppointmentStatus Status,

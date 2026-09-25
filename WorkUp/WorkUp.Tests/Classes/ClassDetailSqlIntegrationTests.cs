@@ -143,6 +143,50 @@ public sealed class ClassDetailSqlIntegrationTests(ITestOutputHelper output)
         output.WriteLine("Projection assertions passed: active coverage and pending renewal derived from the membership periods, the drop-in without a fixed state, the cancelled annotation kept, occupancy 3 of 6, the suspension reason reported, and the foreign and missing sessions both class_detail_not_found.");
     }
 
+    [Fact]
+    public async Task Detail_read_projects_the_persisted_end_after_the_tariff_duration_changes()
+    {
+        var target = await ResolveTargetAsync("_EndsAt");
+        if (target is null)
+            return;
+
+        var ids = await SeedDetailAsync(target.ConnectionString, FixedNow);
+        // The session was generated with a 60-minute duration and the tariff is changed to 30 afterwards: only the
+        // stored Appointments.EndsAt may answer, exactly as the walk-in window on the server judges it.
+        await UpdateServiceDurationAsync(target.ConnectionString, ids.ServiceA, 30);
+
+        await using var session = new DbSession(target.ConnectionString);
+        var repository = new SqlClassDetailRepository(session);
+
+        var row = await repository.GetSessionAsync(ids.BusinessA, ids.Session);
+        Assert.NotNull(row);
+        Assert.Equal(new DateTime(2026, 3, 12, 19, 0, 0), row!.EndsAt);
+
+        var service = new ClassDetailService(repository, new FakeClock { Now = FixedNow });
+        var result = await service.GetAsync(ids.BusinessA, ids.Session);
+        Assert.True(result.Succeeded, result.Error?.Code);
+        Assert.Equal(new DateTime(2026, 3, 12, 19, 0, 0), result.Value.Session.EndsAt);
+        Assert.Equal(new TimeOnly(19, 0), result.Value.Session.EndTime);
+
+        output.WriteLine("EndsAt assertion passed: after the tariff duration changed from 60 to 30 minutes, the read and the projected detail still report the stored end 19:00 of the generated session.");
+    }
+
+    /// <summary>
+    /// Changes the tariff duration of a seeded service, emulating a tariff edit after the session was generated. The
+    /// opt-in fixture is the only place a real column can be written, because the projection under test never rereads
+    /// the tariff to answer the end.
+    /// </summary>
+    private static async Task UpdateServiceDurationAsync(string connectionString, int serviceId, int durationMinutes)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(
+            "UPDATE Services SET DurationMinutes = @duration WHERE Id = @serviceId", connection);
+        command.Parameters.AddWithValue("@duration", durationMinutes);
+        command.Parameters.AddWithValue("@serviceId", serviceId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
     /// <summary>
     /// Resolves this test's opt-in target. <c>null</c> means the variable is absent: the test returns N/A without
     /// opening any connection or touching any server.

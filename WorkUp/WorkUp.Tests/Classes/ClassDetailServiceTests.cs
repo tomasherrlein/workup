@@ -38,14 +38,16 @@ public class ClassDetailServiceTests
         int serviceId = 7,
         int workerId = 3,
         AppointmentKind kind = AppointmentKind.ClassSession,
+        int durationMinutes = 60,
         IReadOnlyList<ClassDetailBookingRow>? bookings = null)
     {
         var appointmentId = _nextAppointmentId++;
+        var startsAt = date.ToDateTime(time);
         _repository.Sessions.Add(new FakeClassDetailSession(
             businessId,
             new ClassDetailSessionRow(
-                appointmentId, serviceId, workerId, date.ToDateTime(time), maxCapacity, kind, status,
-                suspensionReason, bookings ?? [])));
+                appointmentId, serviceId, workerId, startsAt, startsAt.AddMinutes(durationMinutes), maxCapacity, kind,
+                status, suspensionReason, bookings ?? [])));
         return appointmentId;
     }
 
@@ -124,6 +126,20 @@ public class ClassDetailServiceTests
         Assert.Equal(1, _repository.GetCallCount);
         Assert.Equal(1, _repository.GetBusinessId);
         Assert.Equal(appointmentId, _repository.GetAppointmentId);
+    }
+
+    [Fact]
+    public async Task Detail_projects_the_persisted_end_of_the_session()
+    {
+        // The stored end is what the session was generated with, not what the current tariff would compute: the read
+        // must carry it so the screen and the walk-in window never recompute a duration the session does not have.
+        var appointmentId = AddSession(D(2026, 3, 12), T(18), durationMinutes: 90);
+
+        var result = await _service.GetAsync(1, appointmentId);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(D(2026, 3, 12).ToDateTime(T(18)).AddMinutes(90), result.Value.Session.EndsAt);
+        Assert.Equal(T(19, 30), result.Value.Session.EndTime);
     }
 
     [Fact]

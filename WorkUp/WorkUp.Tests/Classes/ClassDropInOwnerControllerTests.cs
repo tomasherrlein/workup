@@ -432,6 +432,22 @@ public sealed class ClassDropInOwnerControllerTests
         Assert.True(dropIns > week, "Las clases sueltas deben colgar del mismo gate, después de Generar semana.");
     }
 
+    [Fact]
+    public void DropIns_view_links_every_session_to_its_generated_class_detail()
+    {
+        var view = ReadClassesView("DropIns.cshtml");
+
+        // The roster is the class list the owner sees; every generated session it shows must open its detail page
+        // (T16), which is where attendance, walk-in, cancellation and suspension live.
+        var loop = view.IndexOf("foreach (var session in daySessions)", StringComparison.Ordinal);
+        var detailLink = view.IndexOf("asp-action=\"Detail\"", StringComparison.Ordinal);
+        var sessionId = view.IndexOf("asp-route-id=\"@session.AppointmentId\"", StringComparison.Ordinal);
+
+        Assert.True(loop >= 0, "La vista debe recorrer las sesiones del día.");
+        Assert.True(detailLink > loop, "El detalle de la clase debe ofrecerse desde cada sesión del listado.");
+        Assert.True(sessionId > detailLink, "El enlace al detalle debe llevar el id de la sesión generada.");
+    }
+
     private static string ReadClassesView(string fileName)
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));

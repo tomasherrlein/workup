@@ -53,6 +53,11 @@ else
                                 <partial name="_StatusTag" model="session.StatusTag" />
                             </div>
                             <p class="row-sub">Profesora: @session.TeacherName</p>
+                            @* T16: the roster of generated classes is the way into the class detail, where the
+                               attendance, the walk-in, the cancellation and the suspension live. *@
+                            <div class="row-actions">
+                                <a class="btn" asp-action="Detail" asp-route-id="@session.AppointmentId">@Icons.Svg("users") Ver detalle</a>
+                            </div>
 
                             @if (!session.HasDropIns)
                             {
