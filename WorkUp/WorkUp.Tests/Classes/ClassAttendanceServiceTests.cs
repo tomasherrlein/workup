@@ -229,6 +229,32 @@ public class ClassAttendanceServiceTests
     }
 
     [Fact]
+    public async Task A_suspended_class_refuses_the_attendance_the_charge_and_the_absence()
+    {
+        // RF-10: a suspended class did not happen, so nobody attends it, a drop-in does not pay for it and nobody is
+        // absent from it. The status comes from the lock, so the refusal happens before any write.
+        _repository.Booking = State();
+        _repository.SessionStatus = AppointmentStatus.Suspended;
+
+        var attended = await _service.MarkAttendedAsync(
+            1, 500, new ClassAttendanceRequest(new ClassAttendanceCharge(500m)));
+        AssertRolledBack(attended, "class_attendance_suspended");
+        Assert.Null(_repository.LastWrittenStatus);
+        Assert.Empty(_repository.Payments);
+
+        var absent = await _service.MarkAbsentAsync(1, 500);
+        AssertRolledBack(absent, "class_attendance_suspended");
+        Assert.Null(_repository.LastWrittenStatus);
+
+        // The suspension is judged before the coverage rule, so a fixed student with current coverage is refused
+        // exactly the same way: the class did not happen for anyone.
+        _repository.Booking = CoveredFixedState();
+        var covered = await _service.MarkAttendedAsync(1, 500, new ClassAttendanceRequest());
+        AssertRolledBack(covered, "class_attendance_suspended");
+        Assert.Null(_repository.LastWrittenStatus);
+    }
+
+    [Fact]
     public async Task A_second_attendance_is_refused_with_a_stable_code_and_never_rewrites()
     {
         _repository.Booking = State(status: BookingStatus.Attended);
@@ -433,6 +459,21 @@ public class ClassAttendanceServiceTests
     }
 
     [Fact]
+    public async Task The_note_is_written_before_the_status_and_the_charge()
+    {
+        // The observation is the only write the storage can refuse while answering a failure, so it is written
+        // first: when this operation joins an outer transaction that its opener later commits, a refused note cannot
+        // leave the status write or the charge behind, because neither was written yet.
+        _repository.Booking = State();
+
+        var result = await _service.MarkAttendedAsync(
+            1, 500, new ClassAttendanceRequest(new ClassAttendanceCharge(450m), "Alergia al amoníaco"));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(new[] { "note", "status", "payment" }, _repository.WriteOrder);
+    }
+
+    [Fact]
     public async Task A_note_that_cannot_land_rolls_the_whole_operation_back()
     {
         _repository.Booking = State();
@@ -441,11 +482,16 @@ public class ClassAttendanceServiceTests
         var result = await _service.MarkAttendedAsync(
             1, 500, new ClassAttendanceRequest(new ClassAttendanceCharge(500m), "Alergia al amoníaco"));
 
-        // The note never landed, so the whole unit was rolled back: no commit. The fake does not model the SQL
-        // rollback, so the transaction counters are the observable proof here; the opt-in SQL fixture proves that a
-        // rolled-back unit erases the status write and the charge as well.
+        // The note never landed, so the whole unit was rolled back: no commit, and the status write and the charge
+        // were never even asked for, because the note goes first. The fake does not model the SQL rollback, so the
+        // transaction counters are the observable proof here; ClassAttendanceSqlIntegrationTests proves on real SQL
+        // that the rolled-back unit erases the status write and the charge, and that a failed note leaves nothing
+        // behind even inside an outer transaction its opener commits.
         AssertRolledBack(result, "class_attendance_note_failed");
         Assert.Empty(_repository.Notes);
+        Assert.Empty(_repository.Payments);
+        Assert.Null(_repository.LastWrittenStatus);
+        Assert.Equal(new[] { "note" }, _repository.WriteOrder);
     }
 
     [Fact]

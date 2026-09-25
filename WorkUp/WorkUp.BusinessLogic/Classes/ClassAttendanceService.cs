@@ -9,9 +9,19 @@ namespace WorkUp.BusinessLogic.Classes;
 /// Per-student attendance and absence of a generated class session, with the optional drop-in charge (RF-11, RF-12,
 /// D-16, D-20, D-23). One operation is one transaction: it locks the annotation with its session, judges the rules
 /// from that single read, writes the status — and the charge and the observation when they were asked for — and
-/// commits exactly once. Every rejection returns before the commit, so the transaction rolls back and leaves nothing
-/// behind. The method shape mirrors the individual path (<c>OwnerDayActionsService</c>), because attendance plus an
-/// optional independent charge is the same problem there and here.
+/// commits exactly once. The method shape mirrors the individual path (<c>OwnerDayActionsService</c>), because
+/// attendance plus an optional independent charge is the same problem there and here.
+/// <para>
+/// <b>Atomicity when composed.</b> The unit of work may already be open, in which case this service joins it and its
+/// commit is a no-op: whoever opened the transaction decides whether it lands. A failure returned from inside such a
+/// joined transaction therefore cannot rely on a rollback, so no path may leave a persistent write visible while
+/// answering a failure. The observation is the only write that can refuse for a reason the lock does not already
+/// rule out, so it is written <b>before</b> the status and the charge: a note that refuses to land fails the
+/// operation with a stable code while the unit still holds no status write and no payment, and the outer transaction
+/// may commit without keeping a half-done attendance. Every rejection that runs before the writes returns with
+/// nothing written, so composing this service inside a larger unit stays safe. When the service owns its transaction,
+/// every rejection rolls it back and leaves nothing behind as well.
+/// </para>
 /// <para>
 /// <b>Attendance</b> is only enabled for a student with current coverage on the class date: a fixed annotation must
 /// belong to an enrollment that still holds its places and whose paid periods cover the class date
@@ -22,19 +32,25 @@ namespace WorkUp.BusinessLogic.Classes;
 /// the screen.
 /// </para>
 /// <para>
-/// <b>Absence</b> is allowed for any annotation that is not cancelled, including a pending renewal or a pending
-/// payment fixed student, because the absence is a fact and never depends on coverage. It is written with
-/// <see cref="AbsenceSource.Owner"/> and never overwrites an <c>Atendido</c> annotation. A cancelled annotation is
-/// never overwritten and never revived, and a second attendance or a second absence is refused with a stable code
-/// instead of silently succeeding, so a double submission is always explicit and can never write the optional charge
-/// twice.
+/// <b>Suspension.</b> A suspended class did not happen (RF-10): its fixed students lose it and a drop-in does not pay
+/// for it. Attendance, absence and the charge are all refused with one stable code before anything is written, and
+/// the rule is read from the same locked statement as the rest, so the refusal cannot be raced by a concurrent
+/// suspension.
+/// </para>
+/// <para>
+/// <b>Absence</b> is allowed for any annotation that is not cancelled whose class was not suspended, including a
+/// pending renewal or a pending payment fixed student, because the absence is a fact and never depends on coverage.
+/// It is written with <see cref="AbsenceSource.Owner"/> and never overwrites an <c>Atendido</c> annotation. A
+/// cancelled annotation is never overwritten and never revived, and a second attendance or a second absence is
+/// refused with a stable code instead of silently succeeding, so a double submission is always explicit and can never
+/// write the optional charge twice.
 /// </para>
 /// <para>
 /// <b>Charge</b> is only written for a <c>Suelta</c> annotation and only when the owner asked for it, in the same
 /// transaction as the attendance but as an independent row (<see cref="PaymentConcept.DropInClass"/>, D-20). An
 /// effective payment of that booking is never duplicated; an annulled one is not effective. <b>Observation</b> is
-/// mandatory to land: a note that cannot be written fails the whole operation with a stable code and rolls back,
-/// exactly like the individual path, so the client's record never loses it silently.
+/// mandatory to land: a note that cannot be written fails the whole operation with a stable code, exactly like the
+/// individual path, so the client's record never loses it silently.
 /// </para>
 /// </summary>
 public sealed class ClassAttendanceService(
@@ -54,6 +70,8 @@ public sealed class ClassAttendanceService(
     private const string AlreadyAbsentCode = "class_attendance_already_absent";
 
     private const string WithoutCoverageCode = "class_attendance_without_coverage";
+
+    private const string SuspendedCode = "class_attendance_suspended";
 
     private const string ChargeNotAllowedCode = "class_attendance_charge_not_allowed";
 
@@ -85,7 +103,8 @@ public sealed class ClassAttendanceService(
     /// <summary>
     /// Marks one student as absent (RF-12). It never charges and never notes: the absence is a fact, the observation
     /// belongs to the attendance flow and the money is independent. It is allowed for any annotation that is not
-    /// cancelled, including a fixed student pending renewal or pending payment.
+    /// cancelled whose class was not suspended — a suspended class did not happen (RF-10) — including a fixed student
+    /// pending renewal or pending payment.
     /// </summary>
     public Task<Result> MarkAbsentAsync(int businessId, int bookingId, CancellationToken ct = default) =>
         ExecuteAsync(businessId, bookingId, attend: false, new ClassAttendanceRequest(), ct);
@@ -116,11 +135,14 @@ public sealed class ClassAttendanceService(
 
         await using var transaction = await unitOfWork.BeginAsync(ct: ct);
 
-        // The annotation row is the lock. It carries its session, and a booking of another business is simply not
-        // found, so nothing about another tenant's rows leaks through the answer.
-        var state = await repository.LockAsync(businessId, bookingId, ct);
-        if (state is null
-            || state.BusinessId != businessId
+        // The annotation row is the lock. It carries its session with its status, and a booking of another business
+        // is simply not found, so nothing about another tenant's rows leaks through the answer.
+        var locked = await repository.LockAsync(businessId, bookingId, ct);
+        if (locked is null)
+            return Failure(NotFoundCode, NotFoundMessage);
+
+        var state = locked.Annotation;
+        if (state.BusinessId != businessId
             || state.BookingId != bookingId
             || state.Kind != AppointmentKind.ClassSession
             || state.Modality is not (BookingModality.Fixed or BookingModality.DropIn))
@@ -141,6 +163,12 @@ public sealed class ClassAttendanceService(
         if (state.BookingStatus is not (BookingStatus.Pending or BookingStatus.Confirmed))
             return Failure(UnavailableCode, "Esa anotación no admite esta acción.");
 
+        // A suspended class did not happen (RF-10): its fixed students lose it, a drop-in does not pay for it, and
+        // nobody is absent from a class that was never taught. The status comes from the same locked read as the rest
+        // of the rules and the guarded write repeats it, so a concurrent suspension cannot be raced.
+        if (locked.SessionStatus == AppointmentStatus.Suspended)
+            return Failure(SuspendedCode, "Esa clase está suspendida: no se registra asistencia, ausencia ni cobro.");
+
         if (attend && !HasCurrentCoverage(state))
             return Failure(
                 WithoutCoverageCode, "La inscripción no está vigente en la fecha de la clase: renová el abono primero.");
@@ -158,6 +186,16 @@ public sealed class ClassAttendanceService(
 
         var now = clock.Now;
 
+        // The observation is written before the status and the charge: it is the only write that can refuse for a
+        // reason the lock does not already rule out, and writing it first is what keeps a failure from leaving the
+        // attendance or the charge visible when the unit is composed inside an outer transaction its opener commits —
+        // writing it last would persist both without the note. The guarded status write repeats every rule already
+        // judged from the lock, so once the note landed it changes exactly one row.
+        if (!string.IsNullOrWhiteSpace(request.Note)
+            && !await repository.InsertNoteAsync(
+                businessId, state.ClientId, state.AppointmentId, request.Note.Trim(), now, ct))
+            return Failure(NoteFailedCode, "No pudimos guardar la observación. Volvé a intentar.");
+
         var status = attend ? BookingStatus.Attended : BookingStatus.Absent;
         if (!await repository.SetStatusAsync(businessId, bookingId, status, now, ct))
             return Failure(UnavailableCode, "Esa anotación no admite esta acción.");
@@ -174,11 +212,6 @@ public sealed class ClassAttendanceService(
                     charge.PriceReason,
                     now),
                 ct);
-
-        if (!string.IsNullOrWhiteSpace(request.Note)
-            && !await repository.InsertNoteAsync(
-                businessId, state.ClientId, state.AppointmentId, request.Note.Trim(), now, ct))
-            return Failure(NoteFailedCode, "No pudimos guardar la observación. Volvé a intentar.");
 
         await transaction.CommitAsync(ct);
         return Result.Success();
