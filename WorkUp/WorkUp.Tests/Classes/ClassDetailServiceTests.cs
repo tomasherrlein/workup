@@ -3,6 +3,7 @@ using WorkUp.BusinessLogic.Classes;
 using WorkUp.Domain.Entities;
 using WorkUp.Domain.Enums;
 using WorkUp.Tests.Fakes;
+using System.Globalization;
 
 namespace WorkUp.Tests.Classes;
 
@@ -57,19 +58,22 @@ public class ClassDetailServiceTests
         int enrollmentId = 100,
         DateOnly? coverageStart = null,
         DateOnly? expiresOn = null,
-        BookingStatus status = BookingStatus.Pending)
+        BookingStatus status = BookingStatus.Pending,
+        string clientEmail = "fija@workup.test")
     {
         IReadOnlyList<MembershipPeriod> periods = coverageStart is { } start && expiresOn is { } end
             ? [new MembershipPeriod { EnrollmentId = enrollmentId, CoverageStart = start, ExpiresOn = end }]
             : [];
         return new ClassDetailBookingRow(
-            bookingId, clientId, clientName, BookingModality.Fixed, enrollmentId, status, enrollmentStatus, periods);
+            bookingId, clientId, clientName, clientEmail, BookingModality.Fixed, enrollmentId, status,
+            enrollmentStatus, periods);
     }
 
     /// <summary>One drop-in annotation: no enrollment, no periods and no fixed state.</summary>
     private static ClassDetailBookingRow DropInBooking(
-        int bookingId, int clientId, string clientName, BookingStatus status = BookingStatus.Pending) =>
-        new(bookingId, clientId, clientName, BookingModality.DropIn, null, status, null, []);
+        int bookingId, int clientId, string clientName, BookingStatus status = BookingStatus.Pending,
+        string clientEmail = "suelta@workup.test") =>
+        new(bookingId, clientId, clientName, clientEmail, BookingModality.DropIn, null, status, null, []);
 
     [Fact]
     public async Task Detail_returns_the_session_with_its_fixed_and_drop_in_annotations()
@@ -78,8 +82,8 @@ public class ClassDetailServiceTests
             D(2026, 3, 12), T(18), maxCapacity: 10,
             bookings:
             [
-                FixedBooking(501, 11, "Fija Estudiante", EnrollmentStatus.PendingPayment),
-                DropInBooking(502, 42, "Ana Perez")
+                FixedBooking(501, 11, "Fija Estudiante", EnrollmentStatus.PendingPayment, clientEmail: "fija@correo.test"),
+                DropInBooking(502, 42, "Ana Perez", clientEmail: "ana@correo.test")
             ]);
 
         var result = await _service.GetAsync(1, appointmentId);
@@ -101,6 +105,7 @@ public class ClassDetailServiceTests
         var fixedStudent = result.Value.Students[0];
         Assert.Equal(11, fixedStudent.ClientId);
         Assert.Equal("Fija Estudiante", fixedStudent.ClientName);
+        Assert.Equal("fija@correo.test", fixedStudent.ClientEmail);
         Assert.Equal(BookingModality.Fixed, fixedStudent.Modality);
         Assert.Equal(100, fixedStudent.EnrollmentId);
         Assert.Equal(BookingStatus.Pending, fixedStudent.Status);
@@ -110,6 +115,7 @@ public class ClassDetailServiceTests
         var dropIn = result.Value.Students[1];
         Assert.Equal(42, dropIn.ClientId);
         Assert.Equal("Ana Perez", dropIn.ClientName);
+        Assert.Equal("ana@correo.test", dropIn.ClientEmail);
         Assert.Equal(BookingModality.DropIn, dropIn.Modality);
         Assert.Null(dropIn.EnrollmentId);
         Assert.Null(dropIn.FixedState);
@@ -285,6 +291,60 @@ public class ClassDetailServiceTests
         Assert.True(result.Succeeded);
         Assert.Equal(1, clock.ReadCount);
         Assert.Equal(ClassFixedStudentState.Active, Assert.Single(result.Value.Students).FixedState);
+    }
+
+    [Theory]
+    // The clock and the class date fall on opposite sides of the period boundary, so a state read from "now" would
+    // invert both cases: only a state derived from the class date passes. First case: the period covers the class date
+    // but already expired today, so "now" would call it pending renewal. Second case, the mirror: the period covers
+    // today but starts after the class date, so "now" would call it active coverage.
+    [InlineData("2026-03-20", "2026-03-12", "2026-03-01", "2026-03-15", ClassFixedStudentState.Active)]
+    [InlineData("2026-03-10", "2026-03-05", "2026-03-08", "2026-04-08", ClassFixedStudentState.PendingRenewal)]
+    public async Task Detail_pins_the_membership_state_to_the_class_date_across_the_period_boundary(
+        string today, string classDate, string coverageStart, string expiresOn, ClassFixedStudentState expected)
+    {
+        _clock.Now = DateOnly.ParseExact(today, "yyyy-MM-dd", CultureInfo.InvariantCulture).ToDateTime(T(9));
+        var appointmentId = AddSession(
+            DateOnly.ParseExact(classDate, "yyyy-MM-dd", CultureInfo.InvariantCulture), T(18),
+            bookings:
+            [
+                FixedBooking(501, 11, "Alumna Borde", EnrollmentStatus.Active,
+                    coverageStart: DateOnly.ParseExact(coverageStart, "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    expiresOn: DateOnly.ParseExact(expiresOn, "yyyy-MM-dd", CultureInfo.InvariantCulture))
+            ]);
+
+        var result = await _service.GetAsync(1, appointmentId);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(expected, Assert.Single(result.Value.Students).FixedState);
+    }
+
+    [Theory]
+    // T15 cancels the fixed annotations when it annuls or terminates an enrollment, and no schema constraint forbids a
+    // surviving non-cancelled one, so the anomaly is possible. The read does not re-decide eligibility: it projects the
+    // stored annotation and derives the state from the membership calendar on the class date. A terminated enrollment
+    // that was covered on a past class date still reads as active coverage; without coverage, or for an annulled
+    // enrollment that never paid, it reads pending renewal. This pins that decision instead of leaving it to the
+    // fall-through.
+    [InlineData(EnrollmentStatus.Annulled, false, ClassFixedStudentState.PendingRenewal)]
+    [InlineData(EnrollmentStatus.Terminated, true, ClassFixedStudentState.Active)]
+    [InlineData(EnrollmentStatus.Terminated, false, ClassFixedStudentState.PendingRenewal)]
+    public async Task Detail_derives_the_state_of_a_surviving_annulled_or_terminated_enrollment_from_its_coverage(
+        EnrollmentStatus enrollmentStatus, bool covered, ClassFixedStudentState expected)
+    {
+        var appointmentId = AddSession(
+            D(2026, 3, 12), T(18),
+            bookings:
+            [
+                FixedBooking(501, 11, "Inscripción Anómala", enrollmentStatus,
+                    coverageStart: covered ? D(2026, 3, 1) : null,
+                    expiresOn: covered ? D(2026, 4, 1) : null)
+            ]);
+
+        var result = await _service.GetAsync(1, appointmentId);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(expected, Assert.Single(result.Value.Students).FixedState);
     }
 
     /// <summary>A clock that advances one day per read, so a second read changes the day and cannot go unnoticed.</summary>

@@ -16,6 +16,16 @@ namespace WorkUp.BusinessLogic.Classes;
 /// the attendance rule will judge, so the derived state never depends on when the owner opens the screen. A drop-in
 /// annotation has no fixed state: its modality is the whole story.
 /// </para>
+/// <para>
+/// The read projects the stored rows and never re-decides eligibility: an <c>Annulled</c> or <c>Terminated</c>
+/// enrollment whose non-cancelled fixed annotation survived falls through to the membership calendar on the class
+/// date, exactly like any other enrollment that is not <c>PendingPayment</c>. T15 cancels the fixed annotations when
+/// it annuls or terminates, so that row is an anomaly it prevents rather than something this read creates, and no
+/// schema constraint forbids it; T13's exclusion of those statuses decides which future sessions to annotate, which
+/// is a different question from what an existing dated annotation means. Hiding the row would drop a real annotation
+/// from the roster, and denying it a state would mislabel a past class whose coverage was in force on its date, so
+/// the calendar is the honest answer and the owner resolves the anomaly by cancelling the annotation (T16 unit 4).
+/// </para>
 /// </summary>
 public sealed class ClassDetailService(IClassDetailRepository repository, IClock clock)
 {
@@ -56,14 +66,16 @@ public sealed class ClassDetailService(IClassDetailRepository repository, IClock
                 booking.BookingId,
                 booking.ClientId,
                 booking.ClientName,
+                booking.ClientEmail,
                 booking.Modality,
                 booking.EnrollmentId,
                 booking.Status,
                 ResolveFixedState(booking, referenceDate)));
         }
 
-        // A single application of the capacity rule resolves the occupancy. Cancelled annotations travel in the
-        // statuses but release their place, exactly as they do for booking a drop-in.
+        // The one capacity rule resolves both occupancy numbers: PlacesTaken and RemainingPlaces are two readings of
+        // the same pure rule, not two implementations, so no parallel count can disagree with the booking rule.
+        // Cancelled annotations travel in the statuses but release their place, exactly as they do for a drop-in.
         var statuses = session.Bookings.Select(booking => booking.Status).ToArray();
 
         return Result<ClassDetail>.Success(new ClassDetail(
@@ -82,9 +94,11 @@ public sealed class ClassDetailService(IClassDetailRepository repository, IClock
 
     /// <summary>
     /// Derived state of one fixed annotation, or <c>null</c> for a drop-in, which has no fixed state. Pending payment
-    /// is decided by the enrollment status alone; the rest is the membership calendar: an active enrollment whose
-    /// periods cover the class date is active coverage, and one whose periods do not cover it keeps its place pending
-    /// the owner's renewal (D-16, D-23). The state is never persisted.
+    /// is decided by the enrollment status alone; the rest is the membership calendar: an enrollment whose periods
+    /// cover the class date is active coverage, and one whose periods do not cover it keeps its place pending the
+    /// owner's renewal (D-16, D-23). An annulled or terminated enrollment is not status-filtered here on purpose: it
+    /// falls through to the calendar as the anomaly it is (see the class remarks), so the state stays a projection of
+    /// the stored rows and never hides a real annotation. The state is never persisted.
     /// </summary>
     private static ClassFixedStudentState? ResolveFixedState(ClassDetailBookingRow booking, DateOnly classDate)
     {

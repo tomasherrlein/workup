@@ -12,9 +12,10 @@ namespace WorkUp.Data.Classes;
 /// periods the derived state needs. Nothing here writes or commits.
 /// <para>
 /// The <c>Kind = ClassSession</c> discriminant is part of the session statement: an individual turn is also an
-/// appointment and would otherwise be detailed as a class. The tenant rides on the session predicate and on both
-/// sides of the booking joins, so a session, a booking or a client of another business is invisible. The client join
-/// is a <c>LEFT JOIN</c>: an annotation whose client row cannot be resolved still comes back with an empty name
+/// appointment and would otherwise be detailed as a class. The tenant rides on the session predicate, on the booking
+/// rows and on the client and enrollment joins, so a session, a booking or a client of another business is invisible;
+/// the membership periods hang off the business-scoped enrollment and inherit its scope. The client join is a
+/// <c>LEFT JOIN</c>: an annotation whose client row cannot be resolved still comes back with an empty name and email
 /// instead of being dropped from the answer.
 /// </para>
 /// </summary>
@@ -36,15 +37,15 @@ public sealed class SqlClassDetailRepository(DbSession session)
         """;
 
     /// <summary>
-    /// Every annotation of that session, cancelled ones included, with the client's name, the enrollment status and
-    /// the membership periods joined through the business-scoped enrollment. The period columns are repeated per
-    /// paid month, so the reader groups by booking and collects them; a booking without periods (a drop-in, or a
-    /// fixed enrollment that never paid) comes back once with null period columns. Ordering by booking and period
-    /// keeps the rows deterministic.
+    /// Every annotation of that session, cancelled ones included, with the client's name and email, the enrollment
+    /// status and the membership periods joined through the business-scoped enrollment. The period columns are repeated
+    /// per paid month, so the reader groups by booking and collects them; a booking without periods (a drop-in, or a
+    /// fixed enrollment that never paid) comes back once with null period columns. Ordering by booking and period keeps
+    /// the rows deterministic.
     /// </summary>
     private const string SelectAnnotationsSql = """
         SELECT b.Id AS BookingId, b.ClientId, b.Status, b.Modality, b.EnrollmentId,
-               c.FirstName, c.LastName,
+               c.FirstName, c.LastName, c.Email,
                e.Status AS EnrollmentStatus,
                p.Id AS PeriodId, p.EnrollmentId AS PeriodEnrollmentId, p.CoverageStart, p.ExpiresOn,
                p.PaymentId, p.CreatedAt
@@ -88,6 +89,7 @@ public sealed class SqlClassDetailRepository(DbSession session)
                 group.Key,
                 group.First().ClientId,
                 group.First().ClientName,
+                group.First().ClientEmail,
                 group.First().Modality,
                 group.First().EnrollmentId,
                 group.First().Status,
@@ -121,14 +123,15 @@ public sealed class SqlClassDetailRepository(DbSession session)
         reader.GetNullableString("SuspensionReason"));
 
     /// <summary>
-    /// One annotation row reduced to what the contract keeps. The name is composed from the <c>LEFT JOIN</c>ed client
-    /// and stays empty for a row that could not be resolved: the annotation is still counted, it is the display name
-    /// that is missing.
+    /// One annotation row reduced to what the contract keeps. The name and the email are composed from the
+    /// <c>LEFT JOIN</c>ed client and stay empty for a row that could not be resolved: the annotation is still counted,
+    /// it is the display and contact fields that are missing.
     /// </summary>
     private static BookingProjection MapAnnotation(SqlDataReader reader) => new(
         reader.Get<int>("BookingId"),
         reader.Get<int>("ClientId"),
         ReadClientName(reader),
+        reader.GetNullableString("Email") ?? "",
         reader.GetNullableEnum<BookingModality>("Modality"),
         reader.GetNullable<int>("EnrollmentId"),
         reader.GetEnum<BookingStatus>("Status"),
@@ -173,6 +176,7 @@ public sealed class SqlClassDetailRepository(DbSession session)
         int BookingId,
         int ClientId,
         string ClientName,
+        string ClientEmail,
         BookingModality? Modality,
         int? EnrollmentId,
         BookingStatus Status,

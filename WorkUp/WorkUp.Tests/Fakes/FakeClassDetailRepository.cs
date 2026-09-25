@@ -8,8 +8,9 @@ public sealed record FakeClassDetailSession(int BusinessId, ClassDetailSessionRo
 /// <summary>
 /// In-memory stand-in for the class detail read port. The tenant scope is emulated exactly like the SQL predicate:
 /// a session registered under another business is invisible to the requested one. It deliberately does not filter the
-/// kind, so a service that forgot the <c>ClassSession</c> discriminant is caught by a test instead of being hidden by
-/// the fake — the SQL statement does carry it, and the opt-in fixture proves it against a real database.
+/// kind, so the unit tests catch a service that forgot the <c>ClassSession</c> discriminant instead of hiding it here.
+/// The SQL statement does carry the <c>Kind = ClassSession</c> predicate, but the opt-in fixture only seeds class
+/// sessions, so it never exercises that predicate against a real database; proving it there is still pending.
 /// </summary>
 public sealed class FakeClassDetailRepository : IClassDetailRepository
 {
