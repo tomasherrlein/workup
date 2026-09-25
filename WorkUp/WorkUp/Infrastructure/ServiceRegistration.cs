@@ -150,6 +150,10 @@ public static class ServiceRegistration
         services.AddScoped<IEnrollmentRepository, SqlEnrollmentRepository>();
         services.AddScoped<EnrollmentService>();
 
+        // Guided fixed-schedule change (T17)
+        services.AddScoped<IFixedScheduleChangeRepository, SqlFixedScheduleChangeRepository>();
+        services.AddScoped<FixedScheduleChangeService>();
+
         return services;
     }
 

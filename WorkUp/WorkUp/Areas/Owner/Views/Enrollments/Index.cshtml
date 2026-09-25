@@ -86,6 +86,11 @@ else
                                 <button type="submit" class="btn btn-destructive">Dar de baja</button>
                             </form>
                         }
+                        @if (item.CanChangeSchedule)
+                        {
+                            <a class="btn" asp-action="ChangeSchedule" asp-route-enrollmentId="@item.EnrollmentId"
+                               aria-label="Cambiar horario de @item.ClientName">Cambiar horario</a>
+                        }
                     </div>
                 </div>
             </li>

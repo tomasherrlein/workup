@@ -16,7 +16,7 @@ namespace WorkUp.Tests.Scheduling;
 
 /// <summary>
 /// Opt-in, reusable HTTP integration harness for the owner panel. It drives the real MVC host over loopback with
-/// cookies and antiforgery, then verifies the persisted rows with ADO.NET, and it covers five independent flows.
+/// cookies and antiforgery, then verifies the persisted rows with ADO.NET, and it covers six independent flows.
 /// The Jornada (RF-11/RF-15): owner login, one synthetic client through the owner form, GET /panel/Day, a walk-in with
 /// an exact agreed price plus immediate payment and next-visit note, a second overlapping walk-in saved with a
 /// warning, and the anti-CSRF rejection. The week generation (RF-06): yoga owner login, the first real render of
@@ -36,8 +36,14 @@ namespace WorkUp.Tests.Scheduling;
 /// end, the antiforgery-protected attendance with a drop-in charge and the absence, the cancellation of an already
 /// recorded annotation before the start, the at-arrival walk-in inside the stored window with its charge and zero
 /// email, the suspension with its mandatory reason and deduplicated notices, the no-token rejection, and the SQL rows
-/// behind every one of them; this fifth flow reuses the same T12 harness variables and prefix. It replaces manual
-/// scratch scripts: the same test is the smoke it used to need.
+/// behind every one of them; this fifth flow reuses the same T12 harness variables and prefix. The fixed-schedule
+/// change (RF-21): yoga owner login, the explicit next-Monday week confirmed so the guard has real sessions, the
+/// guided form followed from the link the Abonos list publishes, the anti-CSRF rejection, the effective date that
+/// equals the day the old window started, the effective date that overlaps the generated sessions of either affected
+/// grid class — both refused with the first usable date and no write — and the change that finally commits, asserted
+/// in SQL as the old window closed the day before and the new one opened on it while the enrollment, its payment, its
+/// period and the annotation of a generated session stayed untouched; this sixth flow also reuses the same T12 harness
+/// variables and prefix. It replaces manual scratch scripts: the same test is the smoke it used to need.
 ///
 /// Without <c>WORKUP_T12_HTTP_CONNECTION</c> each test logs N/A and returns before any SQL connection or HTTP
 /// request, so the default suite is unaffected. With it set, the harness refuses to run unless it can prove the
@@ -324,6 +330,60 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
             Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
             output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
             await RunClassRosterFlowAsync(host.BaseUrl, plan, password);
+        }
+        finally
+        {
+            await StopWebHostAsync(host.Process);
+        }
+
+        output.WriteLine("All HTTP/SQL checkpoints passed; the isolated database and encrypted keyring stay in place (no DROP or DELETE).");
+    }
+
+    [Fact]
+    public async Task Fixed_schedule_change_moves_one_fixed_class_on_an_isolated_http_host()
+    {
+        var suppliedConnection = Environment.GetEnvironmentVariable(ConnectionVariable);
+        if (string.IsNullOrWhiteSpace(suppliedConnection))
+        {
+            output.WriteLine($"N/A: {ConnectionVariable} is not set; no SQL connection, database, or HTTP host was used.");
+            return;
+        }
+
+        // Preflight runs before any SQL connection: an unsafe assistant or a reused target stops the run here.
+        var plan = PlanHarness(suppliedConnection);
+        output.WriteLine($"Runtime: database '{plan.DatabaseName}', isolated keyring '{plan.KeysPath}', next free port {plan.Port}.");
+
+        await CreateDatabaseAsync(plan);
+
+        // The demo password exists only in memory and is never written to output or to any log.
+        var password = "T17-" + Guid.NewGuid().ToString("N") + "!aA1";
+
+        // First owned host migrates the fresh database and materializes the isolated encrypted keyring.
+        var migrations = StartWebHost(plan, plan.Port);
+        try
+        {
+            await WaitUntilReadyAsync(migrations);
+            Assert.False(migrations.Process.HasExited, "The owned migration host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned migration host (pid {migrations.Process.Id}) became ready on {migrations.BaseUrl}.");
+        }
+        finally
+        {
+            await StopWebHostAsync(migrations.Process);
+        }
+        AssertKeyringCreated(plan.KeysPath);
+
+        // The explicit T07 seed into the migrated, dedicated database, reusing the real hasher and clock.
+        await SeedDemoAsync(plan.ConnectionString, password);
+        output.WriteLine("SQL: T07 demo seeded (marina.demo and lucia.demo) into the isolated database.");
+
+        // Second owned host serves the authenticated owner flow with a brand-new loopback port.
+        var host = StartWebHost(plan, FindFreeLoopbackPort());
+        try
+        {
+            await WaitUntilReadyAsync(host);
+            Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
+            await RunFixedScheduleChangeFlowAsync(host.BaseUrl, plan, password);
         }
         finally
         {
@@ -1501,6 +1561,277 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
         var leaked = written.Any(line => secrets.Any(secret => line.Contains(secret, StringComparison.Ordinal)));
         Assert.False(leaked, "The test output must never contain a password, an antiforgery token or a cookie value.");
         Note("Secrets: the run wrote no password, antiforgery token or cookie value to the test output.");
+    }
+
+    /// <summary>
+    /// Guided fixed-schedule change flow (RF-21) over the real host. This T17 smoke deliberately reuses the T12
+    /// harness variables (<c>WORKUP_T12_HTTP_CONNECTION</c>, <c>WORKUP_T12_HTTP_KEYS_PATH</c>) and the
+    /// <c>WorkUpDemoT12Http*</c> database prefix instead of duplicating the isolation harness: every fact is opt-in and
+    /// each run needs a fresh, absent database and keyring, so reusing the names never shares state between flows.
+    /// <para>
+    /// The app reads the real business clock (the simulated clock of T26 does not exist yet), so this flow never fakes
+    /// time: it confirms one explicit week — the one that starts next Monday — and reads the generated sessions back
+    /// from SQL, so the effective dates it posts always match the grid that really exists. The membership is seeded as
+    /// synthetic rows on one of those generated sessions, exactly like the T16 flow seeds its fixed enrollment.
+    /// </para>
+    /// </summary>
+    private async Task RunFixedScheduleChangeFlowAsync(string baseUrl, HarnessPlan plan, string password)
+    {
+        using var handler = new HttpClientHandler { CookieContainer = new CookieContainer(), AllowAutoRedirect = false };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(30) };
+
+        // Login as the yoga owner: it is the demo business with class-type services and an active grid.
+        var (loginStatus, loginHtml) = await GetHtmlAsync(client, "/panel/Account/Login");
+        Assert.Equal(HttpStatusCode.OK, loginStatus);
+        var loginResponse = await client.PostAsync("/panel/Account/Login", Form(new Dictionary<string, string>
+        {
+            ["Username"] = "lucia.demo",
+            ["Password"] = password,
+            ["__RequestVerificationToken"] = ExtractAntiforgeryToken(loginHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, loginResponse.StatusCode);
+        Assert.True(IsDayRedirect(loginResponse), $"Login did not redirect to the owner Jornada (location '{DescribeRedirect(loginResponse)}').");
+        output.WriteLine("HTTP: yoga owner login accepted with antiforgery; redirected to the owner Jornada (/panel).");
+
+        // The app clock is Argentina; the same date the service reads is computed here, so the seeded window and the
+        // posted effective dates are decided from one instant.
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/Argentina/Buenos_Aires");
+        var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zone);
+        now = new DateTime(now.Ticks - now.Ticks % TimeSpan.TicksPerSecond, DateTimeKind.Unspecified);
+        var today = DateOnly.FromDateTime(now);
+
+        // One explicit week: the change refuses any effective date that overlaps the generated sessions of either
+        // affected grid class, so the guard needs sessions that really exist, and it needs them on a known Monday.
+        var nextMonday = WeekCalendar.StartOfWeek(today).AddDays(7);
+        var nextMondayText = nextMonday.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var (weekStatus, weekHtml) = await GetHtmlAsync(client, "/panel/Classes/Week?date=" + nextMondayText);
+        Assert.Equal(HttpStatusCode.OK, weekStatus);
+        var confirmResponse = await client.PostAsync("/panel/Classes/ConfirmWeek", Form(new Dictionary<string, string>
+        {
+            ["date"] = nextMondayText,
+            ["__RequestVerificationToken"] = ExtractAntiforgeryToken(weekHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, confirmResponse.StatusCode);
+        var (confirmStatus, confirmHtml) = await GetHtmlAsync(client, confirmResponse.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, confirmStatus);
+        Assert.Contains("Semana generada", confirmHtml, StringComparison.Ordinal);
+        output.WriteLine($"HTTP: POST /panel/Classes/ConfirmWeek for the week of {nextMondayText} -> 302 -> 200 with the generated week.");
+
+        await using var connection = new SqlConnection(plan.ConnectionString);
+        await connection.OpenAsync();
+        var businessId = await ScalarIntAsync(connection, "SELECT Id FROM Businesses WHERE Slug = 'estudio-yoga-lucia-demo'");
+        var fromDate = nextMonday.ToDateTime(TimeOnly.MinValue);
+
+        // The two grid classes that move: two active class-type slots of the demo that both have a generated session
+        // in the week just confirmed, so the guard has a real range to refuse and the seat is a real one.
+        var currentGridClassId = await ScalarIntAsync(connection, """
+            SELECT MIN(a.GridClassId)
+              FROM Appointments AS a
+             WHERE a.BusinessId = @businessId AND a.GridClassId IS NOT NULL AND a.StartsAt >= @fromDate
+            """, ("@businessId", businessId), ("@fromDate", fromDate));
+        var newGridClassId = await ScalarIntAsync(connection, """
+            SELECT MAX(a.GridClassId)
+              FROM Appointments AS a
+             WHERE a.BusinessId = @businessId AND a.GridClassId IS NOT NULL AND a.StartsAt >= @fromDate
+            """, ("@businessId", businessId), ("@fromDate", fromDate));
+        Assert.NotEqual(currentGridClassId, newGridClassId);
+        var sessionId = await ScalarIntAsync(connection, """
+            SELECT MIN(a.Id)
+              FROM Appointments AS a
+             WHERE a.BusinessId = @businessId AND a.GridClassId = @gridClassId AND a.StartsAt >= @fromDate
+            """, ("@businessId", businessId), ("@gridClassId", currentGridClassId), ("@fromDate", fromDate));
+        Assert.True(sessionId > 0, "The confirmed week must persist a session of the current grid class.");
+        var sessionStarts = await ScalarStringAsync(connection,
+            "SELECT CONVERT(varchar(19), StartsAt, 120) FROM Appointments WHERE Id = @id", ("@id", sessionId));
+        Assert.False(string.IsNullOrWhiteSpace(sessionStarts), "The generated session must record its start.");
+
+        // One synthetic Active membership whose fixed window starts today — so the change refuses an effective date
+        // equal to it — plus its paid period and a fixed annotation on the generated session the change must never
+        // move. The helper is the one the T16 flow already uses.
+        var fixture = await SeedClassRosterFixtureAsync(connection, businessId, sessionId, currentGridClassId, today, now);
+        output.WriteLine($"SQL: seeded Active enrollment #{fixture.EnrollmentId} with its fixed window on grid class #{currentGridClassId} from {today:yyyy-MM-dd} and a fixed annotation on session #{sessionId}.");
+
+        // The last session the guard will see on or after the effective date, read back from SQL so the posted date and
+        // the asked-for first usable date always match the grid that really exists.
+        var lastGeneratedText = await ScalarStringAsync(connection, """
+            SELECT CONVERT(varchar(10), MAX(a.StartsAt), 23)
+              FROM Appointments AS a
+             WHERE a.BusinessId = @businessId
+               AND a.GridClassId IN (@currentGridClassId, @newGridClassId)
+               AND a.StartsAt >= @fromDate
+            """, ("@businessId", businessId), ("@currentGridClassId", currentGridClassId),
+            ("@newGridClassId", newGridClassId), ("@fromDate", fromDate));
+        Assert.False(string.IsNullOrWhiteSpace(lastGeneratedText), "The affected grid classes must have generated sessions.");
+        var lastGenerated = DateOnly.ParseExact(lastGeneratedText!, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        Assert.True(lastGenerated >= nextMonday, "The generated week must lie ahead of the confirmed Monday.");
+        var effectiveFrom = lastGenerated.AddDays(1);
+        var effectiveText = effectiveFrom.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture);
+
+        // The Abonos list is where the owner starts: the row publishes the guided form, and the flow follows that link
+        // instead of guessing the route.
+        var (listStatus, listHtml) = await GetHtmlAsync(client, "/panel/Enrollments");
+        Assert.Equal(HttpStatusCode.OK, listStatus);
+        var changeLink = ExtractChangeScheduleLink(listHtml, fixture.EnrollmentId);
+        var (formStatus, formHtml) = await GetHtmlAsync(client, changeLink);
+        Assert.Equal(HttpStatusCode.OK, formStatus);
+        Assert.Contains("Cambiar horario", formHtml, StringComparison.Ordinal);
+        Assert.Contains("name=\"CurrentGridClassId\"", formHtml, StringComparison.Ordinal);
+        Assert.Contains("name=\"NewGridClassId\"", formHtml, StringComparison.Ordinal);
+        Assert.Contains("name=\"EffectiveFrom\"", formHtml, StringComparison.Ordinal);
+        Assert.Contains($"value=\"{fixture.EnrollmentId}\"", formHtml, StringComparison.Ordinal);
+        Assert.Contains($"value=\"{currentGridClassId}\"", formHtml, StringComparison.Ordinal);
+        Assert.Contains($"value=\"{newGridClassId}\"", formHtml, StringComparison.Ordinal);
+        var formToken = ExtractAntiforgeryToken(formHtml);
+        output.WriteLine($"HTTP: GET /panel/Enrollments -> 200 with the change link; the linked form offers grid classes #{currentGridClassId} and #{newGridClassId} and the effective date.");
+
+        // A POST without the antiforgery token must be rejected before any business logic runs.
+        var rejected = await client.PostAsync("/panel/Enrollments/ChangeSchedule",
+            Form(ChangeScheduleFields(fixture.EnrollmentId, currentGridClassId, newGridClassId, today)));
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        output.WriteLine("HTTP: ChangeSchedule POST without an anti-CSRF token -> 400.");
+
+        // The window starts today, so the day before it would end before it began: the service refuses the effective
+        // date equal to the window start, names the first usable day and writes nothing.
+        var tomorrowText = today.AddDays(1).ToString("dd/MM/yyyy", CultureInfo.InvariantCulture);
+        var tooEarly = await client.PostAsync("/panel/Enrollments/ChangeSchedule",
+            Form(ChangeScheduleFields(fixture.EnrollmentId, currentGridClassId, newGridClassId, today, formToken)));
+        Assert.Equal(HttpStatusCode.OK, tooEarly.StatusCode);
+        var tooEarlyHtml = await tooEarly.Content.ReadAsStringAsync();
+        Assert.Contains("fecha desde el " + tomorrowText, tooEarlyHtml, StringComparison.Ordinal);
+        await AssertScheduleChangeWroteNothingAsync(connection, fixture.EnrollmentId);
+        output.WriteLine($"HTTP/SQL: POST with the effective date equal to the window start -> 200 naming {tomorrowText} and no assignment was written.");
+
+        // A date inside the generated range of either affected class is refused with the first usable day: the change
+        // never migrates the sessions that already exist, and it leaves the seeded window untouched.
+        var overlapping = await client.PostAsync("/panel/Enrollments/ChangeSchedule",
+            Form(ChangeScheduleFields(fixture.EnrollmentId, currentGridClassId, newGridClassId, nextMonday, formToken)));
+        Assert.Equal(HttpStatusCode.OK, overlapping.StatusCode);
+        var overlappingHtml = await overlapping.Content.ReadAsStringAsync();
+        Assert.Contains("Ya hay clases generadas", overlappingHtml, StringComparison.Ordinal);
+        Assert.Contains("fecha desde el " + effectiveText, overlappingHtml, StringComparison.Ordinal);
+        await AssertScheduleChangeWroteNothingAsync(connection, fixture.EnrollmentId);
+        output.WriteLine($"HTTP/SQL: POST with a date overlapping the generated classes -> 200 naming {effectiveText} and no assignment was written.");
+
+        // The date the service just named is the one that finally commits: the old window closes the day before and
+        // the new one opens on it.
+        var success = await client.PostAsync("/panel/Enrollments/ChangeSchedule",
+            Form(ChangeScheduleFields(fixture.EnrollmentId, currentGridClassId, newGridClassId, effectiveFrom, formToken)));
+        Assert.Equal(HttpStatusCode.Redirect, success.StatusCode);
+        var (afterStatus, afterHtml) = await GetHtmlAsync(client, success.Headers.Location!.OriginalString!);
+        Assert.Equal(HttpStatusCode.OK, afterStatus);
+        Assert.Contains("Horario cambiado desde el " + Formatting.ShortDate(effectiveFrom), afterHtml, StringComparison.Ordinal);
+        Assert.Contains("El horario anterior queda vigente hasta el " + Formatting.ShortDate(effectiveFrom.AddDays(-1)), afterHtml, StringComparison.Ordinal);
+        output.WriteLine($"HTTP: POST the free date {effectiveText} -> 302 -> 200 with the change flash.");
+
+        // SQL verification runs after every HTTP checkpoint so one run reports the whole behavior. The old window
+        // closed the day before and the new one opened on the effective date; no row was deleted.
+        var closedWindowValidFrom = await ScalarStringAsync(connection,
+            "SELECT CONVERT(varchar(10), ValidFrom, 23) FROM EnrollmentFixedClasses WHERE EnrollmentId = @enrollmentId AND GridClassId = @gridClassId",
+            ("@enrollmentId", fixture.EnrollmentId), ("@gridClassId", currentGridClassId));
+        var closedWindowValidTo = await ScalarStringAsync(connection,
+            "SELECT CONVERT(varchar(10), ValidTo, 23) FROM EnrollmentFixedClasses WHERE EnrollmentId = @enrollmentId AND GridClassId = @gridClassId",
+            ("@enrollmentId", fixture.EnrollmentId), ("@gridClassId", currentGridClassId));
+        Assert.False(string.IsNullOrWhiteSpace(closedWindowValidFrom), "The replaced fixed window must keep its start.");
+        Assert.NotNull(closedWindowValidTo);
+        Assert.Equal(today, DateOnly.ParseExact(closedWindowValidFrom!, "yyyy-MM-dd", CultureInfo.InvariantCulture));
+        Assert.Equal(effectiveFrom.AddDays(-1), DateOnly.ParseExact(closedWindowValidTo!, "yyyy-MM-dd", CultureInfo.InvariantCulture));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM EnrollmentFixedClasses
+             WHERE EnrollmentId = @enrollmentId AND GridClassId = @gridClassId
+               AND CONVERT(varchar(10), ValidFrom, 23) = @validFrom AND ValidTo IS NULL
+            """,
+            ("@enrollmentId", fixture.EnrollmentId), ("@gridClassId", newGridClassId),
+            ("@validFrom", effectiveFrom.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))));
+        Assert.Equal(2, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM EnrollmentFixedClasses WHERE EnrollmentId = @enrollmentId",
+            ("@enrollmentId", fixture.EnrollmentId)));
+        output.WriteLine($"SQL: the window of grid class #{currentGridClassId} closed on {effectiveFrom.AddDays(-1):yyyy-MM-dd} and the window of #{newGridClassId} opened on {effectiveFrom:yyyy-MM-dd}; two rows and none deleted.");
+
+        // Only the weekly slot moved (RF-29): status, agreed price, reference day, activation, payment and period are
+        // exactly the seeded ones, and the generated annotation still points at the session it was seeded on.
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM Enrollments
+             WHERE Id = @enrollmentId AND Status = @status AND AgreedPrice = @agreedPrice AND ReferenceDay = @referenceDay
+               AND ActivatedAt IS NOT NULL AND AnnulledAt IS NULL AND TerminatedAt IS NULL
+            """,
+            ("@enrollmentId", fixture.EnrollmentId), ("@status", (byte)EnrollmentStatus.Active),
+            ("@agreedPrice", MembershipFixtureAmount), ("@referenceDay", today.Day)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM Payments
+             WHERE Id = @paymentId AND EnrollmentId = @enrollmentId AND Concept = @concept AND Amount = @amount
+               AND NOT EXISTS (SELECT 1 FROM PaymentAnnulments AS pa WHERE pa.PaymentId = Payments.Id)
+            """,
+            ("@paymentId", fixture.MembershipPaymentId), ("@enrollmentId", fixture.EnrollmentId),
+            ("@concept", (byte)PaymentConcept.Membership), ("@amount", MembershipFixtureAmount)));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM MembershipPeriods
+             WHERE Id = @periodId AND EnrollmentId = @enrollmentId
+               AND CONVERT(varchar(10), CoverageStart, 23) = @coverageStart
+               AND CONVERT(varchar(10), ExpiresOn, 23) = @expiresOn
+            """,
+            ("@periodId", fixture.PeriodId), ("@enrollmentId", fixture.EnrollmentId),
+            ("@coverageStart", today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
+            ("@expiresOn", today.AddMonths(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))));
+        Assert.Equal(1, await ScalarIntAsync(connection, """
+            SELECT COUNT(*)
+              FROM Bookings
+             WHERE Id = @bookingId AND EnrollmentId = @enrollmentId AND AppointmentId = @appointmentId
+               AND Modality = @modality AND Status = @status
+            """,
+            ("@bookingId", fixture.FixedBookingId), ("@enrollmentId", fixture.EnrollmentId),
+            ("@appointmentId", sessionId), ("@modality", (byte)BookingModality.Fixed),
+            ("@status", (byte)BookingStatus.Pending)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE BusinessId = @businessId AND EnrollmentId = @enrollmentId",
+            ("@businessId", businessId), ("@enrollmentId", fixture.EnrollmentId)));
+        Assert.Equal(sessionStarts, await ScalarStringAsync(connection,
+            "SELECT CONVERT(varchar(19), StartsAt, 120) FROM Appointments WHERE Id = @id", ("@id", sessionId)));
+        output.WriteLine($"SQL: the Active enrollment, its price, reference day, payment and period are the seeded ones, and annotation #{fixture.FixedBookingId} still points at session #{sessionId}; the change moved no booking.");
+    }
+
+    /// <summary>
+    /// The refused change wrote nothing: the enrollment still has its single open fixed window and no second row, so a
+    /// rejected date never leaves a half-moved schedule behind.
+    /// </summary>
+    private static async Task AssertScheduleChangeWroteNothingAsync(SqlConnection connection, int enrollmentId)
+    {
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM EnrollmentFixedClasses WHERE EnrollmentId = @enrollmentId",
+            ("@enrollmentId", enrollmentId)));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM EnrollmentFixedClasses WHERE EnrollmentId = @enrollmentId AND ValidTo IS NULL",
+            ("@enrollmentId", enrollmentId)));
+    }
+
+    /// <summary>Reads the guided-schedule-change link the Abonos list publishes for one enrollment.</summary>
+    private static string ExtractChangeScheduleLink(string html, int enrollmentId)
+    {
+        var match = Regex.Match(html,
+            $"href=\"(?<href>[^\"]*?/panel/Enrollments/ChangeSchedule\\?enrollmentId={enrollmentId})\"",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+            throw new InvalidOperationException($"The Abonos list did not publish the schedule-change link of enrollment {enrollmentId}.");
+        return match.Groups["href"].Value;
+    }
+
+    /// <summary>Posts the guided schedule-change form: the two weekly slots, the effective date and the token.</summary>
+    private static Dictionary<string, string> ChangeScheduleFields(
+        int enrollmentId, int currentGridClassId, int newGridClassId, DateOnly effectiveFrom, string? token = null)
+    {
+        var fields = new Dictionary<string, string>
+        {
+            ["EnrollmentId"] = enrollmentId.ToString(CultureInfo.InvariantCulture),
+            ["CurrentGridClassId"] = currentGridClassId.ToString(CultureInfo.InvariantCulture),
+            ["NewGridClassId"] = newGridClassId.ToString(CultureInfo.InvariantCulture),
+            ["EffectiveFrom"] = effectiveFrom.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+        };
+        if (token is not null)
+            fields["__RequestVerificationToken"] = token;
+        return fields;
     }
 
     /// <summary>

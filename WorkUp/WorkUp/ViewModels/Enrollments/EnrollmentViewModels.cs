@@ -92,6 +92,66 @@ public sealed record EnrollmentRowViewModel(EnrollmentListItem Item)
 
     /// <summary>A membership that still holds places can be ended from a chosen date (RF-29 step 6).</summary>
     public bool CanTerminate => Item.Status is EnrollmentStatus.PendingPayment or EnrollmentStatus.Active;
+
+    /// <summary>
+    /// A membership that still holds places can move one of its fixed classes to another weekly slot (RF-21). It is a
+    /// courtesy filter for the list: the service still validates the status, the seat and the effective date under its
+    /// own lock.
+    /// </summary>
+    public bool CanChangeSchedule => Item.Status is EnrollmentStatus.PendingPayment or EnrollmentStatus.Active;
+}
+
+/// <summary>
+/// One current open fixed class of the enrollment being changed (RF-21): the weekly slot that moves to another class.
+/// <see cref="Label"/> already carries the day, the time and the name the owner reads, resolved by the controller.
+/// </summary>
+public sealed record ChangeScheduleCurrentOptionViewModel(int GridClassId, string Label);
+
+/// <summary>
+/// Guided schedule-change form (RF-21, D-19). The owner picks which current fixed class changes, the new weekly class
+/// from the grid and the first day the change is valid; everything before that date keeps the old schedule.
+/// <para>
+/// <see cref="ClientName"/>, <see cref="CurrentClasses"/> and <see cref="GridClasses"/> are filled by the controller
+/// only after the enrollment was confirmed as this business's and still changeable, so a stale, missing or foreign id
+/// never exposes a name or an option. The seat the picker shows is a courtesy: the service revalidates capacity and
+/// status inside its own transaction and is the only guard.
+/// </para>
+/// </summary>
+public sealed class ChangeScheduleFormViewModel
+{
+    [Range(1, int.MaxValue, ErrorMessage = "No pudimos identificar la inscripción.")]
+    public int EnrollmentId { get; set; }
+
+    [Range(1, int.MaxValue, ErrorMessage = "Elegí el horario fijo que querés cambiar.")]
+    [Display(Name = "Horario fijo actual")]
+    public int CurrentGridClassId { get; set; }
+
+    [Range(1, int.MaxValue, ErrorMessage = "Elegí el nuevo horario de la grilla.")]
+    [Display(Name = "Nuevo horario fijo")]
+    public int NewGridClassId { get; set; }
+
+    [Required(ErrorMessage = "Elegí la fecha de vigencia.")]
+    [Display(Name = "Vigente desde")]
+    public DateOnly? EffectiveFrom { get; set; }
+
+    /// <summary>The name of the student the enrollment belongs to; empty until the controller resolved it.</summary>
+    public string ClientName { get; set; } = "";
+
+    /// <summary>Populated by the controller: the open fixed classes of this enrollment, with day, time and name.</summary>
+    public List<ChangeScheduleCurrentOptionViewModel> CurrentClasses { get; set; } = [];
+
+    /// <summary>Populated by the controller: the other grid classes with a free permanent seat, offered as the new slot.</summary>
+    public List<EnrollmentGridClassOptionViewModel> GridClasses { get; set; } = [];
+
+    /// <summary>Business day, used as the minimum (and first-render default) of the effective-date input.</summary>
+    public DateOnly Today { get; set; }
+
+    public bool HasCurrentClasses => CurrentClasses.Count > 0;
+
+    public bool HasGridClasses => GridClasses.Count > 0;
+
+    /// <summary>Without a current class to move and another slot to move it to, the form can only be rejected.</summary>
+    public bool CanChange => HasCurrentClasses && HasGridClasses;
 }
 
 /// <summary>

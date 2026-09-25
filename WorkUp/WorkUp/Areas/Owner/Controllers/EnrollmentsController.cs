@@ -33,7 +33,8 @@ public sealed class EnrollmentsController(
     CatalogService? catalog = null,
     StaffService? staff = null,
     ClientsService? clients = null,
-    IMembershipPriceRepository? membershipPrices = null) : OwnerControllerBase
+    IMembershipPriceRepository? membershipPrices = null,
+    FixedScheduleChangeService? scheduleChanges = null) : OwnerControllerBase
 {
     /// <summary>Upper bound the HTML amount inputs use; the service only requires a positive amount.</summary>
     private const decimal MaxAmount = 9999999999.99m;
@@ -179,6 +180,146 @@ public sealed class EnrollmentsController(
     }
 
     /// <summary>
+    /// Guided schedule change form (RF-21, D-19): the enrollment's current open fixed classes and the active grid
+    /// classes that still have a free permanent seat. The read is scoped by the business from the claim, so a foreign
+    /// or missing id resolves to <c>null</c> and the caller redirects without ever exposing a name or an option.
+    /// </summary>
+    [HttpGet]
+    public async Task<IActionResult> ChangeSchedule(int enrollmentId, CancellationToken ct)
+    {
+        ViewData["Title"] = "Cambiar horario";
+        SetPrivateHeaders();
+
+        var model = await BuildChangeScheduleFormAsync(
+            new ChangeScheduleFormViewModel { EnrollmentId = enrollmentId }, applyDefaults: true, ct);
+        if (model is null)
+            return ChangeScheduleNotFound();
+
+        return View("ChangeSchedule", model);
+    }
+
+    /// <summary>
+    /// Registers the guided schedule change from the effective date the owner chose (RF-21) and redirects to the list
+    /// (POST/redirect/GET). The business comes from the owner claim, never from the form, and the service owns every
+    /// rule: a rejected change re-renders the form with the mapped Spanish message and keeps what the owner typed.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ChangeSchedule(ChangeScheduleFormViewModel model, CancellationToken ct)
+    {
+        ViewData["Title"] = "Cambiar horario";
+        SetPrivateHeaders();
+
+        if (!ModelState.IsValid)
+            return await ReRenderChangeScheduleAsync(model, ct);
+
+        var result = await scheduleChanges!.ChangeAsync(
+            BusinessId,
+            new ChangeFixedScheduleRequest(
+                model.EnrollmentId, model.CurrentGridClassId, model.NewGridClassId, model.EffectiveFrom!.Value),
+            ct);
+
+        if (!result.Succeeded)
+        {
+            ModelState.AddModelError(result.Error!.Field ?? string.Empty, ChangeScheduleErrorMessage(result.Error!));
+            return await ReRenderChangeScheduleAsync(model, ct);
+        }
+
+        this.Flash(
+            $"Horario cambiado desde el {Formatting.ShortDate(result.Value.EffectiveFrom)}. " +
+            $"El horario anterior queda vigente hasta el {Formatting.ShortDate(result.Value.PreviousValidTo)}.",
+            FlashType.Success);
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>The same answer for a missing, foreign or ended enrollment: back to the list, naming nothing.</summary>
+    private IActionResult ChangeScheduleNotFound()
+    {
+        this.Flash("No encontramos una inscripción con horario fijo para cambiar.", FlashType.Error);
+        return RedirectToAction(nameof(Index));
+    }
+
+    private async Task<IActionResult> ReRenderChangeScheduleAsync(ChangeScheduleFormViewModel model, CancellationToken ct)
+    {
+        // The options are re-read on every render, so a rejected change keeps the typed values and a current picture.
+        // If the enrollment stopped being changeable meanwhile, nothing is exposed and the owner goes back to the list.
+        var rebuilt = await BuildChangeScheduleFormAsync(model, applyDefaults: false, ct);
+        return rebuilt is null ? ChangeScheduleNotFound() : View("ChangeSchedule", rebuilt);
+    }
+
+    /// <summary>
+    /// Resolves the form options from the enrollment of this business. It returns <c>null</c> when the enrollment is
+    /// not this business's, is not pending payment or active, has no open fixed class or no other slot to offer, so a
+    /// stale, missing or foreign id never exposes the name or the options: only then are the client name and the grid
+    /// classes resolved.
+    /// </summary>
+    private async Task<ChangeScheduleFormViewModel?> BuildChangeScheduleFormAsync(
+        ChangeScheduleFormViewModel model, bool applyDefaults, CancellationToken ct)
+    {
+        var state = await repository!.LockEnrollmentAsync(BusinessId, model.EnrollmentId, ct);
+        if (state is null || state.Enrollment.Status is not (EnrollmentStatus.PendingPayment or EnrollmentStatus.Active))
+            return null;
+
+        var openFixedClasses = state.FixedClasses
+            .Where(fixedClass => fixedClass.ValidTo is null)
+            .OrderBy(fixedClass => fixedClass.ValidFrom)
+            .ThenBy(fixedClass => fixedClass.Id)
+            .ToList();
+        if (openFixedClasses.Count == 0)
+            return null;
+
+        var gridClasses = (await classes!.ListAsync(BusinessId, ct)).ToDictionary(gridClass => gridClass.Id);
+        var services = (await catalog!.ListAsync(BusinessId, ct)).ToDictionary(service => service.Id);
+        var workers = (await staff!.ListAsync(BusinessId, ct)).ToDictionary(worker => worker.Id);
+
+        model.CurrentClasses = [];
+        foreach (var fixedClass in openFixedClasses)
+        {
+            if (!gridClasses.TryGetValue(fixedClass.GridClassId, out var gridClass))
+                continue;
+            if (BuildCurrentFixedClassLabel(gridClass, services, workers, fixedClass) is not { } label)
+                continue;
+
+            model.CurrentClasses.Add(new ChangeScheduleCurrentOptionViewModel(fixedClass.GridClassId, label));
+        }
+
+        if (model.CurrentClasses.Count == 0)
+            return null;
+
+        model.ClientName = await ResolveClientNameAsync(state.Enrollment.ClientId, ct);
+        model.GridClasses = await BuildGridClassOptionsAsync(
+            ct, model.CurrentClasses.Select(option => option.GridClassId).ToArray());
+        model.Today = clock.Today;
+        if (applyDefaults)
+            model.EffectiveFrom ??= clock.Today;
+
+        return model;
+    }
+
+    private async Task<string> ResolveClientNameAsync(int clientId, CancellationToken ct)
+    {
+        var client = await clients!.GetAsync(BusinessId, clientId, ct);
+        return client is null ? "Alumna" : client.FullName;
+    }
+
+    /// <summary>
+    /// The current fixed class as the owner reads it: day, time, class type and teacher, plus the day it started. A
+    /// grid class or a name that cannot be resolved is skipped instead of being shown half-labelled.
+    /// </summary>
+    private static string? BuildCurrentFixedClassLabel(
+        GridClass gridClass,
+        IReadOnlyDictionary<int, Service> services,
+        IReadOnlyDictionary<int, Worker> workers,
+        EnrollmentFixedClass fixedClass)
+    {
+        if (!services.TryGetValue(gridClass.ServiceId, out var service)
+            || !workers.TryGetValue(gridClass.WorkerId, out var worker))
+            return null;
+
+        return $"{GridClassLabel(gridClass, service, worker)} · desde el {Formatting.ShortDate(fixedClass.ValidFrom)}";
+    }
+
+    /// <summary>
     /// Parses the filter of the request. An unknown value falls back to the default view instead of propagating an
     /// undefined enum to the service, which would fail the whole page.
     /// </summary>
@@ -261,9 +402,12 @@ public sealed class EnrollmentsController(
     /// The grid classes the owner may choose: the active ones whose service is an active class-type service (max
     /// capacity greater than 1) and that still have a free permanent seat on the business day. The seat count is the
     /// same <see cref="FixedSeatCapacity"/> rule the service enforces under its lock; this read only decides what the
-    /// screen offers, never whether a seat exists at write time.
+    /// screen offers, never whether a seat exists at write time. <paramref name="excludingGridClassIds"/> drops the
+    /// slots the form cannot offer as a new one (the enrollment's own current classes, which the change would reject
+    /// as a duplicate).
     /// </summary>
-    private async Task<List<EnrollmentGridClassOptionViewModel>> BuildGridClassOptionsAsync(CancellationToken ct)
+    private async Task<List<EnrollmentGridClassOptionViewModel>> BuildGridClassOptionsAsync(
+        CancellationToken ct, IReadOnlyCollection<int>? excludingGridClassIds = null)
     {
         var services = (await catalog!.ListAsync(BusinessId, ct)).ToDictionary(service => service.Id);
         var workers = (await staff!.ListAsync(BusinessId, ct)).ToDictionary(worker => worker.Id);
@@ -273,6 +417,8 @@ public sealed class EnrollmentsController(
         foreach (var gridClass in await classes!.ListAsync(BusinessId, ct))
         {
             if (!gridClass.IsActive)
+                continue;
+            if (excludingGridClassIds is not null && excludingGridClassIds.Contains(gridClass.Id))
                 continue;
 
             // Defensive: a grid class always references an existing active class-type service and a worker of the same
@@ -366,6 +512,29 @@ public sealed class EnrollmentsController(
         "enrollment_not_found" => "No encontramos esa inscripción.",
         "enrollment_invalid_effective_date" => "Elegí una fecha de vigencia válida.",
         "enrollment_not_terminable" => "Esa inscripción ya está anulada o dada de baja.",
+        _ => error.Message
+    };
+
+    /// <summary>
+    /// Turns the stable code of a rejected schedule change into the sentence the owner reads, never the raw code. The
+    /// date-bound refusals (<c>effective_date_too_early</c>, <c>sessions_generated</c>) keep the service message: it
+    /// already names the earliest usable date, which is the actionable part the owner needs to retry.
+    /// </summary>
+    private static string ChangeScheduleErrorMessage(BusinessError error) => error.Code switch
+    {
+        "fixed_schedule_change_invalid_request" => "No pudimos identificar el cambio. Volvé a intentar.",
+        "fixed_schedule_change_invalid_effective_date" => "Elegí una fecha de vigencia válida.",
+        "fixed_schedule_change_enrollment_not_found" => "No encontramos esa inscripción.",
+        "fixed_schedule_change_not_changeable" =>
+            "Esa inscripción está anulada o dada de baja: ya no tiene un horario fijo que cambiar.",
+        "fixed_schedule_change_assignment_not_found" =>
+            "Ese horario fijo ya no está vigente en la inscripción. Volvé a cargar el formulario.",
+        "fixed_schedule_change_duplicate_slot" => "Elegí un horario distinto del actual.",
+        "fixed_schedule_change_grid_class_not_found" => "No encontramos el nuevo horario en tu negocio.",
+        "fixed_schedule_change_grid_class_inactive" => "El nuevo horario está archivado: elegí otro.",
+        "fixed_schedule_change_no_seat" => "No queda lugar fijo en el nuevo horario. Elegí otro.",
+        "fixed_schedule_change_previous_assignment_changed" =>
+            "Ese horario fijo cambió recién. Volvé a revisar la inscripción.",
         _ => error.Message
     };
 
