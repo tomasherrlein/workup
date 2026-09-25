@@ -42,6 +42,11 @@ public interface IClassDropInRepository
     /// lock is taken on <c>a.Kind = @classSession</c> as well, so an individual turn can never be locked as a class.
     /// It returns <c>null</c> when the session does not belong to the business. Holding that row is what serializes
     /// two bookings competing for the last place: the count and the insert happen under the same lock.
+    /// <para>
+    /// The returned row carries <see cref="ClassSessionRow.EndsAt"/>, the end of the session: the at-arrival walk-in
+    /// of a class (RF-11, T16 unit 3) judges its arrival window <c>[StartsAt, EndsAt]</c> from this same locked read,
+    /// so unlike a booking it can accept a client once the class has started. An implementation must fill it here.
+    /// </para>
     /// </summary>
     Task<ClassSessionRow?> LockSessionAsync(int businessId, int appointmentId, CancellationToken ct = default);
 
@@ -119,7 +124,9 @@ public interface IClassDropInRepository
     /// <summary>
     /// Guarded drop-in insert: it must insert the booking only while the session is a <c>ClassSession</c> that still
     /// has a free place, and must do it atomically under the lock taken by <see cref="LockSessionAsync"/>. It writes
-    /// the booking as <c>Modality = DropIn</c> and <c>Status = Pending</c>. The three-way result distinguishes an
+    /// the booking as <c>Modality = DropIn</c> and <c>Status = Pending</c>, which is exactly the <c>Suelta</c>
+    /// annotation the at-arrival walk-in of a class (RF-11, T16 unit 3) needs before marking it attended, so both
+    /// paths share this single guard instead of a second occupancy count. The three-way result distinguishes an
     /// inserted booking (with its new id), a lost race for the last place, and the unique key
     /// <c>UX_Bookings_ActiveClient</c> firing because the same client already holds a non-cancelled booking, so the
     /// caller never receives a raw unique-key exception. It runs inside the caller's transaction, which owns the commit.

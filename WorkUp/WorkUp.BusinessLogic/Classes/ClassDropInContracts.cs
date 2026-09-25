@@ -25,6 +25,13 @@ public sealed record ClassSessionBooking(
 /// because the count of places needs the statuses, the owner roster needs the modality and the client's name, and the
 /// same shape then serves both reads; cancelled ones are included so the caller, not the query, decides what a
 /// cancellation frees (D-25).
+/// <para>
+/// <see cref="EndsAt"/> is the end of the session, the upper bound of the arrival window of an at-arrival walk-in
+/// (RF-11, T16 unit 3): a client who shows up once the class started can still be added to it, so the caller judges
+/// <c>[StartsAt, EndsAt]</c> instead of the strictly-future rule of a booking. It is optional only so a row built by
+/// hand — a test fixture, for instance — does not have to carry it; every storage read fills it, and a caller that
+/// needs the window must treat the default as "no window" rather than as an open one.
+/// </para>
 /// </summary>
 public sealed record ClassSessionRow(
     int AppointmentId,
@@ -34,7 +41,8 @@ public sealed record ClassSessionRow(
     int MaxCapacity,
     AppointmentKind Kind,
     AppointmentStatus Status,
-    IReadOnlyList<ClassSessionBooking> Bookings)
+    IReadOnlyList<ClassSessionBooking> Bookings,
+    DateTime EndsAt = default)
 {
     public DateOnly Date => DateOnly.FromDateTime(StartsAt);
 

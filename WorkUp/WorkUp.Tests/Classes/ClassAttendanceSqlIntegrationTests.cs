@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using WorkUp.BusinessLogic.Classes;
 using WorkUp.Data;
+using WorkUp.Data.Businesses;
 using WorkUp.Data.Classes;
 using WorkUp.Domain.Enums;
 using WorkUp.Tests.Fakes;
@@ -34,6 +35,12 @@ public sealed class ClassAttendanceSqlIntegrationTests(ITestOutputHelper output)
     private static readonly DateTime ClassStartsAt = new(2026, 3, 12, 18, 0, 0);
 
     private static readonly DateOnly ClassDate = new(2026, 3, 12);
+
+    /// <summary>
+    /// The single clock read of every at-arrival walk-in: inside <c>[StartsAt, EndsAt]</c>, which is the arrival
+    /// window of the walk-in and a moment at which a booking of the same class would already be late.
+    /// </summary>
+    private static readonly DateTime WalkInNow = new(2026, 3, 12, 18, 10, 0);
 
     [Fact]
     public async Task Drop_in_attendance_with_a_charge_is_stored_once_with_the_recorded_instant()
@@ -473,6 +480,326 @@ public sealed class ClassAttendanceSqlIntegrationTests(ITestOutputHelper output)
         output.WriteLine("Suspension assertions passed: the competing suspension could not land while the attendance unit held the class session lock, the attendance and its observation committed together, and the class was still Scheduled afterwards.");
     }
 
+    [Fact]
+    public async Task Walk_in_registration_stores_the_drop_in_attendance_the_class_charge_and_no_notice()
+    {
+        var target = await ResolveTargetAsync("_WalkIn");
+        if (target is null)
+            return;
+
+        var ids = await SeedWalkInAsync(target.ConnectionString, "synthetic-t16-walkin", "t16.walkin");
+
+        await using var session = new DbSession(target.ConnectionString);
+        var service = CreateWalkInService(session, WalkInNow);
+
+        var result = await service.RegisterAsync(ids.BusinessA, new ClassWalkInRequest(
+            ids.Session, ids.Clients[0], new ClassAttendanceCharge(450m, "Clase suelta con descuento"),
+            "Alergia al amoníaco"));
+
+        Assert.True(result.Succeeded, result.Error?.Code);
+
+        // The answer names the annotation this unit wrote and the start of the class it joined.
+        Assert.Equal(ids.Session, result.Value.AppointmentId);
+        Assert.Equal(ids.Clients[0], result.Value.ClientId);
+        Assert.Equal(ClassStartsAt, result.Value.StartsAt);
+        Assert.Equal(450m, result.Value.ChargedAmount);
+
+        // The annotation is the `Suelta` of the public path, already attended at the single instant of the call. The
+        // acceptance at 18:10 proves the locked read carried the stored EndsAt: a projection that missed the column
+        // would leave the default end and put the arrival outside the window.
+        var booking = await ReadBookingAsync(target.ConnectionString, result.Value.BookingId);
+        Assert.Equal(ids.BusinessA, booking.BusinessId);
+        Assert.Equal(ids.Session, booking.AppointmentId);
+        Assert.Equal(ids.Clients[0], booking.ClientId);
+        Assert.Null(booking.EnrollmentId);
+        Assert.Equal(BookingModality.DropIn, booking.Modality);
+        Assert.Equal(BookingStatus.Attended, booking.Status);
+        Assert.Equal(WalkInNow, booking.AttendanceRecordedAt);
+        Assert.Null(booking.AbsenceSource);
+        Assert.Null(booking.CancelledAt);
+
+        // Exactly one charge, of the drop-in concept, tied to the annotation and to no enrollment, with the agreed
+        // amount beside the class list price and the same instant as the attendance it accompanied.
+        var payment = await ReadSinglePaymentAsync(target.ConnectionString, result.Value.BookingId);
+        Assert.Equal(ids.BusinessA, payment.BusinessId);
+        Assert.Equal(ids.Clients[0], payment.ClientId);
+        Assert.Equal(PaymentConcept.DropInClass, payment.Concept);
+        Assert.Equal(result.Value.BookingId, payment.BookingId);
+        Assert.Null(payment.EnrollmentId);
+        Assert.Equal(450m, payment.Amount);
+        Assert.Equal(100m, payment.ListPrice);
+        Assert.Equal("Clase suelta con descuento", payment.PriceReason);
+        Assert.Equal(WalkInNow, payment.PaidAt);
+        Assert.Equal(WalkInNow, payment.RecordedAt);
+
+        // The observation landed on the client's record tied to the session, and the class is still scheduled.
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM ClientNotes WHERE ClientId = @clientId AND AppointmentId = @appointmentId AND Text = @text AND CreatedAt = @now",
+            ("@clientId", ids.Clients[0]), ("@appointmentId", ids.Session), ("@text", "Alergia al amoníaco"),
+            ("@now", WalkInNow)));
+        Assert.Equal((byte)AppointmentStatus.Scheduled, await ReadScalarAsync<byte>(target.ConnectionString,
+            "SELECT Status FROM Appointments WHERE Id = @id", ("@id", ids.Session)));
+
+        // D-07, RF-11 output: the desk attention queues no notice at all, and it is the only annotation written.
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId", ("@businessId", ids.BusinessA)));
+        Assert.Equal(0, await CountAsync(target.ConnectionString, "SELECT COUNT(*) FROM Notifications"));
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId", ("@appointmentId", ids.Session)));
+
+        output.WriteLine("Walk-in assertions passed: one Suelta annotation attended at the arrival instant with a single DropInClass charge and the observation attached to the session, and zero notifications queued.");
+    }
+
+    [Fact]
+    public async Task Walk_in_window_ends_with_the_stored_end_of_the_class()
+    {
+        var target = await ResolveTargetAsync("_WalkInWindow");
+        if (target is null)
+            return;
+
+        var ids = await SeedWalkInAsync(target.ConnectionString, "synthetic-t16-walkin-window", "t16.walkin.window",
+            clientCount: 2);
+
+        // The exact end is included: the client who arrives as the class ends is late, not early.
+        int accepted;
+        await using (var session = new DbSession(target.ConnectionString))
+        {
+            var atEnd = await CreateWalkInService(session, ClassStartsAt.AddHours(1)).RegisterAsync(
+                ids.BusinessA, new ClassWalkInRequest(ids.Session, ids.Clients[0]));
+            Assert.True(atEnd.Succeeded, atEnd.Error?.Code);
+            accepted = atEnd.Value.BookingId;
+        }
+
+        // One second later the class is over, and the second client is refused without writing anything.
+        await using (var session = new DbSession(target.ConnectionString))
+        {
+            var afterEnd = await CreateWalkInService(session, ClassStartsAt.AddHours(1).AddSeconds(1)).RegisterAsync(
+                ids.BusinessA, new ClassWalkInRequest(ids.Session, ids.Clients[1]));
+            Assert.False(afterEnd.Succeeded);
+            Assert.Equal("class_walk_in_outside_window", afterEnd.Error!.Code);
+        }
+
+        Assert.Equal(BookingStatus.Attended, (await ReadBookingAsync(target.ConnectionString, accepted)).Status);
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId", ("@appointmentId", ids.Session)));
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Payments WHERE BusinessId = @businessId", ("@businessId", ids.BusinessA)));
+
+        output.WriteLine("Walk-in window assertions passed: the arrival at the exact stored end of the class was accepted and marked attended, and the arrival one second later was refused as outside the window with nothing written.");
+    }
+
+    [Fact]
+    public async Task Walk_in_rejection_rolls_back_the_annotation_the_guarded_insert_already_wrote()
+    {
+        var target = await ResolveTargetAsync("_WalkInRollback");
+        if (target is null)
+            return;
+
+        var ids = await SeedWalkInAsync(target.ConnectionString, "synthetic-t16-walkin-rollback",
+            "t16.walkin.rollback");
+
+        await using var session = new DbSession(target.ConnectionString);
+        var service = CreateWalkInService(session, WalkInNow,
+            new NoteRefusingRepository(new SqlClassAttendanceRepository(session)));
+
+        var result = await service.RegisterAsync(ids.BusinessA, new ClassWalkInRequest(
+            ids.Session, ids.Clients[0], new ClassAttendanceCharge(450m), "Alergia al amoníaco"));
+
+        // The stable code proves the guarded insert had landed and the attendance lock had resolved the very row it
+        // wrote: a lost guard or an unresolvable annotation answers class_walk_in_full or class_walk_in_unavailable
+        // instead. The refusal is the observation, the only write of the unit that can fail once the lock holds.
+        Assert.False(result.Succeeded);
+        Assert.Equal("class_walk_in_note_failed", result.Error!.Code);
+
+        // The operation owned its transaction and returned before the commit, so the rollback erased the annotation
+        // the insert had already written together with the status write and the charge that never happened.
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId AND BusinessId = @businessId",
+            ("@appointmentId", ids.Session), ("@businessId", ids.BusinessA)));
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Payments WHERE BusinessId = @businessId", ("@businessId", ids.BusinessA)));
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM ClientNotes WHERE AppointmentId = @appointmentId",
+            ("@appointmentId", ids.Session)));
+
+        output.WriteLine("Walk-in rollback assertions passed: the refused observation erased the annotation the guarded insert had written, with no payment and no note left behind.");
+    }
+
+    [Fact]
+    public async Task Walk_in_protects_the_last_place_and_lands_once_the_cancelled_booking_frees_it()
+    {
+        var target = await ResolveTargetAsync("_WalkInSeat");
+        if (target is null)
+            return;
+
+        var ids = await SeedWalkInAsync(target.ConnectionString, "synthetic-t16-walkin-seat", "t16.walkin.seat",
+            clientCount: 2, maxCapacity: 1);
+
+        // The only place is taken by another client's pending annotation.
+        var taken = await InsertBookingRowAsync(target.ConnectionString, ids.BusinessA, ids.Session,
+            ids.Clients[1], BookingModality.DropIn, BookingStatus.Pending, WalkInNow);
+
+        // The guarded insert refuses to write the second annotation even when it is called directly, so the last
+        // place does not depend on the caller having counted it first.
+        await using (var session = new DbSession(target.ConnectionString))
+        {
+            var repository = new SqlClassDropInRepository(session);
+            await using var transaction = await session.BeginAsync();
+            var denied = await repository.TryInsertDropInAsync(
+                new DropInInsert(ids.BusinessA, ids.Session, ids.Clients[0], WalkInNow));
+            Assert.Equal(DropInInsertResultType.NoPlaceLeft, denied.Result);
+            await transaction.CommitAsync();
+        }
+
+        // The walk-in answers full before touching the insert, and nothing was written.
+        await using (var session = new DbSession(target.ConnectionString))
+        {
+            var full = await CreateWalkInService(session, WalkInNow).RegisterAsync(
+                ids.BusinessA, new ClassWalkInRequest(ids.Session, ids.Clients[0], new ClassAttendanceCharge(450m)));
+            Assert.False(full.Succeeded);
+            Assert.Equal("class_walk_in_full", full.Error!.Code);
+        }
+
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId", ("@appointmentId", ids.Session)));
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Payments WHERE BusinessId = @businessId", ("@businessId", ids.BusinessA)));
+
+        // Cancelling the occupying annotation frees its place, and the same walk-in then lands on it.
+        await ExecuteAsync(target.ConnectionString,
+            "UPDATE Bookings SET Status = @cancelled, CancelledAt = @now, CancelledBy = @owner WHERE Id = @id",
+            ("@cancelled", BookingStatus.Cancelled), ("@now", WalkInNow), ("@owner", CancelledBy.Owner),
+            ("@id", taken));
+
+        int landed;
+        await using (var session = new DbSession(target.ConnectionString))
+        {
+            var service = CreateWalkInService(session, WalkInNow);
+            var walkIn = await service.RegisterAsync(ids.BusinessA, new ClassWalkInRequest(
+                ids.Session, ids.Clients[0], new ClassAttendanceCharge(450m)));
+            Assert.True(walkIn.Succeeded, walkIn.Error?.Code);
+            landed = walkIn.Value.BookingId;
+        }
+
+        Assert.Equal(BookingStatus.Attended, (await ReadBookingAsync(target.ConnectionString, landed)).Status);
+        Assert.Equal(2, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId", ("@appointmentId", ids.Session)));
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId AND Status <> @cancelled",
+            ("@appointmentId", ids.Session), ("@cancelled", BookingStatus.Cancelled)));
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Payments WHERE BusinessId = @businessId", ("@businessId", ids.BusinessA)));
+
+        output.WriteLine("Walk-in seat assertions passed: the guarded insert and the service both refused the full class, the cancelled annotation freed the only place, and the arrival then landed as the single non-cancelled annotation with one charge.");
+    }
+
+    [Fact]
+    public async Task Walk_in_scope_is_the_named_business_for_the_class_the_client_and_the_setting()
+    {
+        var target = await ResolveTargetAsync("_WalkInScope");
+        if (target is null)
+            return;
+
+        // Two tenants that both admit attention without a booking.
+        var mine = await SeedWalkInAsync(target.ConnectionString, "synthetic-t16-walkin-scope-a",
+            "t16.walkin.scope.a");
+        var foreign = await SeedWalkInAsync(target.ConnectionString, "synthetic-t16-walkin-scope-b",
+            "t16.walkin.scope.b");
+
+        // The class of the other business is invisible, and its client is as unknown as a missing one.
+        await using (var session = new DbSession(target.ConnectionString))
+        {
+            var service = CreateWalkInService(session, WalkInNow);
+            var foreignClass = await service.RegisterAsync(
+                mine.BusinessA, new ClassWalkInRequest(foreign.Session, mine.Clients[0]));
+            Assert.False(foreignClass.Succeeded);
+            Assert.Equal("class_walk_in_not_found", foreignClass.Error!.Code);
+
+            var foreignClient = await service.RegisterAsync(
+                mine.BusinessA, new ClassWalkInRequest(mine.Session, foreign.Clients[0]));
+            Assert.False(foreignClient.Succeeded);
+            Assert.Equal("class_walk_in_client_not_found", foreignClient.Error!.Code);
+        }
+
+        // Regla 15: a business that does not admit the attention answers before the class and the seat are judged.
+        await ExecuteAsync(target.ConnectionString,
+            "UPDATE Businesses SET AllowsWalkIns = 0 WHERE Id = @id", ("@id", mine.BusinessA));
+        await using (var session = new DbSession(target.ConnectionString))
+        {
+            var disabled = await CreateWalkInService(session, WalkInNow).RegisterAsync(
+                mine.BusinessA, new ClassWalkInRequest(mine.Session, mine.Clients[0]));
+            Assert.False(disabled.Succeeded);
+            Assert.Equal("class_walk_in_disabled", disabled.Error!.Code);
+        }
+
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE BusinessId IN (@mine, @foreign)",
+            ("@mine", mine.BusinessA), ("@foreign", foreign.BusinessA)));
+        Assert.Equal(0, await CountAsync(target.ConnectionString, "SELECT COUNT(*) FROM Payments"));
+
+        output.WriteLine("Walk-in scope assertions passed: the foreign class and the foreign client were not found, a business with the setting off refused the arrival, and nothing was written in either tenant.");
+    }
+
+    /// <summary>
+    /// The at-arrival walk-in service over the real SQL ports of one connection: the drop-in repository, the business
+    /// repository that carries <c>AllowsWalkIns</c> and — replaceable so a test can force the one refusal the lock
+    /// does not rule out — the attendance repository, all inside the unit of work the operation owns.
+    /// </summary>
+    private static ClassWalkInService CreateWalkInService(
+        DbSession session, DateTime now, IClassAttendanceRepository? attendance = null) =>
+        new(
+            new SqlClassDropInRepository(session),
+            attendance ?? new SqlClassAttendanceRepository(session),
+            new SqlBusinessRepository(session),
+            session,
+            new FakeClock { Now = now });
+
+    /// <summary>
+    /// One tenant that admits attention without a booking, its clients and one scheduled class able to receive the
+    /// arrival: the class starts at <see cref="ClassStartsAt"/> and lasts an hour, so <see cref="WalkInNow"/> falls
+    /// inside <c>[StartsAt, EndsAt]</c>. More than one client is seeded when a test needs repeated arrivals.
+    /// </summary>
+    private static async Task<WalkInIds> SeedWalkInAsync(
+        string connectionString, string slug, string emailPrefix,
+        int clientCount = 1, int maxCapacity = 8, bool allowsWalkIns = true)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var tenant = await InsertTenantAsync(connection, transaction, slug, slug, "20201616175", maxCapacity,
+            WalkInNow, allowsWalkIns);
+        var clients = new List<int>();
+        for (var index = 0; index < clientCount; index++)
+        {
+            clients.Add(await InsertClientAsync(connection, transaction, tenant.BusinessId, "Sin turno",
+                $"Alumna {index}", $"{emailPrefix}{index}@example.invalid", WalkInNow));
+        }
+
+        var session = await InsertClassSessionAsync(connection, transaction, tenant.BusinessId,
+            await InsertGridClassAsync(connection, transaction, tenant.BusinessId, tenant.ServiceId, tenant.WorkerId,
+                DayOfWeek.Thursday, new TimeOnly(18, 0)),
+            tenant.ServiceId, tenant.WorkerId, ClassStartsAt, 60, maxCapacity, AppointmentStatus.Scheduled, null,
+            WalkInNow);
+
+        await transaction.CommitAsync();
+        return new WalkInIds(tenant.BusinessId, tenant.ServiceId, tenant.WorkerId, session, clients);
+    }
+
+    /// <summary>One annotation written outside a seed, so a test can occupy a place directly in storage.</summary>
+    private static async Task<int> InsertBookingRowAsync(
+        string connectionString, int businessId, int appointmentId, int clientId, BookingModality? modality,
+        BookingStatus status, DateTime now)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+        var bookingId = await InsertBookingAsync(connection, transaction, businessId, appointmentId, clientId,
+            null, modality, status, now);
+        await transaction.CommitAsync();
+        return bookingId;
+    }
+
     /// <summary>
     /// Runs a suspension write of a class session from its own connection and reports whether it landed. It asks for
     /// the <c>Appointments</c> row the attendance unit holds, so a lock timeout means the suspension was serialized
@@ -635,9 +962,9 @@ public sealed class ClassAttendanceSqlIntegrationTests(ITestOutputHelper output)
 
     private static async Task<Tenant> InsertTenantAsync(
         SqlConnection connection, SqlTransaction transaction, string name, string slug, string cuil,
-        int maxCapacity, DateTime now)
+        int maxCapacity, DateTime now, bool allowsWalkIns = true)
     {
-        var businessId = await InsertBusinessAsync(connection, transaction, name, slug, now);
+        var businessId = await InsertBusinessAsync(connection, transaction, name, slug, now, allowsWalkIns);
         var serviceId = await InsertServiceAsync(connection, transaction, businessId, $"{name} Class", 60, maxCapacity);
         var workerId = await InsertWorkerAsync(connection, transaction, businessId, name, "Teacher", cuil);
         return new Tenant(businessId, serviceId, workerId);
@@ -831,11 +1158,12 @@ public sealed class ClassAttendanceSqlIntegrationTests(ITestOutputHelper output)
     }
 
     private static Task<int> InsertBusinessAsync(
-        SqlConnection connection, SqlTransaction transaction, string name, string slug, DateTime now) =>
+        SqlConnection connection, SqlTransaction transaction, string name, string slug, DateTime now,
+        bool allowsWalkIns = true) =>
         InsertIdAsync(connection, transaction,
-            "INSERT INTO Businesses (Name, Slug, ContactPhone, NotificationEmail, CreatedAt) OUTPUT INSERTED.Id VALUES (@name, @slug, @phone, @email, @createdAt)",
+            "INSERT INTO Businesses (Name, Slug, ContactPhone, NotificationEmail, AllowsWalkIns, CreatedAt) OUTPUT INSERTED.Id VALUES (@name, @slug, @phone, @email, @allowsWalkIns, @createdAt)",
             ("@name", name), ("@slug", slug), ("@phone", "0000000000"),
-            ("@email", $"{slug}@example.invalid"), ("@createdAt", now));
+            ("@email", $"{slug}@example.invalid"), ("@allowsWalkIns", allowsWalkIns), ("@createdAt", now));
 
     private static Task<int> InsertServiceAsync(
         SqlConnection connection, SqlTransaction transaction, int businessId, string name, int durationMinutes,
@@ -1099,6 +1427,9 @@ public sealed class ClassAttendanceSqlIntegrationTests(ITestOutputHelper output)
 
     private sealed record TenantIds(
         int BusinessA, int BusinessB, int Client, int ForeignClient, int Session, int ForeignSession, int Booking);
+
+    private sealed record WalkInIds(
+        int BusinessA, int ServiceA, int WorkerA, int Session, IReadOnlyList<int> Clients);
 
     private sealed record BookingSnapshot(
         int BusinessId,

@@ -87,13 +87,6 @@ public sealed class ClassAttendanceService(
 
     private const string NoteFailedCode = "class_attendance_note_failed";
 
-    /// <summary>Same limits as the individual charge path and the stored columns (D-20).</summary>
-    private const decimal MaxAmount = 9999999999.99m;
-
-    private const int MaxPriceReasonLength = 200;
-
-    private const int MaxNoteLength = 1000;
-
     /// <summary>
     /// Marks one student as attended (RF-11). The optional charge and the optional observation travel with it and
     /// are written in the same transaction. A missing identifier answers like a missing annotation, before any
@@ -130,13 +123,10 @@ public sealed class ClassAttendanceService(
             return Failure(NotFoundCode, NotFoundMessage);
 
         var charge = request.Charge;
-        if (charge is not null
-            && (charge.Amount <= 0 || charge.Amount > MaxAmount
-                || decimal.Round(charge.Amount, 2) != charge.Amount
-                || charge.PriceReason?.Length > MaxPriceReasonLength))
+        if (!ClassAttendanceInput.IsChargeValid(charge))
             return Failure(InvalidChargeCode, "Revisá el importe y el motivo del precio.");
 
-        if (request.Note?.Length > MaxNoteLength)
+        if (!ClassAttendanceInput.IsNoteValid(request.Note))
             return Failure(InvalidNoteCode, "La observación no puede superar 1000 caracteres.");
 
         await using var transaction = await unitOfWork.BeginAsync(ct: ct);
@@ -193,32 +183,26 @@ public sealed class ClassAttendanceService(
 
         var now = clock.Now;
 
-        // The observation is written before the status and the charge: it is the only write that can refuse for a
-        // reason the lock does not already rule out, and writing it first is what keeps a failure from leaving the
-        // attendance or the charge visible when the unit is composed inside an outer transaction its opener commits —
-        // writing it last would persist both without the note. The guarded status write repeats every rule already
-        // judged from the lock, so once the note landed it changes exactly one row.
-        if (!string.IsNullOrWhiteSpace(request.Note)
-            && !await repository.InsertNoteAsync(
-                businessId, state.ClientId, state.AppointmentId, request.Note.Trim(), now, ct))
-            return Failure(NoteFailedCode, "No pudimos guardar la observación. Volvé a intentar.");
-
-        var status = attend ? BookingStatus.Attended : BookingStatus.Absent;
-        if (!await repository.SetStatusAsync(businessId, bookingId, status, now, ct))
-            return Failure(UnavailableCode, "Esa anotación no admite esta acción.");
-
-        if (charge is not null)
-            await repository.InsertPaymentAsync(
-                new ClassAttendancePayment(
-                    businessId,
-                    state.ClientId,
-                    bookingId,
-                    PaymentConcept.DropInClass,
-                    charge.Amount,
-                    state.ListPrice,
-                    charge.PriceReason,
-                    now),
-                ct);
+        // The write sequence is shared with the at-arrival walk-in of a class (T16 unit 3), so the observation, the
+        // guarded status and the optional charge always land in the same order and from the same single instant: the
+        // observation goes first, because it is the only write that can refuse for a reason the lock does not already
+        // rule out, and writing it first is what keeps a failure from leaving the attendance or the charge visible
+        // when the unit is composed inside an outer transaction its opener commits.
+        var write = await ClassAttendanceInput.WriteAsync(
+            repository, businessId, state, attend ? BookingStatus.Attended : BookingStatus.Absent,
+            charge, request.Note, now, ct);
+        switch (write)
+        {
+            case ClassAttendanceWriteOutcome.Applied:
+                break;
+            case ClassAttendanceWriteOutcome.NoteRefused:
+                return Failure(NoteFailedCode, "No pudimos guardar la observación. Volvé a intentar.");
+            case ClassAttendanceWriteOutcome.StatusRefused:
+                return Failure(UnavailableCode, "Esa anotación no admite esta acción.");
+            default:
+                throw new InvalidOperationException(
+                    $"La escritura de la asistencia devolvió un resultado desconocido: {(int)write}.");
+        }
 
         await transaction.CommitAsync(ct);
         return Result.Success();
@@ -250,4 +234,93 @@ public sealed class ClassAttendanceService(
     private static Result Failure(string code, string message) => Result.Failure(code, message);
 
     private const string NotFoundMessage = "No encontramos esa anotación de la clase.";
+}
+
+/// <summary>
+/// The input limits and the write sequence of a class attendance (RF-11, D-20), shared by the per-student flow of
+/// <see cref="ClassAttendanceService"/> and the at-arrival walk-in of a generated class session (T16 unit 3). They
+/// live together because the two operations must accept exactly the same amounts and reasons — the agreed amount rule
+/// of the individual charge path, <c>Amount &gt; 0</c>, at most two decimals and a reason of at most 200 characters —
+/// and must persist the observation, the status and the charge in exactly the same order and from the same instant.
+/// <para>
+/// The write takes the instant from its caller instead of reading the clock: each operation reads the clock once, and
+/// this helper only makes sure that single instant is the one every write of the unit carries. The observation is
+/// written first because it is the only write that can refuse for a reason the lock does not already rule out; the
+/// guarded status write comes next, and the charge is written by the same unit only when the caller asked for it and
+/// already ruled out an effective payment.
+/// </para>
+/// </summary>
+internal static class ClassAttendanceInput
+{
+    /// <summary>Same limits as the individual charge path and the stored columns (D-20).</summary>
+    internal const decimal MaxAmount = 9999999999.99m;
+
+    internal const int MaxPriceReasonLength = 200;
+
+    internal const int MaxNoteLength = 1000;
+
+    /// <summary>Whether the optional charge can be stored: a positive amount with at most two decimals and a reason
+    /// that fits. A missing charge is always valid, because charging is independent of the attendance (D-20).</summary>
+    internal static bool IsChargeValid(ClassAttendanceCharge? charge) =>
+        charge is null
+        || (charge.Amount > 0 && charge.Amount <= MaxAmount
+            && decimal.Round(charge.Amount, 2) == charge.Amount
+            && (charge.PriceReason?.Length ?? 0) <= MaxPriceReasonLength);
+
+    /// <summary>Whether the optional observation fits the client's record. A missing note is always valid.</summary>
+    internal static bool IsNoteValid(string? note) => note is null || note.Length <= MaxNoteLength;
+
+    /// <summary>
+    /// Writes the observation, the guarded status and the optional charge of one annotation, in that order and from
+    /// the single instant it is given. It never opens a transaction: the caller owns the unit, so a refusal it reports
+    /// can only leave writes the caller's own rollback erases. It reports which of the two fallible writes refused so
+    /// each caller answers with the stable code of its own action.
+    /// </summary>
+    internal static async Task<ClassAttendanceWriteOutcome> WriteAsync(
+        IClassAttendanceRepository repository,
+        int businessId,
+        ClassAttendanceBookingState state,
+        BookingStatus status,
+        ClassAttendanceCharge? charge,
+        string? note,
+        DateTime now,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(state);
+
+        if (!string.IsNullOrWhiteSpace(note)
+            && !await repository.InsertNoteAsync(
+                businessId, state.ClientId, state.AppointmentId, note.Trim(), now, ct))
+            return ClassAttendanceWriteOutcome.NoteRefused;
+
+        if (!await repository.SetStatusAsync(businessId, state.BookingId, status, now, ct))
+            return ClassAttendanceWriteOutcome.StatusRefused;
+
+        if (charge is not null)
+            await repository.InsertPaymentAsync(
+                new ClassAttendancePayment(
+                    businessId,
+                    state.ClientId,
+                    state.BookingId,
+                    PaymentConcept.DropInClass,
+                    charge.Amount,
+                    state.ListPrice,
+                    charge.PriceReason,
+                    now),
+                ct);
+
+        return ClassAttendanceWriteOutcome.Applied;
+    }
+}
+
+/// <summary>
+/// How <see cref="ClassAttendanceInput.WriteAsync"/> ended. It has no zero member on purpose: an undefined value is a
+/// broken implementation, and a caller that read it as success would commit an attendance that was never written.
+/// </summary>
+enum ClassAttendanceWriteOutcome
+{
+    Applied = 1,
+    NoteRefused = 2,
+    StatusRefused = 3
 }

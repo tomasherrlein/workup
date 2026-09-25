@@ -29,7 +29,7 @@ public sealed class SqlClassDropInRepository(DbSession session)
     /// facts. Ordered by start so the caller can reorder without a second sort key.
     /// </summary>
     private const string ListSessionsSql = """
-        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.MaxCapacity, a.Kind, a.Status
+        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.EndsAt, a.MaxCapacity, a.Kind, a.Status
           FROM Appointments AS a
          WHERE a.BusinessId = @businessId
            AND a.Kind = @classSession
@@ -68,7 +68,7 @@ public sealed class SqlClassDropInRepository(DbSession session)
     /// predicate, so a foreign or individual appointment is simply not found.
     /// </summary>
     private const string LockSessionSql = """
-        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.MaxCapacity, a.Kind, a.Status
+        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.EndsAt, a.MaxCapacity, a.Kind, a.Status
           FROM Appointments AS a WITH (UPDLOCK, ROWLOCK)
          WHERE a.Id = @appointmentId
            AND a.BusinessId = @businessId
@@ -91,7 +91,7 @@ public sealed class SqlClassDropInRepository(DbSession session)
     /// who is booked in it. Ordered by start, like the offer listing.
     /// </summary>
     private const string ListUpcomingRosterSessionsSql = """
-        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.MaxCapacity, a.Kind, a.Status
+        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.EndsAt, a.MaxCapacity, a.Kind, a.Status
           FROM Appointments AS a
          WHERE a.BusinessId = @businessId
            AND a.Kind = @classSession
@@ -303,7 +303,8 @@ public sealed class SqlClassDropInRepository(DbSession session)
                 row.MaxCapacity,
                 row.Kind,
                 row.Status,
-                bookingsByAppointment.TryGetValue(row.AppointmentId, out var attached) ? attached : []))
+                bookingsByAppointment.TryGetValue(row.AppointmentId, out var attached) ? attached : [],
+                row.EndsAt))
             .ToArray();
     }
 
@@ -340,7 +341,8 @@ public sealed class SqlClassDropInRepository(DbSession session)
             locked.MaxCapacity,
             locked.Kind,
             locked.Status,
-            bookings.Select(booking => booking.Booking).ToArray());
+            bookings.Select(booking => booking.Booking).ToArray(),
+            locked.EndsAt);
     }
 
     public async Task<IReadOnlyList<ClassSessionRow>> ListUpcomingRosterAsync(
@@ -375,7 +377,8 @@ public sealed class SqlClassDropInRepository(DbSession session)
                 row.MaxCapacity,
                 row.Kind,
                 row.Status,
-                dropInsByAppointment.TryGetValue(row.AppointmentId, out var attached) ? attached : []))
+                dropInsByAppointment.TryGetValue(row.AppointmentId, out var attached) ? attached : [],
+                row.EndsAt))
             .ToArray();
     }
 
@@ -598,6 +601,7 @@ public sealed class SqlClassDropInRepository(DbSession session)
         reader.Get<int>("ServiceId"),
         reader.Get<int>("WorkerId"),
         reader.Get<DateTime>("StartsAt"),
+        reader.Get<DateTime>("EndsAt"),
         reader.Get<int>("MaxCapacity"),
         reader.GetEnum<AppointmentKind>("Kind"),
         reader.GetEnum<AppointmentStatus>("Status"));
@@ -640,6 +644,7 @@ public sealed class SqlClassDropInRepository(DbSession session)
         int ServiceId,
         int WorkerId,
         DateTime StartsAt,
+        DateTime EndsAt,
         int MaxCapacity,
         AppointmentKind Kind,
         AppointmentStatus Status);

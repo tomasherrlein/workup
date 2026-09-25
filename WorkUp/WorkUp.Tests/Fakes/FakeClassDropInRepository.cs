@@ -77,6 +77,14 @@ public sealed class FakeClassDropInRepository : IClassDropInRepository
     public int? LockBusinessId { get; private set; }
     public int? LockedAppointmentId { get; private set; }
 
+    /// <summary>
+    /// Optional side effect run while the session lock is being acquired. It emulates wall time passing while the
+    /// caller waits for the row lock, so a test can prove that the class is judged at the instant the lock is held
+    /// instead of at the instant the call began. The real statement takes the <c>UPDLOCK</c> here; the fake only
+    /// replays whatever the test asks for at that point.
+    /// </summary>
+    public Action? WhileWaitingForLock { get; set; }
+
     public int RosterCallCount { get; private set; }
     public int? RosterBusinessId { get; private set; }
     public DateTime? RosterFromExclusive { get; private set; }
@@ -129,6 +137,9 @@ public sealed class FakeClassDropInRepository : IClassDropInRepository
         LockCallCount++;
         LockBusinessId = businessId;
         LockedAppointmentId = appointmentId;
+
+        // The wait for the row lock happens here, before the locked state is resolved.
+        WhileWaitingForLock?.Invoke();
 
         var session = Sessions.FirstOrDefault(candidate =>
             candidate.BusinessId == businessId && candidate.Row.AppointmentId == appointmentId);
