@@ -5,6 +5,7 @@ using WorkUp.BusinessLogic.Classes;
 using WorkUp.BusinessLogic.Clients;
 using WorkUp.BusinessLogic.Enrollments;
 using WorkUp.BusinessLogic.Payments;
+using WorkUp.BusinessLogic.Reports;
 using WorkUp.BusinessLogic.Staff;
 using WorkUp.BusinessLogic.Expenses;
 using WorkUp.BusinessLogic.Supplies;
@@ -17,6 +18,7 @@ using WorkUp.Data.Clients;
 using WorkUp.Data.Enrollments;
 using WorkUp.Data.DemoData;
 using WorkUp.Data.Payments;
+using WorkUp.Data.Reports;
 using WorkUp.Data.Staff;
 using WorkUp.Data.Expenses;
 using WorkUp.Data.Supplies;
@@ -160,6 +162,10 @@ public static class ServiceRegistration
         // Payments: charges, annulments and refunds (T18)
         services.AddScoped<IPaymentLedgerRepository, SqlPaymentLedgerRepository>();
         services.AddScoped<PaymentLedgerService>();
+
+        // Reports: period result and indicators (T19)
+        services.AddScoped<IReportsRepository, SqlReportsRepository>();
+        services.AddScoped<ReportsService>();
 
         return services;
     }

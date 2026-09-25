@@ -16,7 +16,7 @@ namespace WorkUp.Tests.Scheduling;
 
 /// <summary>
 /// Opt-in, reusable HTTP integration harness for the owner panel. It drives the real MVC host over loopback with
-/// cookies and antiforgery, then verifies the persisted rows with ADO.NET, and it covers six independent flows.
+/// cookies and antiforgery, then verifies the persisted rows with ADO.NET, and it covers eight independent flows.
 /// The Jornada (RF-11/RF-15): owner login, one synthetic client through the owner form, GET /panel/Day, a walk-in with
 /// an exact agreed price plus immediate payment and next-visit note, a second overlapping walk-in saved with a
 /// warning, and the anti-CSRF rejection. The week generation (RF-06): yoga owner login, the first real render of
@@ -49,8 +49,14 @@ namespace WorkUp.Tests.Scheduling;
 /// the authenticated owner, the corrected charge, the partial refund dated today and the two refusals -- a refund past
 /// what is left and an annulment of an already refunded payment -- all asserted in SQL as the original charge
 /// retained, one annulment and one refund, and the enrollment, its period, the attendance, the notes and the outbox
-/// untouched; this seventh flow also reuses the same T12 harness variables and prefix. It replaces manual scratch
-/// scripts: the same test is the smoke it used to need.
+/// untouched; the seventh flow also reuses the same T12 harness variables and prefix. The reports (RF-16): yoga owner
+/// login, a synthetic tenant snapshot seeded directly in SQL, GET /panel/Reports for a period that ends in the future
+/// with its optional comparison and every rendered bucket asserted against the same bucket recomputed from SQL bounded
+/// by the same business and period, the partial period said to be computed up to today, the membership money shown as
+/// the «Abonos» bucket, the provisional indicator definitions, the future-only period refused with nothing computed,
+/// the report writing nothing, the Reportes link already published by the owner navigation, and the unauthenticated
+/// request redirected to the login instead of the report; this eighth flow also reuses the same T12 harness variables
+/// and prefix. It replaces manual scratch scripts: the same test is the smoke it used to need.
 ///
 /// Without <c>WORKUP_T12_HTTP_CONNECTION</c> each test logs N/A and returns before any SQL connection or HTTP
 /// request, so the default suite is unaffected. With it set, the harness refuses to run unless it can prove the
@@ -72,6 +78,18 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
 
     /// <summary>Agreed price of the synthetic T16 fixed enrollment; the flow asserts its payment is never mutated.</summary>
     private const decimal MembershipFixtureAmount = 6500m;
+
+    /// <summary>
+    /// Amounts of the synthetic T19 report snapshot. They stay small on purpose so no rendered money string carries a
+    /// group separator, and they are distinct so the bucket of each one is unambiguous on screen.
+    /// </summary>
+    private const decimal ReportMembershipCharge = 680m;
+
+    private const decimal ReportWalkInCharge = 90m;
+    private const decimal ReportAnnulledCharge = 70m;
+    private const decimal ReportRefundAmount = 25m;
+    private const decimal ReportPeriodExpense = 40m;
+    private const decimal ReportComparisonExpense = 12m;
 
     private static readonly TimeSpan ReadinessBudget = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan ReadinessPoll = TimeSpan.FromMilliseconds(500);
@@ -445,6 +463,60 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
             Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
             output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
             await RunPaymentLedgerFlowAsync(host.BaseUrl, plan, password);
+        }
+        finally
+        {
+            await StopWebHostAsync(host.Process);
+        }
+
+        output.WriteLine("All HTTP/SQL checkpoints passed; the isolated database and encrypted keyring stay in place (no DROP or DELETE).");
+    }
+
+    [Fact]
+    public async Task Reports_render_the_period_result_and_refuse_a_future_period_on_an_isolated_http_host()
+    {
+        var suppliedConnection = Environment.GetEnvironmentVariable(ConnectionVariable);
+        if (string.IsNullOrWhiteSpace(suppliedConnection))
+        {
+            output.WriteLine($"N/A: {ConnectionVariable} is not set; no SQL connection, database, or HTTP host was used.");
+            return;
+        }
+
+        // Preflight runs before any SQL connection: an unsafe assistant or a reused target stops the run here.
+        var plan = PlanHarness(suppliedConnection);
+        output.WriteLine($"Runtime: database '{plan.DatabaseName}', isolated keyring '{plan.KeysPath}', next free port {plan.Port}.");
+
+        await CreateDatabaseAsync(plan);
+
+        // The demo password exists only in memory and is never written to output or to any log.
+        var password = "T19-" + Guid.NewGuid().ToString("N") + "!aA1";
+
+        // First owned host migrates the fresh database and materializes the isolated encrypted keyring.
+        var migrations = StartWebHost(plan, plan.Port);
+        try
+        {
+            await WaitUntilReadyAsync(migrations);
+            Assert.False(migrations.Process.HasExited, "The owned migration host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned migration host (pid {migrations.Process.Id}) became ready on {migrations.BaseUrl}.");
+        }
+        finally
+        {
+            await StopWebHostAsync(migrations.Process);
+        }
+        AssertKeyringCreated(plan.KeysPath);
+
+        // The explicit T07 seed into the migrated, dedicated database, reusing the real hasher and clock.
+        await SeedDemoAsync(plan.ConnectionString, password);
+        output.WriteLine("SQL: T07 demo seeded (marina.demo and lucia.demo) into the isolated database.");
+
+        // Second owned host serves the authenticated owner flow with a brand-new loopback port.
+        var host = StartWebHost(plan, FindFreeLoopbackPort());
+        try
+        {
+            await WaitUntilReadyAsync(host);
+            Assert.False(host.Process.HasExited, "The owned HTTP host must stay alive until the harness stops it.");
+            output.WriteLine($"HTTP: owned HTTP host (pid {host.Process.Id}) became ready on {host.BaseUrl}.");
+            await RunReportsFlowAsync(host.BaseUrl, plan, password);
         }
         finally
         {
@@ -2155,6 +2227,382 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// The reports flow (RF-16): yoga owner login, one synthetic tenant snapshot seeded directly in SQL -- an active
+    /// membership charge, one attended walk-in with its charge, one annulled charge on that same annotation, one
+    /// refund dated today on the paid walk-in, and one expense inside the period plus one in the comparison period --,
+    /// then GET /panel/Reports over a period that ends in the future with an optional comparison, a period that has
+    /// not started, and the same page requested without a session. Every money line the page renders is compared
+    /// against the same bucket recomputed from SQL bounded by the same business and the same inclusive days, so an
+    /// unexpected movement of the demo data cannot change the answer: the screen is verified, never trusted. It
+    /// reuses the T12 harness variables and prefix.
+    /// </summary>
+    private async Task RunReportsFlowAsync(string baseUrl, HarnessPlan plan, string password)
+    {
+        // Every diagnostic line goes through Note, so the last checkpoint can prove that no password, antiforgery
+        // token or cookie value ever reached the test output.
+        var written = new List<string>();
+        var secrets = new HashSet<string>(StringComparer.Ordinal) { password };
+        void Note(string line)
+        {
+            output.WriteLine(line);
+            written.Add(line);
+        }
+
+        // The token is a secret: it is remembered for the output check instead of being written anywhere.
+        string ExtractToken(string html)
+        {
+            var token = ExtractAntiforgeryToken(html);
+            secrets.Add(token);
+            return token;
+        }
+
+        using var handler = new HttpClientHandler { CookieContainer = new CookieContainer(), AllowAutoRedirect = false };
+        using var client = new HttpClient(handler) { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(30) };
+
+        // Login as the yoga owner: it is the demo business whose sections are all visible.
+        var (loginStatus, loginHtml) = await GetHtmlAsync(client, "/panel/Account/Login");
+        Assert.Equal(HttpStatusCode.OK, loginStatus);
+        var loginResponse = await client.PostAsync("/panel/Account/Login", Form(new Dictionary<string, string>
+        {
+            ["Username"] = "lucia.demo",
+            ["Password"] = password,
+            ["__RequestVerificationToken"] = ExtractToken(loginHtml)
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, loginResponse.StatusCode);
+        Assert.True(IsDayRedirect(loginResponse), $"Login did not redirect to the owner Jornada (location '{DescribeRedirect(loginResponse)}').");
+        Note("HTTP: yoga owner login accepted with antiforgery; redirected to the owner Jornada (/panel).");
+
+        await using var connection = new SqlConnection(plan.ConnectionString);
+        await connection.OpenAsync();
+        var businessId = await ScalarIntAsync(connection, "SELECT Id FROM Businesses WHERE Slug = 'estudio-yoga-lucia-demo'");
+
+        // The business clock the app reads: Argentina, fixed offset, truncated to whole seconds.
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/Argentina/Buenos_Aires");
+        var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zone);
+        now = new DateTime(now.Ticks - now.Ticks % TimeSpan.TicksPerSecond, DateTimeKind.Unspecified);
+        var today = DateOnly.FromDateTime(now);
+
+        // The requested period ends after today so the report must clip it; the comparison period is already closed.
+        var periodFrom = today.AddDays(-14);
+        var periodTo = today.AddDays(5);
+        var comparisonFrom = today.AddDays(-40);
+        var comparisonTo = today.AddDays(-15);
+
+        await SeedReportFixtureAsync(connection, businessId, today, now);
+        Note("SQL: seeded one active membership charge, one paid walk-in, one annulled charge, one refund dated today and two expenses.");
+
+        // The report is a read: the tables it touches are counted before and after every GET.
+        var writesBefore = await CountReportWritesAsync(connection, businessId);
+
+        var reportPath = string.Format(CultureInfo.InvariantCulture,
+            "/panel/Reports?from={0:yyyy-MM-dd}&to={1:yyyy-MM-dd}&comparisonFrom={2:yyyy-MM-dd}&comparisonTo={3:yyyy-MM-dd}",
+            periodFrom, periodTo, comparisonFrom, comparisonTo);
+        var (reportStatus, reportHtml) = await GetHtmlAsync(client, reportPath);
+        Assert.Equal(HttpStatusCode.OK, reportStatus);
+        Note($"HTTP: GET {reportPath} -> 200 with the computed period and its comparison.");
+
+        // The Reportes section is already part of the owner navigation: the panel needs no new link.
+        Assert.Contains("href=\"/panel/Reports\"", reportHtml, StringComparison.Ordinal);
+
+        // The period ends after today, so the screen says it was computed only up to today.
+        Assert.Contains("se calcula hasta hoy, " + Formatting.ShortDate(today), reportHtml, StringComparison.Ordinal);
+
+        // Every amount is asserted against the same bucket recomputed from SQL bounded by the same business and days.
+        var (expectedPayments, expectedRefunds, expectedExpenses) =
+            await ReadReportBucketsAsync(connection, businessId, periodFrom, today);
+        var expectedNet = expectedPayments - expectedRefunds - expectedExpenses;
+        var expectedMembership = await ScalarDecimalAsync(connection, """
+            SELECT COALESCE(SUM(p.Amount), 0)
+              FROM Payments AS p
+              LEFT JOIN PaymentAnnulments AS an ON an.PaymentId = p.Id
+             WHERE p.BusinessId = @businessId AND an.Id IS NULL AND p.Concept = @concept
+               AND p.PaidAt >= @from AND p.PaidAt < @toExclusive
+            """,
+            ("@businessId", businessId), ("@concept", (byte)PaymentConcept.Membership),
+            ("@from", periodFrom), ("@toExclusive", today.AddDays(1)));
+
+        // The seeded snapshot is what the bounded buckets saw, and the annulled charge stayed out of the money.
+        Assert.Equal(ReportMembershipCharge + ReportWalkInCharge, expectedPayments);
+        Assert.Equal(ReportRefundAmount, expectedRefunds);
+        Assert.Equal(ReportPeriodExpense, expectedExpenses);
+        Assert.Equal(ReportMembershipCharge, expectedMembership);
+        Assert.Equal(Formatting.Money(expectedPayments), ExtractReportAmount(reportHtml, "Cobros no anulados"));
+        Assert.Equal(Formatting.Money(expectedRefunds), ExtractReportAmount(reportHtml, "Devoluciones del per"));
+        Assert.Equal(Formatting.Money(expectedExpenses), ExtractReportAmount(reportHtml, "Gastos del per"));
+        Assert.Equal(Formatting.Money(expectedNet), ExtractReportAmount(reportHtml, "Resultado del per"));
+        Note($"SQL/HTTP: the rendered result matches the SQL-bounded buckets (payments {expectedPayments:0.00}, refunds {expectedRefunds:0.00}, expenses {expectedExpenses:0.00}, net {expectedNet:0.00}).");
+
+        // Membership money is not spread over classes or workers: it is its own «Abonos» bucket.
+        Assert.Equal(Formatting.Money(expectedMembership), ExtractReportAmount(reportHtml, "Abonos"));
+        Assert.Contains("Turno individual", reportHtml, StringComparison.Ordinal);
+        Note("HTTP: the membership money is the 'Abonos' bucket and the paid walk-in is revenue of its own session.");
+
+        // The two indicator definitions are the provisional ones of assumption 7.
+        Assert.Contains("asistencias dentro del per", reportHtml, StringComparison.Ordinal);
+        Assert.Contains("anteriores al per", reportHtml, StringComparison.Ordinal);
+        Assert.Contains("provisoria", reportHtml, StringComparison.Ordinal);
+        Note("HTTP: the report says in words that both indicator definitions are provisional.");
+
+        // The comparison is computed with the same rules and the same clipping, and the screen shows its own period.
+        var (comparisonPayments, comparisonRefunds, comparisonExpenses) =
+            await ReadReportBucketsAsync(connection, businessId, comparisonFrom, comparisonTo);
+        var comparisonNet = comparisonPayments - comparisonRefunds - comparisonExpenses;
+        Assert.Equal(ReportComparisonExpense, comparisonExpenses);
+        var (comparisonLabel, comparisonAmount) = ExtractComparisonSummary(reportHtml);
+        Assert.Equal($"{Formatting.ShortDate(comparisonFrom)} al {Formatting.ShortDate(comparisonTo)}", comparisonLabel);
+        Assert.Equal(Formatting.Money(comparisonNet), comparisonAmount);
+        Note("SQL/HTTP: the comparison period is rendered with its own label and its SQL-bounded net result.");
+
+        // A period that has not started is refused before any read: the screen shows the error and no report.
+        var futurePath = string.Format(CultureInfo.InvariantCulture,
+            "/panel/Reports?from={0:yyyy-MM-dd}&to={1:yyyy-MM-dd}", today.AddDays(1), today.AddDays(30));
+        var (futureStatus, futureHtml) = await GetHtmlAsync(client, futurePath);
+        Assert.Equal(HttpStatusCode.OK, futureStatus);
+        Assert.Contains("no hay nada que calcular", futureHtml, StringComparison.Ordinal);
+        Assert.Contains("es opcional, pero se cargan las dos fechas.", futureHtml, StringComparison.Ordinal);
+        Assert.False(futureHtml.Contains("summary-band", StringComparison.Ordinal),
+            "A period that has not started must not render a computed report.");
+        Note("HTTP: GET /panel/Reports with a period that has not started -> 200 with the refusal and no computed report.");
+
+        // The report belongs to the signed-in owner: without a session there is no report to see.
+        using var anonymousHandler = new HttpClientHandler { AllowAutoRedirect = false };
+        using var anonymous = new HttpClient(anonymousHandler) { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(30) };
+        using var unauthorized = await anonymous.GetAsync("/panel/Reports");
+        Assert.Equal(HttpStatusCode.Redirect, unauthorized.StatusCode);
+        Assert.Contains("/panel/Account/Login", unauthorized.Headers.Location!.OriginalString, StringComparison.Ordinal);
+        var anonymousHtml = await unauthorized.Content.ReadAsStringAsync();
+        Assert.False(anonymousHtml.Contains("summary-band", StringComparison.Ordinal),
+            "An unauthenticated request must never receive a report body.");
+        Note("HTTP: GET /panel/Reports without a session -> 302 to the owner login and no report body.");
+
+        // The report is a read: no payment, refund, annulment, expense, booking or appointment changed.
+        Assert.Equal(writesBefore, await CountReportWritesAsync(connection, businessId));
+        Note("SQL: the report GETs changed no payment, refund, annulment, expense, booking or appointment.");
+
+        // The harness never writes a secret: every diagnostic line reports only booleans, identifiers, counts or paths,
+        // and this proves it against the password, every antiforgery token and every cookie of the run.
+        foreach (Cookie cookie in handler.CookieContainer.GetAllCookies())
+        {
+            if (cookie.Value.Length >= 8)
+                secrets.Add(cookie.Value);
+        }
+
+        Assert.NotEmpty(written);
+        var leaked = written.Any(line => secrets.Any(secret => line.Contains(secret, StringComparison.Ordinal)));
+        Assert.False(leaked, "The test output must never contain a password, an antiforgery token or a cookie value.");
+        Note("Secrets: the run wrote no password, antiforgery token or cookie value to the test output.");
+    }
+
+    /// <summary>
+    /// One synthetic tenant snapshot for the report flow: a client, an active enrollment with its membership charge,
+    /// one attended walk-in annotation with its charge, one annulled charge on that same annotation, one refund dated
+    /// today on the paid walk-in, an expense type and one expense inside each period. It writes only those rows, in one
+    /// transaction, and they are the only movements the chosen periods must account for.
+    /// </summary>
+    private static async Task SeedReportFixtureAsync(
+        SqlConnection connection, int businessId, DateOnly today, DateTime now)
+    {
+        var serviceId = await ScalarIntAsync(connection,
+            "SELECT TOP 1 Id FROM Services WHERE BusinessId = @businessId AND IsActive = 1 ORDER BY Id",
+            ("@businessId", businessId));
+        var workerId = await ScalarIntAsync(connection,
+            "SELECT TOP 1 Id FROM Workers WHERE BusinessId = @businessId AND IsActive = 1 ORDER BY Id",
+            ("@businessId", businessId));
+        Assert.True(serviceId > 0 && workerId > 0,
+            "The demo business must provide one active service and one active worker for the report snapshot.");
+
+        var startsAt = now.AddDays(-5);
+        var email = $"t19.report{Guid.NewGuid():N}@example.invalid";
+        var expenseTypeName = "T19 " + Guid.NewGuid().ToString("N")[..8];
+
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        var clientId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO Clients (BusinessId, FirstName, LastName, Email, Phone, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @firstName, @lastName, @email, @phone, @createdAt)
+            """,
+            ("@businessId", businessId), ("@firstName", "Synthetic"), ("@lastName", "T19Report"),
+            ("@email", email), ("@phone", "0000000000"), ("@createdAt", now));
+
+        var enrollmentId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO Enrollments (BusinessId, ClientId, WeeklyFrequency, Status, AgreedPrice, ReferenceDay, CreatedAt, ActivatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @clientId, 1, @status, @price, @referenceDay, @createdAt, @activatedAt)
+            """,
+            ("@businessId", businessId), ("@clientId", clientId), ("@status", EnrollmentStatus.Active),
+            ("@price", ReportMembershipCharge), ("@referenceDay", today.Day),
+            ("@createdAt", now), ("@activatedAt", now));
+
+        var appointmentId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO Appointments (BusinessId, Kind, ServiceId, WorkerId, GridClassId, StartsAt, EndsAt, MaxCapacity, Origin, Status, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @kind, @serviceId, @workerId, NULL, @startsAt, @endsAt, 1, @origin, @status, @createdAt)
+            """,
+            ("@businessId", businessId), ("@kind", AppointmentKind.Individual), ("@serviceId", serviceId),
+            ("@workerId", workerId), ("@startsAt", startsAt), ("@endsAt", startsAt.AddMinutes(60)),
+            ("@origin", AppointmentOrigin.WalkIn), ("@status", AppointmentStatus.Scheduled), ("@createdAt", now));
+
+        var bookingId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO Bookings (BusinessId, AppointmentId, ClientId, EnrollmentId, Modality, Status, AgreedPrice, CreatedAt, AttendanceRecordedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @appointmentId, @clientId, NULL, NULL, @status, @agreedPrice, @createdAt, @recordedAt)
+            """,
+            ("@businessId", businessId), ("@appointmentId", appointmentId), ("@clientId", clientId),
+            ("@status", BookingStatus.Attended), ("@agreedPrice", ReportWalkInCharge),
+            ("@createdAt", now), ("@recordedAt", startsAt));
+
+        await InsertIdAsync(connection, transaction, """
+            INSERT INTO Payments (BusinessId, ClientId, Concept, BookingId, EnrollmentId, Amount, ListPrice, PriceReason, PaidAt, RecordedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @clientId, @concept, NULL, @enrollmentId, @amount, @listPrice, NULL, @paidAt, @recordedAt)
+            """,
+            ("@businessId", businessId), ("@clientId", clientId), ("@concept", PaymentConcept.Membership),
+            ("@enrollmentId", enrollmentId), ("@amount", ReportMembershipCharge),
+            ("@listPrice", ReportMembershipCharge), ("@paidAt", now), ("@recordedAt", now));
+
+        var walkInPaymentId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO Payments (BusinessId, ClientId, Concept, BookingId, EnrollmentId, Amount, ListPrice, PriceReason, PaidAt, RecordedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @clientId, @concept, @bookingId, NULL, @amount, @listPrice, NULL, @paidAt, @recordedAt)
+            """,
+            ("@businessId", businessId), ("@clientId", clientId), ("@concept", PaymentConcept.WalkIn),
+            ("@bookingId", bookingId), ("@amount", ReportWalkInCharge),
+            ("@listPrice", ReportWalkInCharge), ("@paidAt", startsAt), ("@recordedAt", startsAt));
+
+        var annulledPaymentId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO Payments (BusinessId, ClientId, Concept, BookingId, EnrollmentId, Amount, ListPrice, PriceReason, PaidAt, RecordedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @clientId, @concept, @bookingId, NULL, @amount, @listPrice, NULL, @paidAt, @recordedAt)
+            """,
+            ("@businessId", businessId), ("@clientId", clientId), ("@concept", PaymentConcept.WalkIn),
+            ("@bookingId", bookingId), ("@amount", ReportAnnulledCharge),
+            ("@listPrice", ReportAnnulledCharge), ("@paidAt", now.AddDays(-3)), ("@recordedAt", now));
+
+        await InsertIdAsync(connection, transaction, """
+            INSERT INTO PaymentAnnulments (PaymentId, Reason, AnnulledAt, AnnulledBy)
+            OUTPUT INSERTED.Id
+            VALUES (@paymentId, @reason, @annulledAt, @annulledBy)
+            """,
+            ("@paymentId", annulledPaymentId), ("@reason", "Cobro mal registrado T19"),
+            ("@annulledAt", now), ("@annulledBy", "lucia.demo"));
+
+        await InsertIdAsync(connection, transaction, """
+            INSERT INTO Refunds (PaymentId, Amount, RefundedOn, Reason, RecordedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@paymentId, @amount, @refundedOn, @reason, @recordedAt)
+            """,
+            ("@paymentId", walkInPaymentId), ("@amount", ReportRefundAmount), ("@refundedOn", today),
+            ("@reason", "Devolución acordada T19"), ("@recordedAt", now));
+
+        var expenseTypeId = await InsertIdAsync(connection, transaction, """
+            INSERT INTO ExpenseTypes (BusinessId, Name, IsActive)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @name, 1)
+            """,
+            ("@businessId", businessId), ("@name", expenseTypeName));
+
+        await InsertIdAsync(connection, transaction, """
+            INSERT INTO Expenses (BusinessId, ExpenseTypeId, SpentOn, Amount, Description, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @expenseTypeId, @spentOn, @amount, @description, @createdAt)
+            """,
+            ("@businessId", businessId), ("@expenseTypeId", expenseTypeId), ("@spentOn", today.AddDays(-7)),
+            ("@amount", ReportPeriodExpense), ("@description", "Gasto del período T19"), ("@createdAt", now));
+
+        await InsertIdAsync(connection, transaction, """
+            INSERT INTO Expenses (BusinessId, ExpenseTypeId, SpentOn, Amount, Description, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @expenseTypeId, @spentOn, @amount, @description, @createdAt)
+            """,
+            ("@businessId", businessId), ("@expenseTypeId", expenseTypeId), ("@spentOn", today.AddDays(-20)),
+            ("@amount", ReportComparisonExpense), ("@description", "Gasto de comparación T19"), ("@createdAt", now));
+
+        await transaction.CommitAsync();
+    }
+
+    /// <summary>
+    /// Recomputes the three money buckets of one period straight from the isolated database, bounded by the same
+    /// business and the same inclusive days the report uses and leaving annulled payments out. It is the independent
+    /// answer the rendered report is compared against, so an unexpected movement of the demo data cannot change it.
+    /// </summary>
+    private static async Task<(decimal Payments, decimal Refunds, decimal Expenses)> ReadReportBucketsAsync(
+        SqlConnection connection, int businessId, DateOnly from, DateOnly to)
+    {
+        await using var command = CreateCommand(connection, """
+            SELECT
+                (SELECT COALESCE(SUM(p.Amount), 0)
+                   FROM Payments AS p
+                   LEFT JOIN PaymentAnnulments AS an ON an.PaymentId = p.Id
+                  WHERE p.BusinessId = @businessId AND an.Id IS NULL
+                    AND p.PaidAt >= @from AND p.PaidAt < @toExclusive),
+                (SELECT COALESCE(SUM(r.Amount), 0)
+                   FROM Refunds AS r
+                   JOIN Payments AS p ON p.Id = r.PaymentId AND p.BusinessId = @businessId
+                  WHERE r.RefundedOn >= @fromDate AND r.RefundedOn <= @to),
+                (SELECT COALESCE(SUM(e.Amount), 0)
+                   FROM Expenses AS e
+                  WHERE e.BusinessId = @businessId AND e.SpentOn >= @fromDate AND e.SpentOn <= @to)
+            """,
+            [("@businessId", businessId), ("@from", from), ("@toExclusive", to.AddDays(1)),
+             ("@fromDate", from), ("@to", to)]);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), "The bounded report bucket query must return one row.");
+        return (reader.GetDecimal(0), reader.GetDecimal(1), reader.GetDecimal(2));
+    }
+
+    /// <summary>
+    /// Counts every row a report must never touch, scoped to the business, so one read can be proven read-only instead
+    /// of merely assumed to be.
+    /// </summary>
+    private static async Task<(int Payments, int Refunds, int Annulments, int Expenses, int Bookings, int Appointments)>
+        CountReportWritesAsync(SqlConnection connection, int businessId)
+    {
+        await using var command = CreateCommand(connection, """
+            SELECT
+                (SELECT COUNT(*) FROM Payments WHERE BusinessId = @businessId),
+                (SELECT COUNT(*) FROM Refunds AS r
+                   JOIN Payments AS p ON p.Id = r.PaymentId AND p.BusinessId = @businessId),
+                (SELECT COUNT(*) FROM PaymentAnnulments AS a
+                   JOIN Payments AS p ON p.Id = a.PaymentId AND p.BusinessId = @businessId),
+                (SELECT COUNT(*) FROM Expenses WHERE BusinessId = @businessId),
+                (SELECT COUNT(*) FROM Bookings WHERE BusinessId = @businessId),
+                (SELECT COUNT(*) FROM Appointments WHERE BusinessId = @businessId)
+            """,
+            [("@businessId", businessId)]);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), "The report write probe must return one row.");
+        return (reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetInt32(4), reader.GetInt32(5));
+    }
+
+    /// <summary>
+    /// Reads the amount the report rendered right after one labelled line. The label is matched by an ASCII-safe
+    /// prefix because Razor encodes the accents of the Spanish labels as character references.
+    /// </summary>
+    private static string ExtractReportAmount(string html, string labelPrefix)
+    {
+        var match = Regex.Match(html,
+            "<strong>" + Regex.Escape(labelPrefix) + "[^<]*</strong>\\s*<span class=\"num\">(?<amount>[^<]*)</span>",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+            throw new InvalidOperationException($"The report page did not render the '{labelPrefix}' line.");
+        return match.Groups["amount"].Value;
+    }
+
+    /// <summary>Reads the comparison label and net amount the summary band renders, so both are asserted together.</summary>
+    private static (string Label, string Amount) ExtractComparisonSummary(string html)
+    {
+        var match = Regex.Match(html,
+            "<span class=\"label\">Comparaci[^<]*</span>\\s*<strong class=\"figure-sm\">(?<label>[^<]*)</strong>\\s*<span class=\"hint\">(?<amount>[^<]*)</span>",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+            throw new InvalidOperationException("The report page did not render the comparison summary of the period.");
+        return (match.Groups["label"].Value, match.Groups["amount"].Value);
+    }
+
+    /// <summary>
     /// The refused change wrote nothing: the enrollment still has its single open fixed window and no second row, so a
     /// rejected date never leaves a half-moved schedule behind.
     /// </summary>
@@ -2779,6 +3227,13 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
         await using var command = CreateCommand(connection, sql, args);
         var result = await command.ExecuteScalarAsync();
         return result is null or DBNull ? null : Convert.ToString(result, CultureInfo.InvariantCulture);
+    }
+
+    private static async Task<decimal> ScalarDecimalAsync(SqlConnection connection, string sql, params (string Name, object Value)[] args)
+    {
+        await using var command = CreateCommand(connection, sql, args);
+        var result = await command.ExecuteScalarAsync();
+        return result is null or DBNull ? 0m : Convert.ToDecimal(result, CultureInfo.InvariantCulture);
     }
 
     private static SqlCommand CreateCommand(SqlConnection connection, string sql, (string Name, object Value)[] args)
