@@ -1,0 +1,94 @@
+@using WorkUp.ViewModels.ClientPanel
+@model ClientAppointmentsViewModel
+@{
+    Layout = "_ClientLayout";
+    ViewData["Title"] = "Mis turnos y clases";
+}
+<section class="public-booking" aria-labelledby="client-appointments-title">
+    <h1 id="client-appointments-title">Mis turnos y clases</h1>
+    <p>Tus turnos individuales, tus clases fijas y tus clases sueltas en este negocio.</p>
+</section>
+
+<section aria-labelledby="client-appointments-upcoming">
+    <div class="section-header">
+        <h2 id="client-appointments-upcoming">Próximos</h2>
+        <span class="count">@Model.Upcoming.Count</span>
+    </div>
+    @if (!Model.HasUpcoming)
+    {
+        <div class="empty-state" role="status">
+            <p>@ClientAppointmentsViewModel.UpcomingEmptyMessage</p>
+        </div>
+    }
+    else
+    {
+        <ul class="rows" aria-label="Próximos turnos y clases">
+            @foreach (var item in Model.Upcoming)
+            {
+                <li class="row row-flat">
+                    <div class="row-main">
+                        <div class="row-title">
+                            <strong>@item.ServiceName</strong>
+                            <span class="muted">@item.KindLabel</span>
+                        </div>
+                        <div class="row-sub">
+                            <time datetime="@item.StartsAt.ToString("yyyy-MM-dd'T'HH:mm:ss")">@Formatting.LongDate(item.StartsAt)</time>
+                            · de @Formatting.Time(item.StartsAt) a @Formatting.Time(item.EndsAt) · @item.WorkerName
+                        </div>
+                        <div class="row-tags">
+                            <partial name="_StatusTag" model="item.Status" />
+                            @if (item.SuspensionStatus is { } suspension)
+                            {
+                                <partial name="_StatusTag" model="suspension" />
+                            }
+                        </div>
+                        @if (item.EligibilityLabel is { } eligibility)
+                        {
+                            <p class="row-sub">@eligibility</p>
+                        }
+                    </div>
+                </li>
+            }
+        </ul>
+    }
+</section>
+
+<section aria-labelledby="client-appointments-history">
+    <div class="section-header">
+        <h2 id="client-appointments-history">Historial</h2>
+        <span class="count">@Model.History.Count</span>
+    </div>
+    @if (!Model.HasHistory)
+    {
+        <div class="empty-state" role="status">
+            <p>@ClientAppointmentsViewModel.HistoryEmptyMessage</p>
+        </div>
+    }
+    else
+    {
+        <ul class="rows" aria-label="Turnos y clases anteriores">
+            @foreach (var item in Model.History)
+            {
+                <li class="row row-flat">
+                    <div class="row-main">
+                        <div class="row-title">
+                            <strong>@item.ServiceName</strong>
+                            <span class="muted">@item.KindLabel</span>
+                        </div>
+                        <div class="row-sub">
+                            <time datetime="@item.StartsAt.ToString("yyyy-MM-dd'T'HH:mm:ss")">@Formatting.LongDate(item.StartsAt)</time>
+                            · de @Formatting.Time(item.StartsAt) a @Formatting.Time(item.EndsAt) · @item.WorkerName
+                        </div>
+                        <div class="row-tags">
+                            <partial name="_StatusTag" model="item.Status" />
+                            @if (item.SuspensionStatus is { } suspension)
+                            {
+                                <partial name="_StatusTag" model="suspension" />
+                            }
+                        </div>
+                    </div>
+                </li>
+            }
+        </ul>
+    }
+</section>

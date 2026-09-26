@@ -332,15 +332,22 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         log.KeepSecret(ReadClientCookieValue(jar));
         log.Note("HTTP: correct credentials -> 302 to the client panel and the Client scheme cookie was issued.");
 
-        var (panelStatus, panelHtml) = await GetHtmlAsync(client, $"/r/{DemoSlug}/cuenta");
+        // T21 replaced the /cuenta placeholder with the real panel: the legacy URL now answers 302 to the safe agenda
+        // of the authenticated business, and the agenda itself is what renders for that business.
+        using (var panelRedirect = await client.GetAsync($"/r/{DemoSlug}/cuenta"))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, panelRedirect.StatusCode);
+            Assert.Equal($"/r/{DemoSlug}/mis-turnos", DescribeRedirect(panelRedirect));
+        }
+        var (panelStatus, panelHtml) = await GetHtmlAsync(client, $"/r/{DemoSlug}/mis-turnos");
         Assert.Equal(HttpStatusCode.OK, panelStatus);
-        Assert.Contains("client-panel-title", panelHtml, StringComparison.Ordinal);
+        Assert.Contains("client-appointments-title", panelHtml, StringComparison.Ordinal);
         using (var foreignPanel = await client.GetAsync($"/r/{OtherDemoSlug}/cuenta"))
         {
             Assert.Equal(HttpStatusCode.Redirect, foreignPanel.StatusCode);
             Assert.Equal($"/r/{OtherDemoSlug}/cuenta/ingresar", DescribeRedirect(foreignPanel));
         }
-        log.Note("HTTP: the panel answered 200 for its own business and redirected a foreign business slug to that business login.");
+        log.Note("HTTP: the legacy /cuenta URL redirected its own business to the agenda, the agenda answered 200, and a foreign business slug was redirected to that business login.");
 
         // --- Password recovery (RF-27) ---------------------------------------------------------------------
         var recoveryJar = new CookieContainer();

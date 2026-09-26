@@ -176,6 +176,10 @@ public static class ServiceRegistration
         services.AddScoped<IClientAccessRepository, SqlClientAccessRepository>();
         services.AddScoped<ClientAccessService>();
 
+        // Read-only client panel of the authenticated ficha: "Mis turnos y clases" (T21.1)
+        services.AddScoped<IClientPanelRepository, SqlClientPanelRepository>();
+        services.AddScoped<ClientPanelService>();
+
         return services;
     }
 

@@ -586,7 +586,10 @@ public sealed class ClientAccountControllerTests
         var result = controller.Index();
 
         Assert.Null(executing.Result);
-        Assert.IsType<ViewResult>(result);
+        // T21 replaced the placeholder with the real panel, so /cuenta now hands the client over to the safe agenda of
+        // the authenticated business. The target is the claim-scoped slug, never the route value.
+        var redirect = Assert.IsType<RedirectResult>(result);
+        Assert.Equal("/r/peluqueria/mis-turnos", redirect.Url);
         var authorize = typeof(ClientAccountHomeController).GetCustomAttribute<AuthorizeAttribute>(inherit: true);
         Assert.Equal(AuthSchemes.Client, authorize!.AuthenticationSchemes);
     }
