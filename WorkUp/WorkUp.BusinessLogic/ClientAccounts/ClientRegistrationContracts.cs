@@ -97,4 +97,23 @@ public static class ClientAccountUrlRules
             $"{VerificationPathPrefix}{Uri.EscapeDataString(slug)}/cuenta/restablecer/{Uri.EscapeDataString(token)}")
             .AbsoluteUri;
     }
+
+    /// <summary>
+    /// Invitation link of RF-26. It shares the public client-account prefix of the verification route and, like it,
+    /// derives exclusively from the configured <c>WorkUp:PublicBaseUrl</c>, so no request header can redirect an
+    /// owner-assisted invitation to an attacker-controlled host.
+    /// </summary>
+    public static string BuildInvitationUrl(string configuredBaseUrl, string slug, string token)
+    {
+        var validatedBaseUrl = ValidateBaseUrl(configuredBaseUrl);
+        if (string.IsNullOrWhiteSpace(slug))
+            throw new ArgumentException("A business slug is required.", nameof(slug));
+        if (string.IsNullOrWhiteSpace(token))
+            throw new ArgumentException("An invitation token is required.", nameof(token));
+
+        return new Uri(
+            validatedBaseUrl,
+            $"{VerificationPathPrefix}{Uri.EscapeDataString(slug)}/cuenta/invitacion/{Uri.EscapeDataString(token)}")
+            .AbsoluteUri;
+    }
 }
