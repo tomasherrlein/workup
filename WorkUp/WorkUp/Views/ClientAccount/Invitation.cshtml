@@ -16,7 +16,7 @@
 
     <form method="post" action="@action" class="form">
         @Html.AntiForgeryToken()
-        <input asp-for="Token" type="hidden" />
+        <input asp-for="Token" id="NewInvitationToken" type="hidden" />
         <input type="hidden" name="Mode" value="@ClientInvitationModes.NewAccount" />
         <h2>Crear mi cuenta</h2>
         <p>Elegí una contraseña para tu cuenta nueva de @ViewData["BusinessName"].</p>
@@ -38,13 +38,13 @@
 
     <form method="post" action="@action" class="form">
         @Html.AntiForgeryToken()
-        <input asp-for="Token" type="hidden" />
+        <input asp-for="Token" id="ExistingInvitationToken" type="hidden" />
         <input type="hidden" name="Mode" value="@ClientInvitationModes.ExistingAccount" />
         <h2>Ya tengo una cuenta</h2>
         <p>Si ya te registraste y todavía no confirmaste el email, ingresá con esa contraseña.</p>
         <div class="field">
-            <label asp-for="Password">Contraseña</label>
-            <input asp-for="Password" type="password" autocomplete="current-password" maxlength="100" required />
+            <label for="ExistingPassword">Contraseña</label>
+            <input asp-for="Password" id="ExistingPassword" type="password" autocomplete="current-password" maxlength="100" required />
             <span asp-validation-for="Password" class="field-error"></span>
         </div>
         <div class="actions">
