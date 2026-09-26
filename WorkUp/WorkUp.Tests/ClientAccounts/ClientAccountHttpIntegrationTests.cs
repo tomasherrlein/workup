@@ -28,7 +28,13 @@ namespace WorkUp.Tests.ClientAccounts;
 /// business slug is redirected to that business login, an unknown email gets the same recovery answer with no notice,
 /// a real recovery queues one link that survives a spoofed request Host, the reset POST without its anti-CSRF token is
 /// refused, the anti-CSRF reset spends the token and replaces the password hash, a replay refuses, and the old
-/// password stops opening a session while the new one does. A hostile return URL closes the open-redirect surface.
+/// password stops opening a session while the new one does. Between the sign-in and the recovery the smoke plants one
+/// future individual turn for the signed-in ficha and one turn of another ficha of the same business straight into
+/// the fresh database and drives the T21.2 panel actions: the agenda renders only the own row and its confirm/cancel
+/// forms, a scanner GET of the POST-only action routes writes nothing, confirm without its anti-CSRF token is refused,
+/// confirm with it persists <c>Confirmed</c>, a repeat keeps the original <c>ConfirmedAt</c>, another ficha's booking
+/// answers a generic 404, cancel persists <c>Cancelled</c> by the client without touching payments, and a late
+/// confirmation is refused. A hostile return URL closes the open-redirect surface.
 /// </para>
 /// <para>
 /// The fixture is opt-in through the pair <c>WORKUP_T20_HTTP_CONNECTION</c> and <c>WORKUP_T20_HTTP_KEYS_PATH</c>. Without
@@ -349,6 +355,138 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         }
         log.Note("HTTP: the legacy /cuenta URL redirected its own business to the agenda, the agenda answered 200, and a foreign business slug was redirected to that business login.");
 
+        // --- Own agenda and individual turn actions (T21.2, RF-08, RF-22) -----------------------------------
+        // One own future individual reserved turn and one turn of another ficha of the same business are planted
+        // straight into the fresh fixture database. The identity used to plant the own turn is the trusted ClientId
+        // read from the verified account row; the session email is never used to resolve who the client is, and the
+        // service and worker belong to the seeded demo tenant. The foreign email is synthetic and stays a secret.
+        var otherEmail = $"t21other{Guid.NewGuid():N}@example.invalid";
+        log.KeepSecret(otherEmail);
+        var seeded = await SeedClientTurnAsync(connection, businessId, clientId, otherEmail);
+        var ownConfirmPath = $"/r/{DemoSlug}/mis-turnos/{seeded.OwnBookingId}/confirmar";
+        var ownCancelPath = $"/r/{DemoSlug}/mis-turnos/{seeded.OwnBookingId}/cancelar";
+        var foreignConfirmPath = $"/r/{DemoSlug}/mis-turnos/{seeded.OtherBookingId}/confirmar";
+        var bookingsBefore = await ReadBookingStatesAsync(connection, businessId);
+        var paymentsBefore = await ReadPaymentStatesAsync(connection, businessId);
+        log.Note($"SQL: seeded own pending individual turn #{seeded.OwnBookingId} and a foreign ficha turn #{seeded.OtherBookingId} of business #{businessId} into the fresh database.");
+
+        // The real GET shows only the session's own row: the foreign ficha's booking id never reaches the page.
+        var (agendaStatus, agendaHtml) = await GetHtmlAsync(client, $"/r/{DemoSlug}/mis-turnos");
+        Assert.Equal(HttpStatusCode.OK, agendaStatus);
+        Assert.Contains("client-appointments-title", agendaHtml, StringComparison.Ordinal);
+        Assert.Contains(ownConfirmPath, agendaHtml, StringComparison.Ordinal);
+        Assert.Contains($"/mis-turnos/{seeded.OwnBookingId}/cancelar", agendaHtml, StringComparison.Ordinal);
+        Assert.True(!agendaHtml.Contains($"/mis-turnos/{seeded.OtherBookingId}/", StringComparison.Ordinal),
+            "The own agenda must never render a row, a label or a form for another ficha's booking.");
+        // The labels show the intention and both wired actions; an ASCII-safe fragment is used because Razor may
+        // escape the accented character of the sentence. The confirm and cancel forms exist only for the own turn.
+        Assert.Contains("confirmar que vas a asistir o cancelar.", agendaHtml, StringComparison.Ordinal);
+        Assert.Contains("Confirmar que voy a asistir", agendaHtml, StringComparison.Ordinal);
+        Assert.Contains("Cancelar turno", agendaHtml, StringComparison.Ordinal);
+        Assert.Equal(new[] { seeded.OwnBookingId }, ExtractActionBookingIds(agendaHtml));
+        Assert.Equal(1, CountOccurrences(agendaHtml, ownConfirmPath));
+        Assert.Equal(1, CountOccurrences(agendaHtml, ownCancelPath));
+        log.Note("HTTP: the agenda rendered the own future individual turn with its intention label and its confirm/cancel forms, and no row or form for the foreign ficha.");
+
+        // A GET is a pure read: the router may answer 404 or 405 for a POST-only route, but neither can write.
+        Assert.Equal(bookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        foreach (var scannerPath in new[] { ownConfirmPath, ownCancelPath })
+        {
+            using var prefetch = await client.GetAsync(scannerPath);
+            Assert.True(prefetch.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed,
+                $"A scanner GET of a POST-only route must be refused; got {(int)prefetch.StatusCode}.");
+        }
+        Assert.Equal(bookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        log.Note("HTTP/SQL: GET of the panel and scanner GETs of both POST-only action routes were refused without changing any booking.");
+
+        var agendaAntiforgery = ExtractAntiforgeryToken(agendaHtml);
+        log.KeepSecret(agendaAntiforgery);
+
+        // Without its anti-CSRF token the confirm POST is refused before any row is touched (RF-08).
+        using (var noTokenConfirm = await client.PostAsync(ownConfirmPath, Form(new Dictionary<string, string>())))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, noTokenConfirm.StatusCode);
+        }
+        var afterNoTokenConfirm = await ReadBookingStateAsync(connection, seeded.OwnBookingId);
+        Assert.Equal((byte)BookingStatus.Pending, afterNoTokenConfirm.Status);
+        Assert.Null(afterNoTokenConfirm.ConfirmedAt);
+        Assert.Null(afterNoTokenConfirm.CancelledAt);
+        Assert.Equal((byte)BookingStatus.Pending, (await ReadBookingStateAsync(connection, seeded.OtherBookingId)).Status);
+        log.Note("HTTP/SQL: the confirm POST without its anti-CSRF token -> 400 and neither booking row moved.");
+
+        using (var confirm = await client.PostAsync(ownConfirmPath, Form(new Dictionary<string, string>
+               {
+                   ["__RequestVerificationToken"] = agendaAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, confirm.StatusCode);
+            Assert.Equal($"/r/{DemoSlug}/mis-turnos", DescribeRedirect(confirm));
+        }
+        var afterConfirm = await ReadBookingStateAsync(connection, seeded.OwnBookingId);
+        Assert.Equal((byte)BookingStatus.Confirmed, afterConfirm.Status);
+        Assert.NotNull(afterConfirm.ConfirmedAt);
+        Assert.Null(afterConfirm.CancelledAt);
+        Assert.Null(afterConfirm.CancelledBy);
+        var confirmedAt = afterConfirm.ConfirmedAt;
+        log.Note($"SQL: confirm -> 302 and booking #{seeded.OwnBookingId} persisted Confirmed with ConfirmedAt set.");
+
+        // RF-08 step 2: repeating the confirmation is a no-op that keeps the original ConfirmedAt.
+        using (var repeatConfirm = await client.PostAsync(ownConfirmPath, Form(new Dictionary<string, string>
+               {
+                   ["__RequestVerificationToken"] = agendaAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, repeatConfirm.StatusCode);
+        }
+        var afterRepeatConfirm = await ReadBookingStateAsync(connection, seeded.OwnBookingId);
+        Assert.Equal((byte)BookingStatus.Confirmed, afterRepeatConfirm.Status);
+        Assert.Equal(confirmedAt, afterRepeatConfirm.ConfirmedAt);
+        Assert.Null(afterRepeatConfirm.CancelledAt);
+        log.Note("SQL: repeating the confirmation -> 302 and the original ConfirmedAt did not move.");
+
+        // Another ficha's booking answers the same generic 404 as one that does not exist, even with a valid token.
+        using (var foreign = await client.PostAsync(foreignConfirmPath, Form(new Dictionary<string, string>
+               {
+                   ["__RequestVerificationToken"] = agendaAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
+        }
+        var untouchedForeign = await ReadBookingStateAsync(connection, seeded.OtherBookingId);
+        Assert.Equal((byte)BookingStatus.Pending, untouchedForeign.Status);
+        Assert.Null(untouchedForeign.ConfirmedAt);
+        Assert.Null(untouchedForeign.CancelledAt);
+        log.Note("HTTP/SQL: confirming another ficha's booking, even with a valid token -> 404 and its row stayed Pending.");
+
+        using (var cancel = await client.PostAsync(ownCancelPath, Form(new Dictionary<string, string>
+               {
+                   ["__RequestVerificationToken"] = agendaAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, cancel.StatusCode);
+            Assert.Equal($"/r/{DemoSlug}/mis-turnos", DescribeRedirect(cancel));
+        }
+        var afterCancel = await ReadBookingStateAsync(connection, seeded.OwnBookingId);
+        Assert.Equal((byte)BookingStatus.Cancelled, afterCancel.Status);
+        Assert.Equal((byte)CancelledBy.Client, afterCancel.CancelledBy);
+        Assert.NotNull(afterCancel.CancelledAt);
+        Assert.Equal(confirmedAt, afterCancel.ConfirmedAt);
+        // RF-22 and D-24: cancelling touches the booking only; every payment row of the business stays as it was.
+        Assert.Equal(paymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
+        log.Note($"SQL: cancel -> 302, booking #{seeded.OwnBookingId} became Cancelled by Client and no payment row moved.");
+
+        // A confirmation that arrives after the cancellation is refused and writes nothing.
+        using (var lateConfirm = await client.PostAsync(ownConfirmPath, Form(new Dictionary<string, string>
+               {
+                   ["__RequestVerificationToken"] = agendaAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, lateConfirm.StatusCode);
+            Assert.Equal($"/r/{DemoSlug}/mis-turnos", DescribeRedirect(lateConfirm));
+        }
+        Assert.Equal(afterCancel, await ReadBookingStateAsync(connection, seeded.OwnBookingId));
+        log.Note("HTTP/SQL: confirming after the cancellation redirected back to the agenda and the cancelled row did not move.");
+
         // --- Password recovery (RF-27) ---------------------------------------------------------------------
         var recoveryJar = new CookieContainer();
         using var recoveryClient = CreateBrowser(baseUrl, recoveryJar);
@@ -641,6 +779,29 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         return value.Groups[1].Value;
     }
 
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        var count = 0;
+        var index = haystack.IndexOf(needle, StringComparison.Ordinal);
+        while (index >= 0)
+        {
+            count++;
+            index = haystack.IndexOf(needle, index + needle.Length, StringComparison.Ordinal);
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Distinct booking ids the rendered panel targets with a confirm or cancel form. It is the whole set of ficha
+    /// rows the page exposes an action for, so an equality assertion proves the page wired forms for exactly one row.
+    /// </summary>
+    private static int[] ExtractActionBookingIds(string html) =>
+        Regex.Matches(html, "/mis-turnos/(\\d+)/(?:confirmar|cancelar)", RegexOptions.CultureInvariant)
+            .Select(match => int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture))
+            .Distinct()
+            .ToArray();
+
     private static string LinkFrom(string bodyHtml)
     {
         var match = Regex.Match(bodyHtml, "href=\"([^\"]+)\"", RegexOptions.CultureInvariant);
@@ -726,6 +887,128 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
                 reader.GetString(4),
                 reader.GetString(5)));
         }
+        return rows;
+    }
+
+    /// <summary>
+    /// Plants one own future individual reserved turn and one turn of another ficha of the same business straight
+    /// into the fresh fixture database. The own ficha is the trusted <paramref name="clientId"/> read from the
+    /// verified account row, never resolved from the session email; both turns use an active individual service and
+    /// an active worker of the seeded demo tenant, so the panel and the action service see a legitimate turn.
+    /// </summary>
+    private static async Task<SeededClientTurn> SeedClientTurnAsync(
+        SqlConnection connection, int businessId, int clientId, string otherEmail)
+    {
+        // Business-local now, computed exactly like the host clock, so the planted starts stay in the future for the
+        // environment the requests run against whatever the machine time zone is.
+        var businessNow = TimeZoneInfo.ConvertTimeFromUtc(
+            DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("America/Argentina/Buenos_Aires"));
+
+        var serviceId = await ScalarIntAsync(connection,
+            "SELECT TOP (1) Id FROM Services WHERE BusinessId = @businessId AND MaxCapacity = 1 AND IsActive = 1 ORDER BY Id",
+            ("@businessId", businessId));
+        Assert.True(serviceId > 0, "The seeded demo tenant must have an active individual service for this checkpoint.");
+        var workerId = await ScalarIntAsync(connection,
+            "SELECT TOP (1) Id FROM Workers WHERE BusinessId = @businessId AND IsActive = 1 ORDER BY Id",
+            ("@businessId", businessId));
+        Assert.True(workerId > 0, "The seeded demo tenant must have an active worker for this checkpoint.");
+
+        var otherClientId = await ScalarIntAsync(connection,
+            """
+            INSERT INTO Clients (BusinessId, FirstName, LastName, Email, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, 'Synthetic', 'T21Other', @email, @createdAt)
+            """,
+            ("@businessId", businessId), ("@email", otherEmail), ("@createdAt", businessNow));
+
+        var ownAppointmentId = await InsertIndividualTurnAsync(
+            connection, businessId, serviceId, workerId, businessNow.Date.AddDays(30).AddHours(10), businessNow);
+        var otherAppointmentId = await InsertIndividualTurnAsync(
+            connection, businessId, serviceId, workerId, businessNow.Date.AddDays(30).AddHours(12), businessNow);
+
+        var ownBookingId = await InsertPendingTurnBookingAsync(connection, businessId, ownAppointmentId, clientId, businessNow);
+        var otherBookingId = await InsertPendingTurnBookingAsync(connection, businessId, otherAppointmentId, otherClientId, businessNow);
+
+        // The planted rows are what the assertions rely on: the own turn belongs to the trusted ficha and the other
+        // one belongs to a different ficha of the same business, so a scoping defect is what could surface it.
+        Assert.Equal(clientId, await ScalarIntAsync(connection, "SELECT ClientId FROM Bookings WHERE Id = @id", ("@id", ownBookingId)));
+        Assert.NotEqual(clientId, await ScalarIntAsync(connection, "SELECT ClientId FROM Bookings WHERE Id = @id", ("@id", otherBookingId)));
+        return new SeededClientTurn(ownBookingId, otherBookingId);
+    }
+
+    private static Task<int> InsertIndividualTurnAsync(
+        SqlConnection connection, int businessId, int serviceId, int workerId, DateTime startsAt, DateTime createdAt)
+    {
+        Assert.True(startsAt > createdAt, "A seeded individual turn must start in the future of the host clock.");
+        return ScalarIntAsync(connection,
+            """
+            INSERT INTO Appointments
+                        (BusinessId, Kind, ServiceId, WorkerId, GridClassId, StartsAt, EndsAt, MaxCapacity, Origin, Status, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @kind, @serviceId, @workerId, NULL, @startsAt, @endsAt, 1, @origin, @status, @createdAt)
+            """,
+            ("@businessId", businessId), ("@kind", (byte)AppointmentKind.Individual), ("@serviceId", serviceId),
+            ("@workerId", workerId), ("@startsAt", startsAt), ("@endsAt", startsAt.AddMinutes(30)),
+            ("@origin", (byte)AppointmentOrigin.Reserved), ("@status", (byte)AppointmentStatus.Scheduled),
+            ("@createdAt", createdAt));
+    }
+
+    private static Task<int> InsertPendingTurnBookingAsync(
+        SqlConnection connection, int businessId, int appointmentId, int clientId, DateTime createdAt) =>
+        ScalarIntAsync(connection,
+            """
+            INSERT INTO Bookings (BusinessId, AppointmentId, ClientId, EnrollmentId, Modality, Status, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @appointmentId, @clientId, NULL, NULL, @status, @createdAt)
+            """,
+            ("@businessId", businessId), ("@appointmentId", appointmentId), ("@clientId", clientId),
+            ("@status", (byte)BookingStatus.Pending), ("@createdAt", createdAt));
+
+    private static async Task<BookingStateRow> ReadBookingStateAsync(SqlConnection connection, int bookingId)
+    {
+        await using var command = CreateCommand(connection,
+            "SELECT Status, ConfirmedAt, CancelledAt, CancelledBy FROM Bookings WHERE Id = @bookingId",
+            [("@bookingId", bookingId)]);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), $"Seeded booking {bookingId} was not found.");
+        return ReadBookingStateRow(reader, bookingId, offset: 0);
+    }
+
+    private static async Task<IReadOnlyList<BookingStateRow>> ReadBookingStatesAsync(SqlConnection connection, int businessId)
+    {
+        await using var command = CreateCommand(connection,
+            "SELECT Id, Status, ConfirmedAt, CancelledAt, CancelledBy FROM Bookings WHERE BusinessId = @businessId ORDER BY Id",
+            [("@businessId", businessId)]);
+        await using var reader = await command.ExecuteReaderAsync();
+        var rows = new List<BookingStateRow>();
+        while (await reader.ReadAsync())
+            rows.Add(ReadBookingStateRow(reader, reader.GetInt32(0), offset: 1));
+        return rows;
+    }
+
+    private static BookingStateRow ReadBookingStateRow(SqlDataReader reader, int bookingId, int offset) => new(
+        bookingId,
+        reader.GetByte(offset),
+        reader.IsDBNull(offset + 1) ? null : reader.GetDateTime(offset + 1),
+        reader.IsDBNull(offset + 2) ? null : reader.GetDateTime(offset + 2),
+        reader.IsDBNull(offset + 3) ? null : reader.GetByte(offset + 3));
+
+    private static async Task<IReadOnlyList<PaymentStateRow>> ReadPaymentStatesAsync(SqlConnection connection, int businessId)
+    {
+        await using var command = CreateCommand(connection,
+            "SELECT Id, BookingId, Amount, PaidAt FROM Payments WHERE BusinessId = @businessId ORDER BY Id",
+            [("@businessId", businessId)]);
+        await using var reader = await command.ExecuteReaderAsync();
+        var rows = new List<PaymentStateRow>();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(new PaymentStateRow(
+                reader.GetInt32(0),
+                reader.IsDBNull(1) ? null : reader.GetInt32(1),
+                reader.GetDecimal(2),
+                reader.GetDateTime(3)));
+        }
+
         return rows;
     }
 
@@ -1088,4 +1371,10 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
     private sealed record TokenRow(int Id, byte Purpose, byte[] Hash, DateTime ExpiresAt, DateTime? UsedAt);
 
     private sealed record NotificationRow(int Id, byte Type, string Recipient, string Subject, string BodyHtml, string DedupKey);
+
+    private sealed record SeededClientTurn(int OwnBookingId, int OtherBookingId);
+
+    private sealed record BookingStateRow(int Id, byte Status, DateTime? ConfirmedAt, DateTime? CancelledAt, byte? CancelledBy);
+
+    private sealed record PaymentStateRow(int Id, int? BookingId, decimal Amount, DateTime PaidAt);
 }

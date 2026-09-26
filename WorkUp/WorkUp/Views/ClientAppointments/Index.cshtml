@@ -46,6 +46,28 @@
                         {
                             <p class="row-sub">@eligibility</p>
                         }
+                        @if (item.CanConfirmIntention || (item.CanCancel && item.IsIndividualTurn))
+                        {
+                            @* T21.2 wires only the individual turn. The drop-in cancel arrives in T21.3, so the
+                               typed shift derived from the appointment kind decides the action; a fixed class keeps
+                               its place and no form is rendered for it. *@
+                            <div class="row-actions">
+                                @if (item.CanConfirmIntention)
+                                {
+                                    <form method="post" action="/r/@Model.Slug/mis-turnos/@item.BookingId/confirmar">
+                                        @Html.AntiForgeryToken()
+                                        <button type="submit" class="btn">Confirmar que voy a asistir</button>
+                                    </form>
+                                }
+                                @if (item.CanCancel && item.IsIndividualTurn)
+                                {
+                                    <form method="post" action="/r/@Model.Slug/mis-turnos/@item.BookingId/cancelar">
+                                        @Html.AntiForgeryToken()
+                                        <button type="submit" class="btn">Cancelar turno</button>
+                                    </form>
+                                }
+                            </div>
+                        }
                     </div>
                 </li>
             }

@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Routing;
 using WorkUp.BusinessLogic.Scheduling;
 using WorkUp.Controllers;
@@ -17,12 +18,13 @@ using WorkUp.ViewModels.Shared;
 namespace WorkUp.Tests.Scheduling;
 
 /// <summary>
-/// Read-only "Mis turnos y clases" of the authenticated client panel (T21.1, RF-08, RF-22). These are unit tests over
+/// The authenticated client's own panel (T21.1, T21.2, RF-08, RF-22). These are unit tests over
 /// the real controller, the real <see cref="ClientPanelService"/> and an in-memory repository: no DI container, no
 /// routing pipeline and no HTTP server. What only this layer can prove is pinned here: the identity comes from the
 /// session cookie and never from the request, the panel of another business is refused before the action runs, the
-/// rows are mapped to a safe view model with a deterministic order and accessible empty states, and the surface stays
-/// read-only. The exact start of a booking belongs to history and offers no action.
+/// rows are mapped to a safe view model with a deterministic order and accessible empty states, and the individual
+/// turn actions stay POST-only, antiforgery-guarded and gated on the typed kind rather than on a display label. The
+/// exact start of a booking belongs to history and offers no action.
 /// </summary>
 public sealed class ClientAppointmentsControllerTests
 {
@@ -32,6 +34,8 @@ public sealed class ClientAppointmentsControllerTests
     private const int ClientId = 7;
     private const int OtherClientId = 8;
     private const int OtherBusinessId = 2;
+    private const int BookingId = 12;
+    private const int WorkerId = 2;
     private static readonly DateTime Now = new(2026, 3, 10, 9, 0, 0);
 
     private static ClientPanelBookingRecord Row(
@@ -193,12 +197,14 @@ public sealed class ClientAppointmentsControllerTests
         Assert.Equal(StatusTag.For(BookingStatus.Pending), byId[1].Status);
         Assert.True(byId[1].CanConfirmIntention);
         Assert.True(byId[1].CanCancel);
-        Assert.Equal("Podés confirmar tu asistencia o cancelar.", byId[1].EligibilityLabel);
+        // RF-08 confirms an intention, not attendance, so the sentence names what the person will do.
+        Assert.Equal("Podés confirmar que vas a asistir o cancelar.", byId[1].EligibilityLabel);
 
-        // A drop-in is cancellable but never asks for an intention; a confirmed individual turn is cancellable too.
+        // A drop-in is cancellable in the domain, but the panel only wires its cancel in T21.3: a row without a
+        // button must not announce the action.
         Assert.False(byId[2].CanConfirmIntention);
         Assert.True(byId[2].CanCancel);
-        Assert.Equal("Podés cancelar.", byId[2].EligibilityLabel);
+        Assert.Null(byId[2].EligibilityLabel);
         Assert.True(byId[3].CanCancel);
 
         // A fixed class date keeps its place and a suspended session offers nothing (RF-21, T21 scope).
@@ -207,6 +213,42 @@ public sealed class ClientAppointmentsControllerTests
         Assert.False(byId[5].CanConfirmIntention);
         Assert.False(byId[5].CanCancel);
         Assert.NotNull(byId[5].SuspensionStatus);
+    }
+
+    [Fact]
+    public async Task Index_derives_the_individual_turn_flag_from_the_appointment_kind_and_not_the_display_label()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, Row(1, Now.AddHours(1)));
+        repository.Add(BusinessId, ClientId, Row(2, Now.AddHours(2), AppointmentKind.ClassSession, BookingModality.Fixed));
+        repository.Add(BusinessId, ClientId, Row(3, Now.AddHours(3), AppointmentKind.ClassSession, BookingModality.DropIn));
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository);
+
+        var model = await IndexAsync(controller);
+        var byId = model.Upcoming.ToDictionary(row => row.BookingId);
+
+        // The label is display text only: every action gate uses the typed shape derived from the appointment kind.
+        Assert.True(byId[1].IsIndividualTurn);
+        Assert.False(byId[2].IsIndividualTurn);
+        Assert.False(byId[3].IsIndividualTurn);
+    }
+
+    [Fact]
+    public async Task Index_does_not_promise_a_cancel_action_the_panel_cannot_wire_yet()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(
+            BusinessId, ClientId, Row(1, Now.AddHours(1), AppointmentKind.ClassSession, BookingModality.DropIn));
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository);
+
+        var model = await IndexAsync(controller);
+        var row = Assert.Single(model.Upcoming);
+
+        // The domain says a drop-in can be cancelled, but the panel only wires it in T21.3: there is no button, so
+        // the row must not announce the action.
+        Assert.True(row.CanCancel);
+        Assert.False(row.IsIndividualTurn);
+        Assert.Null(row.EligibilityLabel);
     }
 
     [Fact]
@@ -242,25 +284,217 @@ public sealed class ClientAppointmentsControllerTests
         Assert.DoesNotContain(rowFields, name => name.Contains("Slug", StringComparison.OrdinalIgnoreCase));
     }
 
-    // --- The surface stays read-only -----------------------------------------------------------------------------
+    // --- The agenda read stays a GET and the mutations are POST-only antiforgery routes -------------------------
 
     [Fact]
-    public void The_panel_declares_only_get_actions_and_no_write_verb()
+    public void The_index_action_stays_a_get_and_never_mutates_state()
     {
-        var actions = typeof(ClientAppointmentsController)
-            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-            .Where(method => method.DeclaringType == typeof(ClientAppointmentsController) && !method.IsSpecialName)
-            .ToArray();
-
-        var writeVerbs = new[]
-        {
-            typeof(HttpPostAttribute), typeof(HttpPutAttribute), typeof(HttpPatchAttribute), typeof(HttpDeleteAttribute)
-        };
-        Assert.DoesNotContain(actions, action => writeVerbs.Any(verb => action.GetCustomAttribute(verb) is not null));
-
         var index = typeof(ClientAppointmentsController).GetMethod(nameof(ClientAppointmentsController.Index))!;
         Assert.NotNull(index.GetCustomAttribute<HttpGetAttribute>());
         Assert.NotNull(index.GetCustomAttribute<HttpGetAttribute>()!.Template);
+    }
+
+    [Fact]
+    public void The_controller_route_keeps_the_mutations_under_the_own_agenda_of_the_authenticated_slug()
+    {
+        var route = typeof(ClientAppointmentsController).GetCustomAttribute<RouteAttribute>();
+        Assert.NotNull(route);
+        Assert.Equal("r/{slug}/mis-turnos", route!.Template);
+    }
+
+    [Theory]
+    [InlineData(nameof(ClientAppointmentsController.Confirm), "confirmar")]
+    [InlineData(nameof(ClientAppointmentsController.Cancel), "cancelar")]
+    public void The_mutations_are_post_only_antiforgery_endpoints_with_the_booking_id_in_the_route(
+        string methodName, string tail)
+    {
+        var method = typeof(ClientAppointmentsController).GetMethod(methodName)!;
+
+        var post = method.GetCustomAttribute<HttpPostAttribute>();
+        Assert.NotNull(post);
+        Assert.Equal($"{{bookingId:int}}/{tail}", post!.Template);
+        Assert.NotNull(method.GetCustomAttribute<ValidateAntiForgeryTokenAttribute>());
+        Assert.Null(method.GetCustomAttribute<HttpGetAttribute>());
+    }
+
+    [Theory]
+    [InlineData(nameof(ClientAppointmentsController.Confirm))]
+    [InlineData(nameof(ClientAppointmentsController.Cancel))]
+    public void The_mutations_take_only_the_booking_id_from_the_request(string methodName)
+    {
+        var method = typeof(ClientAppointmentsController).GetMethod(methodName)!;
+
+        var routeParameter = Assert.Single(
+            method.GetParameters(), parameter => parameter.ParameterType != typeof(CancellationToken));
+        Assert.Equal("bookingId", routeParameter.Name);
+        Assert.Equal(typeof(int), routeParameter.ParameterType);
+        foreach (var forbidden in new[] { "client", "business", "slug", "email", "token" })
+            Assert.DoesNotContain(forbidden, routeParameter.Name!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // --- Identity of a mutation comes only from the session cookie ----------------------------------------------
+
+    [Theory]
+    [InlineData(nameof(ClientAppointmentsController.Confirm))]
+    [InlineData(nameof(ClientAppointmentsController.Cancel))]
+    public async Task A_booking_of_another_ficha_or_another_tenant_is_a_generic_not_found(string methodName)
+    {
+        var actions = new RecordingClientBookingActionsRepository();
+        actions.Add(BusinessId, OtherClientId, ActionState());
+        actions.Add(OtherBusinessId, ClientId, ActionState());
+        var controller = CreateController(
+            Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(), actions);
+
+        var result = await Invoke(controller, methodName, BookingId);
+
+        // A foreign row is indistinguishable from a row that does not exist: the response never leaks existence.
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Null(controller.TempData["FlashMessage"]);
+        Assert.Equal(0, actions.Inner.ConfirmWriteCount);
+        Assert.Equal(0, actions.Inner.CancelWriteCount);
+    }
+
+    [Fact]
+    public async Task Confirm_passes_the_business_and_client_of_the_cookie_to_the_service()
+    {
+        var actions = new RecordingClientBookingActionsRepository();
+        actions.Add(BusinessId, ClientId, ActionState());
+        var controller = CreateController(
+            Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(), actions);
+
+        await controller.Confirm(BookingId, CancellationToken.None);
+
+        Assert.Equal((BusinessId, ClientId, BookingId), Assert.Single(actions.Calls));
+    }
+
+    // --- Valid future flows mutate and come back to the own agenda ----------------------------------------------
+
+    [Fact]
+    public async Task Confirm_of_an_own_pending_future_turn_confirms_it_and_returns_with_a_success_flash()
+    {
+        var actions = new RecordingClientBookingActionsRepository();
+        actions.Add(BusinessId, ClientId, ActionState());
+        var controller = CreateController(
+            Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(), actions);
+
+        var result = await controller.Confirm(BookingId, CancellationToken.None);
+
+        Assert.Equal("/r/peluqueria/mis-turnos", Assert.IsType<RedirectResult>(result).Url);
+        Assert.Equal("Success", controller.TempData["FlashType"]);
+        Assert.Equal("Confirmaste que vas a asistir.", controller.TempData["FlashMessage"]);
+        Assert.Equal(BookingStatus.Confirmed, actions.Inner.Get(BusinessId, ClientId, BookingId)!.BookingStatus);
+        Assert.Equal(1, actions.Inner.ConfirmWriteCount);
+    }
+
+    [Fact]
+    public async Task Confirm_of_an_already_confirmed_own_turn_is_a_noop_success_that_returns_to_the_agenda()
+    {
+        var actions = new RecordingClientBookingActionsRepository();
+        actions.Add(BusinessId, ClientId, ActionState(BookingStatus.Confirmed, Now.AddMinutes(-30)));
+        var controller = CreateController(
+            Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(), actions);
+
+        var result = await controller.Confirm(BookingId, CancellationToken.None);
+
+        Assert.Equal("/r/peluqueria/mis-turnos", Assert.IsType<RedirectResult>(result).Url);
+        Assert.Equal("Success", controller.TempData["FlashType"]);
+        Assert.Equal(0, actions.Inner.ConfirmWriteCount);
+    }
+
+    [Fact]
+    public async Task Cancel_of_an_own_confirmed_future_turn_cancels_it_and_returns_with_a_success_flash()
+    {
+        var actions = new RecordingClientBookingActionsRepository();
+        actions.Add(BusinessId, ClientId, ActionState(BookingStatus.Confirmed, Now.AddMinutes(-30)));
+        var controller = CreateController(
+            Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(), actions);
+
+        var result = await controller.Cancel(BookingId, CancellationToken.None);
+
+        Assert.Equal("/r/peluqueria/mis-turnos", Assert.IsType<RedirectResult>(result).Url);
+        Assert.Equal("Success", controller.TempData["FlashType"]);
+        Assert.Equal("Cancelaste tu turno.", controller.TempData["FlashMessage"]);
+        var stored = actions.Inner.Get(BusinessId, ClientId, BookingId)!;
+        Assert.Equal(BookingStatus.Cancelled, stored.BookingStatus);
+        Assert.Equal(CancelledBy.Client, stored.CancelledBy);
+        Assert.Equal(1, actions.Inner.CancelWriteCount);
+    }
+
+    // --- The exact start and the invalid states are refused without writing ---------------------------------------
+
+    [Fact]
+    public async Task Confirm_of_an_own_turn_starting_exactly_now_is_refused_with_a_safe_flash_and_no_write()
+    {
+        var actions = new RecordingClientBookingActionsRepository();
+        actions.Add(BusinessId, ClientId, ActionState(startsAt: Now));
+        var controller = CreateController(
+            Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(), actions,
+            new FakeClock { Now = Now });
+
+        var result = await controller.Confirm(BookingId, CancellationToken.None);
+
+        Assert.Equal("/r/peluqueria/mis-turnos", Assert.IsType<RedirectResult>(result).Url);
+        Assert.Equal("Error", controller.TempData["FlashType"]);
+        Assert.Equal("No se puede confirmar este turno.", controller.TempData["FlashMessage"]);
+        Assert.Equal(0, actions.Inner.ConfirmWriteCount);
+    }
+
+    [Fact]
+    public async Task Cancel_of_an_own_turn_that_already_started_is_refused_with_a_safe_flash_and_no_write()
+    {
+        var actions = new RecordingClientBookingActionsRepository();
+        actions.Add(BusinessId, ClientId, ActionState(startsAt: Now.AddHours(-1)));
+        var controller = CreateController(
+            Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(), actions);
+
+        var result = await controller.Cancel(BookingId, CancellationToken.None);
+
+        Assert.Equal("/r/peluqueria/mis-turnos", Assert.IsType<RedirectResult>(result).Url);
+        Assert.Equal("Error", controller.TempData["FlashType"]);
+        Assert.Equal("No se puede cancelar este turno.", controller.TempData["FlashMessage"]);
+        Assert.Equal(0, actions.Inner.CancelWriteCount);
+    }
+
+    // --- The view wires the actions only for the individual-turn flags and exposes no private link ---------------
+
+    [Fact]
+    public void The_agenda_view_gates_the_post_forms_on_the_typed_kind_and_the_token()
+    {
+        var view = ReadClientAppointmentsView("Index.cshtml");
+
+        // The gate is the typed shape derived from AppointmentKind, never the localized display label: renaming
+        // "Turno individual" must not be able to switch the cancel action off.
+        Assert.Contains("item.IsIndividualTurn", view);
+        Assert.DoesNotContain("KindLabel ==", view);
+        Assert.DoesNotContain("Turno individual\"", view);
+
+        var confirmGate = view.IndexOf("item.CanConfirmIntention", StringComparison.Ordinal);
+        var confirmMarker = view.IndexOf("/mis-turnos/@item.BookingId/confirmar", StringComparison.Ordinal);
+        Assert.True(confirmGate >= 0, "La vista debe respetar el flag de confirmación del view model.");
+        Assert.True(confirmMarker > confirmGate, "El formulario de confirmación debe seguir al gate CanConfirmIntention.");
+        Assert.Contains("method=\"post\"", FormTagContaining(view, "/mis-turnos/@item.BookingId/confirmar"));
+
+        var cancelGate = view.IndexOf("item.CanCancel", StringComparison.Ordinal);
+        var individualGate = view.IndexOf("item.IsIndividualTurn", StringComparison.Ordinal);
+        var cancelMarker = view.IndexOf("/mis-turnos/@item.BookingId/cancelar", StringComparison.Ordinal);
+        Assert.True(cancelGate >= 0, "La vista debe respetar el flag de cancelación del view model.");
+        Assert.True(individualGate > cancelGate, "Cancelar es solo para el turno individual: la clase suelta es T21.3.");
+        Assert.True(cancelMarker > individualGate, "El formulario de cancelación debe seguir al gate del turno individual.");
+        Assert.Contains("method=\"post\"", FormTagContaining(view, "/mis-turnos/@item.BookingId/cancelar"));
+
+        // RF-08 confirms an intention, not attendance.
+        Assert.Contains("Confirmar que voy a asistir", view);
+        Assert.DoesNotContain("Confirmar asistencia", view);
+
+        // Both mutations are POST forms with the antiforgery token, never a GET link that could fire on a prefetch.
+        Assert.Equal(2, Count(view, "@Html.AntiForgeryToken()"));
+        Assert.DoesNotContain("href=\"/r/@Model.Slug/mis-turnos/@item.BookingId/confirmar\"", view);
+        Assert.DoesNotContain("href=\"/r/@Model.Slug/mis-turnos/@item.BookingId/cancelar\"", view);
+
+        // The panel never renders a private-link token or any token in the URL.
+        Assert.DoesNotContain("/t/", view);
+        Assert.DoesNotContain("BookingToken", view);
+        Assert.DoesNotContain("LinkToken", view);
     }
 
     // --- The legacy /cuenta placeholder now redirects into the panel ---------------------------------------------
@@ -295,21 +529,82 @@ public sealed class ClientAppointmentsControllerTests
         return Assert.IsType<ClientAppointmentsViewModel>(Assert.IsType<ViewResult>(result).Model);
     }
 
-    private static ClientAppointmentsController CreateController(
-        string routeSlug, ClaimsPrincipal user, RecordingClientPanelRepository repository)
+    private static ClientBookingActionState ActionState(
+        BookingStatus status = BookingStatus.Pending,
+        DateTime? confirmedAt = null,
+        DateTime? startsAt = null,
+        DateTime? cancelledAt = null,
+        CancelledBy? cancelledBy = null,
+        AppointmentKind kind = AppointmentKind.Individual,
+        int maxCapacity = 1,
+        int workerId = WorkerId)
     {
-        var service = new ClientPanelService(repository, new FakeClock { Now = Now });
+        var start = startsAt ?? Now.AddHours(2);
+        return new ClientBookingActionState(
+            BusinessId, BookingId, BookingId + 100, workerId, start, start.AddMinutes(30),
+            kind, AppointmentStatus.Scheduled, AppointmentOrigin.Reserved, maxCapacity,
+            Modality: null, EnrollmentId: null,
+            status, confirmedAt, cancelledAt, cancelledBy, AttendanceRecordedAt: null, AbsenceSource: null);
+    }
+
+    private static Task<IActionResult> Invoke(ClientAppointmentsController controller, string methodName, int bookingId) =>
+        methodName switch
+        {
+            nameof(ClientAppointmentsController.Confirm) => controller.Confirm(bookingId, CancellationToken.None),
+            nameof(ClientAppointmentsController.Cancel) => controller.Cancel(bookingId, CancellationToken.None),
+            _ => throw new ArgumentOutOfRangeException(nameof(methodName))
+        };
+
+    private static ClientAppointmentsController CreateController(
+        string routeSlug,
+        ClaimsPrincipal user,
+        RecordingClientPanelRepository repository,
+        RecordingClientBookingActionsRepository? bookingActions = null,
+        FakeClock? clock = null)
+    {
+        var sharedClock = clock ?? new FakeClock { Now = Now };
+        var panelService = new ClientPanelService(repository, sharedClock);
+        var actionsService = new ClientBookingActionsService(
+            bookingActions ?? new RecordingClientBookingActionsRepository(), new FakeUnitOfWork(), sharedClock);
         var routeData = new RouteData();
         routeData.Values["slug"] = routeSlug;
-        return new ClientAppointmentsController(service)
+        var httpContext = new DefaultHttpContext { User = user };
+        return new ClientAppointmentsController(panelService, actionsService)
         {
             ControllerContext = new ControllerContext
             {
-                HttpContext = new DefaultHttpContext { User = user },
+                HttpContext = httpContext,
                 RouteData = routeData,
                 ActionDescriptor = new ControllerActionDescriptor()
-            }
+            },
+            TempData = new TempDataDictionary(httpContext, new DictionaryTempDataProvider())
         };
+    }
+
+    private static string ReadClientAppointmentsView(string fileName)
+    {
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        return File.ReadAllText(Path.Combine(root, "WorkUp", "Views", "ClientAppointments", fileName));
+    }
+
+    private static string FormTagContaining(string view, string marker)
+    {
+        var index = view.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(index >= 0, $"La vista debe contener {marker}.");
+        var formStart = view.LastIndexOf("<form", index, StringComparison.Ordinal);
+        Assert.True(formStart >= 0, $"El marcador {marker} debe estar dentro de un formulario.");
+        var formEnd = view.IndexOf('>', formStart);
+        return view[formStart..(formEnd + 1)];
+    }
+
+    private static int Count(string source, string value)
+    {
+        var count = 0;
+        for (var index = source.IndexOf(value, StringComparison.Ordinal);
+             index >= 0;
+             index = source.IndexOf(value, index + value.Length, StringComparison.Ordinal))
+            count++;
+        return count;
     }
 
     private static ClientAccountHomeController LandingController(string routeSlug, ClaimsPrincipal user)
@@ -360,5 +655,49 @@ public sealed class ClientAppointmentsControllerTests
             Calls.Add((businessId, clientId));
             return _inner.ListAgendaAsync(businessId, clientId, ct);
         }
+    }
+
+    /// <summary>
+    /// Records the trusted identity the controller hands to the actions service while delegating the guarded work to
+    /// the in-memory fake, so a test can prove the controller used the cookie's (businessId, clientId) and the route
+    /// booking, and still observe the guarded writes.
+    /// </summary>
+    private sealed class RecordingClientBookingActionsRepository : IClientBookingActionsRepository
+    {
+        public FakeClientBookingActionsRepository Inner { get; } = new();
+
+        public List<(int BusinessId, int ClientId, int BookingId)> Calls { get; } = [];
+
+        public void Add(int businessId, int clientId, ClientBookingActionState state) =>
+            Inner.Add(businessId, clientId, state);
+
+        public Task<int?> GetWorkerIdAsync(int businessId, int clientId, int bookingId, CancellationToken ct = default)
+        {
+            Calls.Add((businessId, clientId, bookingId));
+            return Inner.GetWorkerIdAsync(businessId, clientId, bookingId, ct);
+        }
+
+        public Task<bool> LockWorkerAsync(int businessId, int workerId, CancellationToken ct = default) =>
+            Inner.LockWorkerAsync(businessId, workerId, ct);
+
+        public Task<ClientBookingActionState?> LockClientBookingAsync(
+            int businessId, int clientId, int bookingId, CancellationToken ct = default) =>
+            Inner.LockClientBookingAsync(businessId, clientId, bookingId, ct);
+
+        public Task<bool> ConfirmClientBookingAsync(
+            int businessId, int clientId, int bookingId, DateTime now, CancellationToken ct = default) =>
+            Inner.ConfirmClientBookingAsync(businessId, clientId, bookingId, now, ct);
+
+        public Task<bool> CancelClientBookingAsync(
+            int businessId, int clientId, int bookingId, DateTime now, CancellationToken ct = default) =>
+            Inner.CancelClientBookingAsync(businessId, clientId, bookingId, now, ct);
+    }
+
+    /// <summary>Keeps the one-time flash messages of a redirect inside the test instance.</summary>
+    private sealed class DictionaryTempDataProvider : ITempDataProvider
+    {
+        public IDictionary<string, object> LoadTempData(HttpContext context) => new Dictionary<string, object>();
+
+        public void SaveTempData(HttpContext context, IDictionary<string, object> values) { }
     }
 }

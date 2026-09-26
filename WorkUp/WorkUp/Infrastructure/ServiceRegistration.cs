@@ -180,6 +180,10 @@ public static class ServiceRegistration
         services.AddScoped<IClientPanelRepository, SqlClientPanelRepository>();
         services.AddScoped<ClientPanelService>();
 
+        // Confirm/cancel of an individual turn from the client panel (T21.2)
+        services.AddScoped<IClientBookingActionsRepository, SqlClientBookingActionsRepository>();
+        services.AddScoped<ClientBookingActionsService>();
+
         return services;
     }
 
