@@ -6,10 +6,16 @@ using WorkUp.Domain.Enums;
 namespace WorkUp.Data.Scheduling;
 
 /// <summary>Transaction-bound SQL persistence for owner rescheduling of individual reservations.</summary>
+/// <remarks>
+/// Every statement accepts an optional <c>@clientId</c> ficha scope that is bound as a parameter
+/// (<c>AND (@clientId IS NULL OR b.ClientId = @clientId)</c>), never applied through an unlocked wrapper. The owner
+/// path omits it and keeps its original, tenant-only filtering.
+/// </remarks>
 public sealed class SqlOwnerRescheduleRepository(DbSession session)
     : SqlRepositoryBase(session), IOwnerRescheduleRepository
 {
-    public async Task<int?> GetWorkerIdAsync(int businessId, int bookingId, CancellationToken ct = default)
+    public async Task<int?> GetWorkerIdAsync(
+        int businessId, int bookingId, int? clientId = null, CancellationToken ct = default)
     {
         var workerId = await ScalarAsync<int>(
             """
@@ -17,8 +23,9 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
               FROM Bookings AS b
               JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
              WHERE b.BusinessId = @businessId AND b.Id = @bookingId
+               AND (@clientId IS NULL OR b.ClientId = @clientId)
             """,
-            p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId),
+            p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId).AddValue("@clientId", clientId),
             ct);
         return workerId > 0 ? workerId : null;
     }
@@ -49,25 +56,26 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
           JOIN Businesses AS bus ON bus.Id = b.BusinessId
           JOIN Clients AS c ON c.Id = b.ClientId AND c.BusinessId = b.BusinessId
          WHERE b.BusinessId = @businessId AND b.Id = @bookingId
+           AND (@clientId IS NULL OR b.ClientId = @clientId)
         """;
 
     private static readonly string LockBookingSql = string.Format(SelectBookingSql, "WITH (UPDLOCK, ROWLOCK)");
     private static readonly string ReadBookingSql = string.Format(SelectBookingSql, "");
 
     public Task<OwnerRescheduleBooking?> LockOwnerBookingAsync(
-        int businessId, int bookingId, CancellationToken ct = default) =>
+        int businessId, int bookingId, int? clientId = null, CancellationToken ct = default) =>
         QuerySingleOrDefaultAsync(
             LockBookingSql,
             MapBooking,
-            p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId),
+            p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId).AddValue("@clientId", clientId),
             ct);
 
     public Task<OwnerRescheduleBooking?> GetOwnerBookingAsync(
-        int businessId, int bookingId, CancellationToken ct = default) =>
+        int businessId, int bookingId, int? clientId = null, CancellationToken ct = default) =>
         QuerySingleOrDefaultAsync(
             ReadBookingSql,
             MapBooking,
-            p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId),
+            p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId).AddValue("@clientId", clientId),
             ct);
 
     public Task<BookingAvailabilitySnapshot> GetAvailabilitySnapshotAsync(
@@ -140,7 +148,7 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
     }
 
     public async Task<IReadOnlyList<OwnerRescheduleCurrentLink>> GetCurrentLinksAsync(
-        int businessId, int bookingId, DateTime now, CancellationToken ct = default) =>
+        int businessId, int bookingId, DateTime now, int? clientId = null, CancellationToken ct = default) =>
         await QueryAsync(
             """
             SELECT TOP (2) l.Id, l.ExpiresAt
@@ -148,6 +156,7 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
               JOIN Bookings AS b ON b.Id = l.BookingId
               JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
              WHERE b.BusinessId = @businessId AND b.Id = @bookingId
+               AND (@clientId IS NULL OR b.ClientId = @clientId)
                AND a.Kind = @individual AND a.Origin = @reserved AND a.MaxCapacity = 1
                AND b.Modality IS NULL AND b.EnrollmentId IS NULL
                AND l.RevokedAt IS NULL AND l.ExpiresAt > @now
@@ -156,7 +165,7 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
             reader => new OwnerRescheduleCurrentLink(reader.Get<int>("Id"), reader.Get<DateTime>("ExpiresAt")),
             p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId)
                 .AddValue("@individual", AppointmentKind.Individual).AddValue("@reserved", AppointmentOrigin.Reserved)
-                .AddDateTime2("@now", now),
+                .AddDateTime2("@now", now).AddValue("@clientId", clientId),
             ct);
 
     public async Task<bool> TryApplyRescheduleAsync(
@@ -165,6 +174,7 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
         DateTime newStartsAt,
         DateTime newEndsAt,
         DateTime now,
+        int? clientId = null,
         CancellationToken ct = default) =>
         await ScalarAsync<int>(
             """
@@ -174,6 +184,7 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
               JOIN Bookings AS b ON b.AppointmentId = a.Id AND b.BusinessId = a.BusinessId
              WHERE a.BusinessId = @businessId AND a.Id = @appointmentId
                AND b.BusinessId = @businessId AND b.Id = @bookingId
+               AND (@clientId IS NULL OR b.ClientId = @clientId)
                AND a.WorkerId = @workerId AND a.StartsAt = @originalStartsAt AND a.EndsAt = @originalEndsAt
                AND a.Kind = @individual AND a.Origin = @reserved AND a.MaxCapacity = 1 AND a.Status = @scheduled
                AND a.StartsAt > @now AND @newStartsAt > @now AND @newEndsAt > @newStartsAt
@@ -188,11 +199,14 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
                 RETURN;
             END;
 
+            -- An already confirmed booking keeps the instant the client first confirmed (T27 subfinding); only a
+            -- pending booking gets its ConfirmedAt stamped with the move.
             UPDATE b
-               SET Status = @confirmed, ConfirmedAt = @now
+               SET Status = @confirmed, ConfirmedAt = COALESCE(b.ConfirmedAt, @now)
               FROM Bookings AS b
               JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
              WHERE b.BusinessId = @businessId AND b.Id = @bookingId
+               AND (@clientId IS NULL OR b.ClientId = @clientId)
                AND a.BusinessId = @businessId AND a.Id = @appointmentId AND a.WorkerId = @workerId
                AND a.StartsAt = @newStartsAt AND a.EndsAt = @newEndsAt
                AND a.Kind = @individual AND a.Origin = @reserved AND a.MaxCapacity = 1 AND a.Status = @scheduled
@@ -215,7 +229,8 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
                 .AddDateTime2("@newStartsAt", newStartsAt).AddDateTime2("@newEndsAt", newEndsAt)
                 .AddDateTime2("@now", now).AddValue("@individual", AppointmentKind.Individual)
                 .AddValue("@reserved", AppointmentOrigin.Reserved).AddValue("@scheduled", AppointmentStatus.Scheduled)
-                .AddValue("@pending", BookingStatus.Pending).AddValue("@confirmed", BookingStatus.Confirmed),
+                .AddValue("@pending", BookingStatus.Pending).AddValue("@confirmed", BookingStatus.Confirmed)
+                .AddValue("@clientId", clientId),
             ct) == 1;
 
     public async Task<bool> UpdateCurrentLinkExpiryAsync(
@@ -225,6 +240,7 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
         DateTime expectedExpiresAt,
         DateTime newExpiresAt,
         DateTime now,
+        int? clientId = null,
         CancellationToken ct = default) =>
         await ExecuteAsync(
             """
@@ -234,6 +250,7 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
               JOIN Bookings AS b ON b.Id = l.BookingId
               JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
              WHERE b.BusinessId = @businessId AND b.Id = @bookingId AND l.Id = @linkId
+               AND (@clientId IS NULL OR b.ClientId = @clientId)
                AND a.Kind = @individual AND a.Origin = @reserved AND a.MaxCapacity = 1
                AND b.Modality IS NULL AND b.EnrollmentId IS NULL
                AND l.RevokedAt IS NULL AND l.ExpiresAt = @expectedExpiresAt AND l.ExpiresAt > @now
@@ -242,7 +259,7 @@ public sealed class SqlOwnerRescheduleRepository(DbSession session)
             p => p.AddValue("@businessId", businessId).AddValue("@bookingId", bookingId).AddValue("@linkId", linkId)
                 .AddDateTime2("@expectedExpiresAt", expectedExpiresAt).AddDateTime2("@newExpiresAt", newExpiresAt)
                 .AddDateTime2("@now", now).AddValue("@individual", AppointmentKind.Individual)
-                .AddValue("@reserved", AppointmentOrigin.Reserved),
+                .AddValue("@reserved", AppointmentOrigin.Reserved).AddValue("@clientId", clientId),
             ct) == 1;
 
     public async Task InsertNotificationAsync(Notification notification, CancellationToken ct = default)

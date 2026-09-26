@@ -178,13 +178,16 @@ public sealed class OwnerRescheduleTests
     }
 
     [Fact]
-    public async Task Leaves_a_confirmed_booking_confirmed_and_refreshes_its_confirmation_time()
+    public async Task Leaves_a_confirmed_booking_confirmed_and_keeps_its_original_confirmation_time()
     {
+        // T27 subfinding: moving the turn must not rewrite the moment the client already confirmed. Only a pending
+        // booking gets its ConfirmedAt stamped with the move; an already confirmed one keeps the original instant.
+        var originalConfirmation = Now.AddHours(-1);
         var repository = CreateRepository();
         repository.Booking = repository.Booking! with
         {
             BookingStatus = BookingStatus.Confirmed,
-            ConfirmedAt = Now.AddHours(-1)
+            ConfirmedAt = originalConfirmation
         };
         var unitOfWork = new RescheduleUnitOfWork(repository);
         var service = CreateService(repository, unitOfWork, new FakeClock { Now = Now });
@@ -193,7 +196,7 @@ public sealed class OwnerRescheduleTests
 
         Assert.True(result.Succeeded);
         Assert.Equal(BookingStatus.Confirmed, repository.Booking!.BookingStatus);
-        Assert.Equal(Now, repository.Booking.ConfirmedAt);
+        Assert.Equal(originalConfirmation, repository.Booking.ConfirmedAt);
         Assert.Equal(1, unitOfWork.CommitCount);
     }
 

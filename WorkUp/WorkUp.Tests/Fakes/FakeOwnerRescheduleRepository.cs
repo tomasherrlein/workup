@@ -6,6 +6,16 @@ namespace WorkUp.Tests.Fakes;
 public sealed class FakeOwnerRescheduleRepository : IOwnerRescheduleRepository
 {
     public OwnerRescheduleBooking? Booking { get; set; }
+
+    /// <summary>Ficha that owns <see cref="Booking"/>, or <c>null</c> when the fake does not model ownership.</summary>
+    public int? BookingClientId { get; set; }
+
+    /// <summary>Overrides the prelock worker lookup; used to prove a mismatched worker never reaches availability.</summary>
+    public int? LookupWorkerIdOverride { get; set; }
+
+    /// <summary>Worker the last availability snapshot was read for, so a test can assert who was probed.</summary>
+    public int? AvailabilityWorkerId { get; private set; }
+
     public int WorkerBusinessId { get; set; } = 7;
     public bool AllowWorkerLock { get; set; } = true;
     public bool AllowReschedule { get; set; } = true;
@@ -21,11 +31,19 @@ public sealed class FakeOwnerRescheduleRepository : IOwnerRescheduleRepository
     private readonly Dictionary<int, DateTime> _pendingLinkExpiries = [];
     private readonly List<Notification> _pendingNotifications = [];
 
-    public Task<int?> GetWorkerIdAsync(int businessId, int bookingId, CancellationToken ct = default)
+    /// <summary>Same tenant-plus-optional-ficha scope the SQL adapter applies with its bound <c>@clientId</c>.</summary>
+    private bool IsOwnedBy(int businessId, int? clientId, int bookingId) =>
+        Booking is not null &&
+        Booking.BusinessId == businessId &&
+        Booking.BookingId == bookingId &&
+        (clientId is null || BookingClientId is null || BookingClientId == clientId);
+
+    public Task<int?> GetWorkerIdAsync(
+        int businessId, int bookingId, int? clientId = null, CancellationToken ct = default)
     {
         Calls.Add("lookup-worker");
-        return Task.FromResult<int?>(Booking?.BusinessId == businessId && Booking.BookingId == bookingId
-            ? Booking.WorkerId
+        return Task.FromResult<int?>(IsOwnedBy(businessId, clientId, bookingId)
+            ? LookupWorkerIdOverride ?? Booking!.WorkerId
             : null);
     }
 
@@ -36,38 +54,40 @@ public sealed class FakeOwnerRescheduleRepository : IOwnerRescheduleRepository
     }
 
     public Task<OwnerRescheduleBooking?> LockOwnerBookingAsync(
-        int businessId, int bookingId, CancellationToken ct = default)
+        int businessId, int bookingId, int? clientId = null, CancellationToken ct = default)
     {
         Calls.Add("lock-booking");
-        return Task.FromResult(Booking?.BusinessId == businessId && Booking.BookingId == bookingId ? Booking : null);
+        return Task.FromResult(IsOwnedBy(businessId, clientId, bookingId) ? Booking : null);
     }
 
     public Task<BookingAvailabilitySnapshot> GetAvailabilitySnapshotAsync(
         int businessId, int workerId, DateOnly date, CancellationToken ct = default)
     {
         Calls.Add("availability");
+        AvailabilityWorkerId = workerId;
         return Task.FromResult(Snapshot);
     }
 
     public Task<OwnerRescheduleBooking?> GetOwnerBookingAsync(
-        int businessId, int bookingId, CancellationToken ct = default)
+        int businessId, int bookingId, int? clientId = null, CancellationToken ct = default)
     {
         Calls.Add("read-booking");
-        return Task.FromResult(Booking?.BusinessId == businessId && Booking.BookingId == bookingId ? Booking : null);
+        return Task.FromResult(IsOwnedBy(businessId, clientId, bookingId) ? Booking : null);
     }
 
     public Task<BookingAvailabilitySnapshot> GetAvailabilitySnapshotAsync(
         int businessId, int workerId, DateOnly startDate, DateOnly endDate, CancellationToken ct = default)
     {
         Calls.Add("availability-range");
+        AvailabilityWorkerId = workerId;
         return Task.FromResult(Snapshot);
     }
 
     public Task<IReadOnlyList<OwnerRescheduleCurrentLink>> GetCurrentLinksAsync(
-        int businessId, int bookingId, DateTime now, CancellationToken ct = default)
+        int businessId, int bookingId, DateTime now, int? clientId = null, CancellationToken ct = default)
     {
         Calls.Add("active-links");
-        IReadOnlyList<OwnerRescheduleCurrentLink> current = businessId == Booking?.BusinessId && bookingId == Booking.BookingId
+        IReadOnlyList<OwnerRescheduleCurrentLink> current = IsOwnedBy(businessId, clientId, bookingId)
             ? Links.Where(link => link.BookingId == bookingId && link.IsUsable(now))
                 .Take(2).Select(link => new OwnerRescheduleCurrentLink(link.Id, link.ExpiresAt)).ToArray()
             : [];
@@ -80,11 +100,12 @@ public sealed class FakeOwnerRescheduleRepository : IOwnerRescheduleRepository
         DateTime newStartsAt,
         DateTime newEndsAt,
         DateTime now,
+        int? clientId = null,
         CancellationToken ct = default)
     {
         Calls.Add("apply-reschedule");
-        if (!AllowReschedule || Booking is null || businessId != Booking.BusinessId || booking.BookingId != Booking.BookingId ||
-            booking.StartsAt != Booking.StartsAt || booking.WorkerId != Booking.WorkerId)
+        if (!AllowReschedule || !IsOwnedBy(businessId, clientId, booking.BookingId) ||
+            booking.StartsAt != Booking!.StartsAt || booking.WorkerId != Booking.WorkerId)
             return Task.FromResult(false);
 
         _pendingBooking = Booking with
@@ -92,7 +113,8 @@ public sealed class FakeOwnerRescheduleRepository : IOwnerRescheduleRepository
             StartsAt = newStartsAt,
             EndsAt = newEndsAt,
             BookingStatus = WorkUp.Domain.Enums.BookingStatus.Confirmed,
-            ConfirmedAt = now
+            // Preserve an existing confirmation instant (T27): only a pending booking is stamped with the move.
+            ConfirmedAt = Booking.ConfirmedAt ?? now
         };
         return Task.FromResult(true);
     }
@@ -104,11 +126,12 @@ public sealed class FakeOwnerRescheduleRepository : IOwnerRescheduleRepository
         DateTime expectedExpiresAt,
         DateTime newExpiresAt,
         DateTime now,
+        int? clientId = null,
         CancellationToken ct = default)
     {
         Calls.Add("update-link-expiry");
         var link = Links.SingleOrDefault(candidate => candidate.Id == linkId && candidate.BookingId == bookingId);
-        if (!AllowLinkExpiryUpdate || businessId != Booking?.BusinessId || link is null ||
+        if (!AllowLinkExpiryUpdate || !IsOwnedBy(businessId, clientId, bookingId) || link is null ||
             link.RevokedAt is not null || link.ExpiresAt <= now || link.ExpiresAt != expectedExpiresAt)
             return Task.FromResult(false);
 
