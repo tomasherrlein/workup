@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Routing;
+using WorkUp.BusinessLogic.Classes;
 using WorkUp.BusinessLogic.Scheduling;
 using WorkUp.Controllers;
 using WorkUp.Domain.Enums;
@@ -18,13 +19,14 @@ using WorkUp.ViewModels.Shared;
 namespace WorkUp.Tests.Scheduling;
 
 /// <summary>
-/// The authenticated client's own panel (T21.1, T21.2, RF-08, RF-22). These are unit tests over
-/// the real controller, the real <see cref="ClientPanelService"/> and an in-memory repository: no DI container, no
-/// routing pipeline and no HTTP server. What only this layer can prove is pinned here: the identity comes from the
-/// session cookie and never from the request, the panel of another business is refused before the action runs, the
-/// rows are mapped to a safe view model with a deterministic order and accessible empty states, and the individual
-/// turn actions stay POST-only, antiforgery-guarded and gated on the typed kind rather than on a display label. The
-/// exact start of a booking belongs to history and offers no action.
+/// The authenticated client's own panel (T21.1, T21.2, T21.3, RF-08, RF-22). These are unit tests over
+/// the real controller, the real <see cref="ClientPanelService"/>, the real <see cref="ClientBookingActionsService"/>,
+/// the real <see cref="ClientClassCancellationService"/> and in-memory repositories: no DI container, no routing
+/// pipeline and no HTTP server. What only this layer can prove is pinned here: the identity comes from the session
+/// cookie and never from the request, the panel of another business is refused before the action runs, the rows are
+/// mapped to a safe view model with a deterministic order and accessible empty states, and the individual-turn and
+/// drop-in actions stay POST-only, antiforgery-guarded and gated on the typed kind rather than on a display label.
+/// The exact start of a booking belongs to history and offers no action.
 /// </summary>
 public sealed class ClientAppointmentsControllerTests
 {
@@ -200,11 +202,12 @@ public sealed class ClientAppointmentsControllerTests
         // RF-08 confirms an intention, not attendance, so the sentence names what the person will do.
         Assert.Equal("Podés confirmar que vas a asistir o cancelar.", byId[1].EligibilityLabel);
 
-        // A drop-in is cancellable in the domain, but the panel only wires its cancel in T21.3: a row without a
-        // button must not announce the action.
+        // T21.3 wires the drop-in cancel: the row both offers the button (typed IsDropInClass && CanCancel) and
+        // announces it, so the sentence and the form stay in parity.
         Assert.False(byId[2].CanConfirmIntention);
         Assert.True(byId[2].CanCancel);
-        Assert.Null(byId[2].EligibilityLabel);
+        Assert.True(byId[2].IsDropInClass);
+        Assert.Equal("Podés cancelar.", byId[2].EligibilityLabel);
         Assert.True(byId[3].CanCancel);
 
         // A fixed class date keeps its place and a suspended session offers nothing (RF-21, T21 scope).
@@ -234,7 +237,28 @@ public sealed class ClientAppointmentsControllerTests
     }
 
     [Fact]
-    public async Task Index_does_not_promise_a_cancel_action_the_panel_cannot_wire_yet()
+    public async Task Index_derives_the_drop_in_class_flag_from_the_appointment_kind_and_modality()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, Row(1, Now.AddHours(1)));
+        repository.Add(BusinessId, ClientId, Row(2, Now.AddHours(2), AppointmentKind.ClassSession, BookingModality.Fixed));
+        repository.Add(BusinessId, ClientId, Row(3, Now.AddHours(3), AppointmentKind.ClassSession, BookingModality.DropIn));
+        repository.Add(BusinessId, ClientId, Row(4, Now.AddHours(4), AppointmentKind.ClassSession));
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository);
+
+        var model = await IndexAsync(controller);
+        var byId = model.Upcoming.ToDictionary(row => row.BookingId);
+
+        // A drop-in class is exactly a class session with the drop-in modality: an individual turn, a fixed class and
+        // a class without a modality are not, and the display label never decides it.
+        Assert.False(byId[1].IsDropInClass);
+        Assert.False(byId[2].IsDropInClass);
+        Assert.True(byId[3].IsDropInClass);
+        Assert.False(byId[4].IsDropInClass);
+    }
+
+    [Fact]
+    public async Task Index_announces_the_drop_in_cancel_the_panel_now_wires()
     {
         var repository = new RecordingClientPanelRepository();
         repository.Add(
@@ -244,11 +268,12 @@ public sealed class ClientAppointmentsControllerTests
         var model = await IndexAsync(controller);
         var row = Assert.Single(model.Upcoming);
 
-        // The domain says a drop-in can be cancelled, but the panel only wires it in T21.3: there is no button, so
-        // the row must not announce the action.
+        // T21.3 wires the drop-in cancel, so the row offers the button (typed kind plus availability) and announces
+        // it: the sentence counts exactly the actions the view has a form for.
         Assert.True(row.CanCancel);
         Assert.False(row.IsIndividualTurn);
-        Assert.Null(row.EligibilityLabel);
+        Assert.True(row.IsDropInClass);
+        Assert.Equal("Podés cancelar.", row.EligibilityLabel);
     }
 
     [Fact]
@@ -305,6 +330,7 @@ public sealed class ClientAppointmentsControllerTests
     [Theory]
     [InlineData(nameof(ClientAppointmentsController.Confirm), "confirmar")]
     [InlineData(nameof(ClientAppointmentsController.Cancel), "cancelar")]
+    [InlineData(nameof(ClientAppointmentsController.CancelClass), "cancelar-clase")]
     public void The_mutations_are_post_only_antiforgery_endpoints_with_the_booking_id_in_the_route(
         string methodName, string tail)
     {
@@ -320,6 +346,7 @@ public sealed class ClientAppointmentsControllerTests
     [Theory]
     [InlineData(nameof(ClientAppointmentsController.Confirm))]
     [InlineData(nameof(ClientAppointmentsController.Cancel))]
+    [InlineData(nameof(ClientAppointmentsController.CancelClass))]
     public void The_mutations_take_only_the_booking_id_from_the_request(string methodName)
     {
         var method = typeof(ClientAppointmentsController).GetMethod(methodName)!;
@@ -455,6 +482,109 @@ public sealed class ClientAppointmentsControllerTests
         Assert.Equal(0, actions.Inner.CancelWriteCount);
     }
 
+    // --- T21.3: the own drop-in class cancel from the panel -------------------------------------------------------
+
+    [Fact]
+    public async Task CancelClass_passes_the_business_and_client_of_the_cookie_to_the_service()
+    {
+        var dropIns = new FakeClassDropInRepository();
+        AddDropIn(dropIns, BusinessId, ClientId, BookingId, Now.AddHours(2));
+        var controller = CreateController(
+            Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(),
+            classDropIns: dropIns);
+
+        await controller.CancelClass(BookingId, CancellationToken.None);
+
+        // The identity is the ficha of the cookie and the booking is the route value: the request never carries a
+        // client or business id, so one session cannot cancel another ficha's class.
+        Assert.Equal(BusinessId, dropIns.FindOwnProbeBusinessId);
+        Assert.Equal(ClientId, dropIns.FindOwnProbeClientId);
+        Assert.Equal(BookingId, dropIns.FindOwnProbeBookingId);
+    }
+
+    [Fact]
+    public async Task CancelClass_of_an_own_future_drop_in_cancels_it_by_the_client_and_returns_with_a_success_flash()
+    {
+        var dropIns = new FakeClassDropInRepository();
+        AddDropIn(dropIns, BusinessId, ClientId, BookingId, Now.AddHours(2));
+        var controller = CreateController(
+            Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(),
+            classDropIns: dropIns);
+
+        var result = await controller.CancelClass(BookingId, CancellationToken.None);
+
+        Assert.Equal("/r/peluqueria/mis-turnos", Assert.IsType<RedirectResult>(result).Url);
+        Assert.Equal("Success", controller.TempData["FlashType"]);
+        Assert.Equal("Cancelaste tu clase suelta.", controller.TempData["FlashMessage"]);
+        var stored = Assert.Single(dropIns.DropInBookings);
+        Assert.Equal(BookingStatus.Cancelled, stored.State.Status);
+        Assert.Equal(CancelledBy.Client, stored.CancelledBy);
+        Assert.Equal(Now, stored.CancelledAt);
+    }
+
+    [Fact]
+    public async Task CancelClass_of_another_ficha_another_tenant_or_a_missing_booking_is_a_generic_not_found()
+    {
+        var dropIns = new FakeClassDropInRepository();
+        AddDropIn(dropIns, BusinessId, OtherClientId, BookingId, Now.AddHours(2));
+        AddDropIn(dropIns, OtherBusinessId, ClientId, BookingId + 1, Now.AddHours(2), appointmentId: 901);
+        var controller = CreateController(
+            Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(),
+            classDropIns: dropIns);
+
+        var foreignClient = await controller.CancelClass(BookingId, CancellationToken.None);
+        var foreignTenant = await controller.CancelClass(BookingId + 1, CancellationToken.None);
+        var missing = await controller.CancelClass(BookingId + 2, CancellationToken.None);
+
+        // A foreign row and a row that does not exist answer identically, so the panel never learns existence.
+        Assert.IsType<NotFoundResult>(foreignClient);
+        Assert.IsType<NotFoundResult>(foreignTenant);
+        Assert.IsType<NotFoundResult>(missing);
+        Assert.Null(controller.TempData["FlashMessage"]);
+        Assert.Equal(0, dropIns.CancelClientCallCount);
+    }
+
+    [Fact]
+    public async Task CancelClass_refuses_a_fixed_annotation_and_an_individual_turn_as_a_generic_not_found()
+    {
+        var dropIns = new FakeClassDropInRepository();
+        AddDropIn(
+            dropIns, BusinessId, ClientId, BookingId, Now.AddHours(2), modality: BookingModality.Fixed);
+        AddDropIn(
+            dropIns, BusinessId, ClientId, BookingId + 1, Now.AddHours(2),
+            kind: AppointmentKind.Individual, modality: null, appointmentId: 901);
+        var controller = CreateController(
+            Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(),
+            classDropIns: dropIns);
+
+        var fixedAnnotation = await controller.CancelClass(BookingId, CancellationToken.None);
+        var individualTurn = await controller.CancelClass(BookingId + 1, CancellationToken.None);
+
+        // A fixed class date keeps its place (RF-21) and an individual turn uses its own route: neither is cancelled
+        // here, and both are hidden behind the same generic 404 as a foreign booking.
+        Assert.IsType<NotFoundResult>(fixedAnnotation);
+        Assert.IsType<NotFoundResult>(individualTurn);
+        Assert.Equal(0, dropIns.CancelClientCallCount);
+    }
+
+    [Fact]
+    public async Task CancelClass_of_an_own_class_starting_exactly_now_is_refused_with_a_safe_flash_and_no_write()
+    {
+        var dropIns = new FakeClassDropInRepository();
+        AddDropIn(dropIns, BusinessId, ClientId, BookingId, Now);
+        var controller = CreateController(
+            Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(),
+            clock: new FakeClock { Now = Now }, classDropIns: dropIns);
+
+        var result = await controller.CancelClass(BookingId, CancellationToken.None);
+
+        Assert.Equal("/r/peluqueria/mis-turnos", Assert.IsType<RedirectResult>(result).Url);
+        Assert.Equal("Error", controller.TempData["FlashType"]);
+        Assert.Equal("No se puede cancelar esa reserva ahora.", controller.TempData["FlashMessage"]);
+        Assert.Equal(0, dropIns.CancelClientCallCount);
+        Assert.Equal(BookingStatus.Pending, Assert.Single(dropIns.DropInBookings).State.Status);
+    }
+
     // --- The view wires the actions only for the individual-turn flags and exposes no private link ---------------
 
     [Fact]
@@ -465,6 +595,7 @@ public sealed class ClientAppointmentsControllerTests
         // The gate is the typed shape derived from AppointmentKind, never the localized display label: renaming
         // "Turno individual" must not be able to switch the cancel action off.
         Assert.Contains("item.IsIndividualTurn", view);
+        Assert.Contains("item.IsDropInClass", view);
         Assert.DoesNotContain("KindLabel ==", view);
         Assert.DoesNotContain("Turno individual\"", view);
 
@@ -476,25 +607,51 @@ public sealed class ClientAppointmentsControllerTests
 
         var cancelGate = view.IndexOf("item.CanCancel", StringComparison.Ordinal);
         var individualGate = view.IndexOf("item.IsIndividualTurn", StringComparison.Ordinal);
-        var cancelMarker = view.IndexOf("/mis-turnos/@item.BookingId/cancelar", StringComparison.Ordinal);
+        var individualMarker = view.IndexOf("/mis-turnos/@item.BookingId/cancelar\"", StringComparison.Ordinal);
         Assert.True(cancelGate >= 0, "La vista debe respetar el flag de cancelación del view model.");
-        Assert.True(individualGate > cancelGate, "Cancelar es solo para el turno individual: la clase suelta es T21.3.");
-        Assert.True(cancelMarker > individualGate, "El formulario de cancelación debe seguir al gate del turno individual.");
-        Assert.Contains("method=\"post\"", FormTagContaining(view, "/mis-turnos/@item.BookingId/cancelar"));
+        Assert.True(individualGate > cancelGate, "Cancelar turno es solo para el turno individual, nunca para la clase suelta.");
+        Assert.True(individualMarker > individualGate, "El formulario de cancelación debe seguir al gate del turno individual.");
+        Assert.Contains("method=\"post\"", FormTagContaining(view, "/mis-turnos/@item.BookingId/cancelar\""));
+
+        // The drop-in class cancel is its own typed action: it is gated on IsDropInClass (not on CanCancel alone) and
+        // uses the class route, so it can never be the individual-turn form repurposed.
+        var dropInGate = view.IndexOf("item.IsDropInClass", StringComparison.Ordinal);
+        var dropInMarker = view.IndexOf("/mis-turnos/@item.BookingId/cancelar-clase", StringComparison.Ordinal);
+        Assert.True(dropInGate > cancelGate, "Cancelar clase es solo para la clase suelta: la anotación fija no se cancela.");
+        Assert.True(dropInMarker > dropInGate, "El formulario de la clase suelta debe seguir al gate IsDropInClass.");
+        Assert.Contains("method=\"post\"", FormTagContaining(view, "/mis-turnos/@item.BookingId/cancelar-clase"));
+        Assert.Contains("Cancelar clase", view);
 
         // RF-08 confirms an intention, not attendance.
         Assert.Contains("Confirmar que voy a asistir", view);
         Assert.DoesNotContain("Confirmar asistencia", view);
 
-        // Both mutations are POST forms with the antiforgery token, never a GET link that could fire on a prefetch.
-        Assert.Equal(2, Count(view, "@Html.AntiForgeryToken()"));
+        // All three mutations are POST forms with the antiforgery token, never a GET link that could fire on a prefetch.
+        Assert.Equal(3, Count(view, "@Html.AntiForgeryToken()"));
         Assert.DoesNotContain("href=\"/r/@Model.Slug/mis-turnos/@item.BookingId/confirmar\"", view);
         Assert.DoesNotContain("href=\"/r/@Model.Slug/mis-turnos/@item.BookingId/cancelar\"", view);
+        Assert.DoesNotContain("href=\"/r/@Model.Slug/mis-turnos/@item.BookingId/cancelar-clase\"", view);
 
         // The panel never renders a private-link token or any token in the URL.
         Assert.DoesNotContain("/t/", view);
         Assert.DoesNotContain("BookingToken", view);
         Assert.DoesNotContain("LinkToken", view);
+    }
+
+    [Fact]
+    public void The_agenda_view_never_offers_the_class_cancel_for_a_fixed_or_a_past_row()
+    {
+        var view = ReadClientAppointmentsView("Index.cshtml");
+
+        // The drop-in form is guarded by both the typed flag and the availability flag, so a fixed annotation (whose
+        // IsDropInClass is false) or a non-cancellable row can never render it.
+        Assert.Contains("item.CanCancel && item.IsDropInClass", view);
+
+        // History is a pure read: no form and no antiforgery token are rendered for a past row.
+        var historyStart = view.IndexOf("client-appointments-history", StringComparison.Ordinal);
+        Assert.True(historyStart >= 0, "La vista debe tener la sección de historial.");
+        Assert.DoesNotContain("<form", view[historyStart..]);
+        Assert.DoesNotContain("@Html.AntiForgeryToken()", view[historyStart..]);
     }
 
     // --- The legacy /cuenta placeholder now redirects into the panel ---------------------------------------------
@@ -560,16 +717,19 @@ public sealed class ClientAppointmentsControllerTests
         ClaimsPrincipal user,
         RecordingClientPanelRepository repository,
         RecordingClientBookingActionsRepository? bookingActions = null,
-        FakeClock? clock = null)
+        FakeClock? clock = null,
+        FakeClassDropInRepository? classDropIns = null)
     {
         var sharedClock = clock ?? new FakeClock { Now = Now };
         var panelService = new ClientPanelService(repository, sharedClock);
         var actionsService = new ClientBookingActionsService(
             bookingActions ?? new RecordingClientBookingActionsRepository(), new FakeUnitOfWork(), sharedClock);
+        var classCancellationService = new ClientClassCancellationService(
+            classDropIns ?? new FakeClassDropInRepository(), new FakeUnitOfWork(), sharedClock);
         var routeData = new RouteData();
         routeData.Values["slug"] = routeSlug;
         var httpContext = new DefaultHttpContext { User = user };
-        return new ClientAppointmentsController(panelService, actionsService)
+        return new ClientAppointmentsController(panelService, actionsService, classCancellationService)
         {
             ControllerContext = new ControllerContext
             {
@@ -579,6 +739,34 @@ public sealed class ClientAppointmentsControllerTests
             },
             TempData = new TempDataDictionary(httpContext, new DictionaryTempDataProvider())
         };
+    }
+
+    /// <summary>
+    /// Registers one drop-in annotation under a class session of the fake, so the lock-free probe resolves the owning
+    /// ficha exactly like the scoped reads do. The tenant, the ficha, the kind and the modality are all parameters so
+    /// a test can register a foreign, fixed or individual row and prove it is refused.
+    /// </summary>
+    private static void AddDropIn(
+        FakeClassDropInRepository repository,
+        int businessId,
+        int clientId,
+        int bookingId,
+        DateTime startsAt,
+        BookingStatus status = BookingStatus.Pending,
+        AppointmentStatus appointmentStatus = AppointmentStatus.Scheduled,
+        AppointmentKind kind = AppointmentKind.ClassSession,
+        BookingModality? modality = BookingModality.DropIn,
+        int appointmentId = 900)
+    {
+        repository.Sessions.Add(new FakeClassDropInSession(
+            businessId,
+            new ClassSessionRow(
+                appointmentId, 7, 3, startsAt, 8, kind, appointmentStatus,
+                [new ClassSessionBooking(clientId, status, bookingId, modality, "Ana Pérez")])));
+        repository.DropInBookings.Add(new FakeClassDropInBooking(
+            businessId,
+            new DropInCancellationState(
+                bookingId, appointmentId, startsAt, kind, appointmentStatus, status, modality)));
     }
 
     private static string ReadClientAppointmentsView(string fileName)

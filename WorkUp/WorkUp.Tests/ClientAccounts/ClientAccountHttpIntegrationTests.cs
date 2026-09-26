@@ -34,7 +34,13 @@ namespace WorkUp.Tests.ClientAccounts;
 /// forms, a scanner GET of the POST-only action routes writes nothing, confirm without its anti-CSRF token is refused,
 /// confirm with it persists <c>Confirmed</c>, a repeat keeps the original <c>ConfirmedAt</c>, another ficha's booking
 /// answers a generic 404, cancel persists <c>Cancelled</c> by the client without touching payments, and a late
-/// confirmation is refused. A hostile return URL closes the open-redirect surface.
+/// confirmation is refused. Then one future class session carrying a drop-in annotation of the signed-in ficha and
+/// another of the same other ficha drives the T21.3 cancel-class checkpoint: the agenda renders only the own
+/// <c>Cancelar clase</c> form, a scanner GET of the POST-only route writes nothing, the POST without its anti-CSRF
+/// token is refused, another ficha's annotation answers a generic 404, the own POST persists <c>Cancelled</c> by the
+/// client while the seeded payment stays untouched, a repeat is refused without moving the original timestamp, and
+/// the panel renders neither the seeded owner note nor a private appointment link. A hostile return URL closes the
+/// open-redirect surface.
 /// </para>
 /// <para>
 /// The fixture is opt-in through the pair <c>WORKUP_T20_HTTP_CONNECTION</c> and <c>WORKUP_T20_HTTP_KEYS_PATH</c>. Without
@@ -64,6 +70,12 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
 
     /// <summary>Second seeded demo business, used only to prove the panel refuses a foreign tenant.</summary>
     private const string OtherDemoSlug = "estudio-yoga-lucia-demo";
+
+    /// <summary>
+    /// Owner note planted for the T21.3 checkpoint. A client panel must never render an owner note or a health
+    /// observation, so the smoke seeds exactly this text and proves it absent from the rendered agenda.
+    /// </summary>
+    private const string OwnerNoteMarker = "Observacion clinica sintetica T21.3";
 
     private const string VerificationMarker = "/cuenta/verificar/";
     private const string ResetMarker = "/cuenta/restablecer/";
@@ -487,6 +499,119 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         Assert.Equal(afterCancel, await ReadBookingStateAsync(connection, seeded.OwnBookingId));
         log.Note("HTTP/SQL: confirming after the cancellation redirected back to the agenda and the cancelled row did not move.");
 
+        // --- Own drop-in class cancel (T21.3, RF-22) --------------------------------------------------------
+        // One future class session of the seeded demo tenant carries two drop-in annotations of that same session:
+        // the own one of the trusted cookie ficha and one of the other ficha this smoke planted for the T21.2
+        // checkpoints. Both, the payment the own annotation left behind and an owner note, are planted straight into
+        // the fresh database. The ficha of the foreign annotation is read back from its own row instead of being
+        // invented again, so both annotations really belong to different clients of the same business.
+        var otherClientId = await ScalarIntAsync(connection, "SELECT ClientId FROM Bookings WHERE Id = @id", ("@id", seeded.OtherBookingId));
+        Assert.NotEqual(clientId, otherClientId);
+        var classSeed = await SeedDropInClassAsync(connection, businessId, clientId, otherClientId);
+        var ownClassCancelPath = $"/r/{DemoSlug}/mis-turnos/{classSeed.OwnBookingId}/cancelar-clase";
+        var foreignClassCancelPath = $"/r/{DemoSlug}/mis-turnos/{classSeed.OtherBookingId}/cancelar-clase";
+        var classBookingsBefore = await ReadBookingStatesAsync(connection, businessId);
+        var classPaymentsBefore = await ReadPaymentStatesAsync(connection, businessId);
+        // The seeded payment is what makes "the cancellation leaves the payments alone" a real check instead of an
+        // equality between two empty lists, so its presence in the snapshot is asserted before the POST.
+        Assert.Contains(classPaymentsBefore,
+            payment => payment.Id == classSeed.PaymentId && payment.BookingId == classSeed.OwnBookingId);
+        log.Note($"SQL: seeded class drop-in #{classSeed.OwnBookingId} of the cookie ficha and drop-in #{classSeed.OtherBookingId} of the other ficha into the fresh database, with payment #{classSeed.PaymentId} and an owner note.");
+
+        // The real GET wires one form for the own drop-in and nothing at all for the other ficha's annotation.
+        var (classAgendaStatus, classAgendaHtml) = await GetHtmlAsync(client, $"/r/{DemoSlug}/mis-turnos");
+        Assert.Equal(HttpStatusCode.OK, classAgendaStatus);
+        Assert.Contains("client-appointments-title", classAgendaHtml, StringComparison.Ordinal);
+        Assert.Contains(ownClassCancelPath, classAgendaHtml, StringComparison.Ordinal);
+        Assert.Contains("Cancelar clase", classAgendaHtml, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(classAgendaHtml, ownClassCancelPath));
+        Assert.Equal(1, CountOccurrences(classAgendaHtml, "/cancelar-clase"));
+        Assert.True(!classAgendaHtml.Contains($"/mis-turnos/{classSeed.OwnBookingId}/cancelar\"", StringComparison.Ordinal),
+            "The drop-in row must offer the class cancel and never the individual turn cancel.");
+        Assert.True(!classAgendaHtml.Contains($"/mis-turnos/{classSeed.OtherBookingId}/", StringComparison.Ordinal),
+            "The own agenda must never render a row, a label or a form for another ficha's class annotation.");
+        // The safe projection is proven by absence: the seeded owner note and the private appointment link route
+        // must never reach the page, whatever the row renders.
+        Assert.True(!classAgendaHtml.Contains(OwnerNoteMarker, StringComparison.Ordinal),
+            "The panel must never render an owner note or health observation.");
+        Assert.True(!classAgendaHtml.Contains("href=\"/t/", StringComparison.Ordinal),
+            "The panel must never render a private appointment link.");
+        log.Note("HTTP: the agenda rendered the own drop-in class with its 'Cancelar clase' POST form and no action, note or private link for anything else.");
+
+        // A GET is a pure read: the router may answer 404 or 405 for the POST-only route, but neither can write.
+        Assert.Equal(classBookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        foreach (var scannerPath in new[] { ownClassCancelPath, foreignClassCancelPath })
+        {
+            using var classPrefetch = await client.GetAsync(scannerPath);
+            Assert.True(classPrefetch.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed,
+                $"A scanner GET of the class cancel POST-only route must be refused; got {(int)classPrefetch.StatusCode}.");
+        }
+        Assert.Equal(classBookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        log.Note("HTTP/SQL: scanner GETs of the class cancel route were refused without changing any booking.");
+
+        var classAntiforgery = ExtractAntiforgeryToken(classAgendaHtml);
+        log.KeepSecret(classAntiforgery);
+
+        // Without its anti-CSRF token the class cancel POST is refused before any row is touched (RF-22).
+        using (var noTokenClassCancel = await client.PostAsync(ownClassCancelPath, Form(new Dictionary<string, string>())))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, noTokenClassCancel.StatusCode);
+        }
+        var afterNoTokenClassCancel = await ReadBookingStateAsync(connection, classSeed.OwnBookingId);
+        Assert.Equal((byte)BookingStatus.Pending, afterNoTokenClassCancel.Status);
+        Assert.Null(afterNoTokenClassCancel.CancelledAt);
+        Assert.Null(afterNoTokenClassCancel.CancelledBy);
+        log.Note("HTTP/SQL: the class cancel POST without its anti-CSRF token -> 400 and the drop-in row stayed Pending.");
+
+        // Another ficha's class annotation answers the same generic 404 as one that does not exist, even with a
+        // valid token, and its row stays Pending.
+        using (var foreignClassCancel = await client.PostAsync(foreignClassCancelPath, Form(new Dictionary<string, string>
+               {
+                   ["__RequestVerificationToken"] = classAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, foreignClassCancel.StatusCode);
+        }
+        var untouchedForeignClass = await ReadBookingStateAsync(connection, classSeed.OtherBookingId);
+        Assert.Equal((byte)BookingStatus.Pending, untouchedForeignClass.Status);
+        Assert.Null(untouchedForeignClass.CancelledAt);
+        Assert.Null(untouchedForeignClass.CancelledBy);
+        log.Note("HTTP/SQL: cancelling another ficha's drop-in class, even with a valid token -> 404 and its row stayed Pending.");
+
+        using (var classCancel = await client.PostAsync(ownClassCancelPath, Form(new Dictionary<string, string>
+               {
+                   ["__RequestVerificationToken"] = classAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, classCancel.StatusCode);
+            Assert.Equal($"/r/{DemoSlug}/mis-turnos", DescribeRedirect(classCancel));
+        }
+        var afterClassCancel = await ReadBookingStateAsync(connection, classSeed.OwnBookingId);
+        Assert.Equal((byte)BookingStatus.Cancelled, afterClassCancel.Status);
+        Assert.Equal((byte)CancelledBy.Client, afterClassCancel.CancelledBy);
+        Assert.NotNull(afterClassCancel.CancelledAt);
+        Assert.Null(afterClassCancel.ConfirmedAt);
+        var classCancelledAt = afterClassCancel.CancelledAt;
+        // RF-22 and D-24: cancelling the annotation touches the booking only; every payment row of the business, the
+        // seeded one included, stays exactly as it was.
+        Assert.Equal(classPaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
+        log.Note($"SQL: class cancel -> 302, booking #{classSeed.OwnBookingId} became Cancelled by Client and every payment row stayed as it was.");
+
+        // A repeated cancel is refused as unavailable and never overwrites the original instant or author.
+        using (var repeatClassCancel = await client.PostAsync(ownClassCancelPath, Form(new Dictionary<string, string>
+               {
+                   ["__RequestVerificationToken"] = classAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, repeatClassCancel.StatusCode);
+            Assert.Equal($"/r/{DemoSlug}/mis-turnos", DescribeRedirect(repeatClassCancel));
+        }
+        var afterRepeatClassCancel = await ReadBookingStateAsync(connection, classSeed.OwnBookingId);
+        Assert.Equal((byte)BookingStatus.Cancelled, afterRepeatClassCancel.Status);
+        Assert.Equal((byte)CancelledBy.Client, afterRepeatClassCancel.CancelledBy);
+        Assert.Equal(classCancelledAt, afterRepeatClassCancel.CancelledAt);
+        log.Note("HTTP/SQL: repeating the class cancel returned to the own agenda and the original CancelledAt and author did not move.");
+
         // --- Password recovery (RF-27) ---------------------------------------------------------------------
         var recoveryJar = new CookieContainer();
         using var recoveryClient = CreateBrowser(baseUrl, recoveryJar);
@@ -793,11 +918,11 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// Distinct booking ids the rendered panel targets with a confirm or cancel form. It is the whole set of ficha
-    /// rows the page exposes an action for, so an equality assertion proves the page wired forms for exactly one row.
+    /// Distinct booking ids targeted by the individual-turn forms (not the drop-in cancelar-clase route).
+    /// This assertion checks only the individual actions on the agenda before the drop-in fixture is seeded.
     /// </summary>
     private static int[] ExtractActionBookingIds(string html) =>
-        Regex.Matches(html, "/mis-turnos/(\\d+)/(?:confirmar|cancelar)", RegexOptions.CultureInvariant)
+        Regex.Matches(html, "/mis-turnos/(\\d+)/(?:confirmar|cancelar)(?![-A-Za-z0-9])", RegexOptions.CultureInvariant)
             .Select(match => int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture))
             .Distinct()
             .ToArray();
@@ -963,6 +1088,94 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
             """,
             ("@businessId", businessId), ("@appointmentId", appointmentId), ("@clientId", clientId),
             ("@status", (byte)BookingStatus.Pending), ("@createdAt", createdAt));
+
+    /// <summary>
+    /// Plants one future class session of the seeded demo tenant with two drop-in annotations of that same session:
+    /// the own one of the trusted <paramref name="clientId"/> and the one of <paramref name="otherClientId"/>, a
+    /// different ficha of the same business. It also plants the payment the own annotation left behind and an owner
+    /// note, so the T21.3 checkpoints can prove both that the cancellation leaves every payment row alone and that
+    /// the panel never renders a health observation. The demo salon has no class-capable service, so the fixture
+    /// inserts its own active class service instead of borrowing a capacity-1 individual one; the session keeps
+    /// <c>GridClassId</c> null like the T21.3 SQL fixture, so it cannot collide with the generated-week unique key.
+    /// </summary>
+    private static async Task<SeededDropInClass> SeedDropInClassAsync(
+        SqlConnection connection, int businessId, int clientId, int otherClientId)
+    {
+        // Business-local now, computed exactly like the host clock, so the planted start stays in the future for the
+        // environment the requests run against whatever the machine time zone is.
+        var businessNow = TimeZoneInfo.ConvertTimeFromUtc(
+            DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("America/Argentina/Buenos_Aires"));
+
+        var workerId = await ScalarIntAsync(connection,
+            "SELECT TOP (1) Id FROM Workers WHERE BusinessId = @businessId AND IsActive = 1 ORDER BY Id",
+            ("@businessId", businessId));
+        Assert.True(workerId > 0, "The seeded demo tenant must have an active worker for this checkpoint.");
+
+        var serviceId = await ScalarIntAsync(connection,
+            """
+            INSERT INTO Services (BusinessId, Name, Price, DurationMinutes, MaxCapacity, IsActive)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, 'Clase suelta T21.3', 8000.00, 60, 12, 1)
+            """,
+            ("@businessId", businessId));
+
+        var sessionId = await InsertClassSessionAsync(
+            connection, businessId, serviceId, workerId, businessNow.Date.AddDays(30).AddHours(14), 12, businessNow);
+        var ownBookingId = await InsertPendingDropInBookingAsync(connection, businessId, sessionId, clientId, businessNow);
+        var otherBookingId = await InsertPendingDropInBookingAsync(connection, businessId, sessionId, otherClientId, businessNow);
+
+        var paymentId = await ScalarIntAsync(connection,
+            """
+            INSERT INTO Payments (BusinessId, ClientId, Concept, BookingId, EnrollmentId, Amount, ListPrice, PriceReason, PaidAt, RecordedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @clientId, @concept, @bookingId, NULL, 8000.00, NULL, NULL, @paidAt, @recordedAt)
+            """,
+            ("@businessId", businessId), ("@clientId", clientId), ("@concept", (byte)PaymentConcept.DropInClass),
+            ("@bookingId", ownBookingId), ("@paidAt", businessNow), ("@recordedAt", businessNow));
+
+        await ScalarIntAsync(connection,
+            """
+            INSERT INTO ClientNotes (ClientId, AppointmentId, Text, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@clientId, @appointmentId, @text, @createdAt)
+            """,
+            ("@clientId", clientId), ("@appointmentId", sessionId), ("@text", OwnerNoteMarker), ("@createdAt", businessNow));
+
+        // The planted rows are what the assertions rely on: both annotations belong to the same class, the own one to
+        // the trusted ficha and the other one to a different ficha, so only a scoping defect could let the session
+        // cancel the wrong annotation.
+        Assert.Equal(clientId, await ScalarIntAsync(connection, "SELECT ClientId FROM Bookings WHERE Id = @id", ("@id", ownBookingId)));
+        Assert.Equal(otherClientId, await ScalarIntAsync(connection, "SELECT ClientId FROM Bookings WHERE Id = @id", ("@id", otherBookingId)));
+        return new SeededDropInClass(ownBookingId, otherBookingId, paymentId);
+    }
+
+    private static Task<int> InsertClassSessionAsync(
+        SqlConnection connection, int businessId, int serviceId, int workerId, DateTime startsAt, int maxCapacity, DateTime createdAt)
+    {
+        Assert.True(startsAt > createdAt, "A seeded class session must start in the future of the host clock.");
+        return ScalarIntAsync(connection,
+            """
+            INSERT INTO Appointments
+                        (BusinessId, Kind, ServiceId, WorkerId, GridClassId, StartsAt, EndsAt, MaxCapacity, Origin, Status, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @kind, @serviceId, @workerId, NULL, @startsAt, @endsAt, @maxCapacity, NULL, @status, @createdAt)
+            """,
+            ("@businessId", businessId), ("@kind", (byte)AppointmentKind.ClassSession), ("@serviceId", serviceId),
+            ("@workerId", workerId), ("@startsAt", startsAt), ("@endsAt", startsAt.AddMinutes(60)),
+            ("@maxCapacity", maxCapacity), ("@status", (byte)AppointmentStatus.Scheduled), ("@createdAt", createdAt));
+    }
+
+    private static Task<int> InsertPendingDropInBookingAsync(
+        SqlConnection connection, int businessId, int appointmentId, int clientId, DateTime createdAt) =>
+        ScalarIntAsync(connection,
+            """
+            INSERT INTO Bookings (BusinessId, AppointmentId, ClientId, EnrollmentId, Modality, Status, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @appointmentId, @clientId, NULL, @modality, @status, @createdAt)
+            """,
+            ("@businessId", businessId), ("@appointmentId", appointmentId), ("@clientId", clientId),
+            ("@modality", (byte)BookingModality.DropIn), ("@status", (byte)BookingStatus.Pending),
+            ("@createdAt", createdAt));
 
     private static async Task<BookingStateRow> ReadBookingStateAsync(SqlConnection connection, int bookingId)
     {
@@ -1373,6 +1586,8 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
     private sealed record NotificationRow(int Id, byte Type, string Recipient, string Subject, string BodyHtml, string DedupKey);
 
     private sealed record SeededClientTurn(int OwnBookingId, int OtherBookingId);
+
+    private sealed record SeededDropInClass(int OwnBookingId, int OtherBookingId, int PaymentId);
 
     private sealed record BookingStateRow(int Id, byte Status, DateTime? ConfirmedAt, DateTime? CancelledAt, byte? CancelledBy);
 

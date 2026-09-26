@@ -46,11 +46,11 @@
                         {
                             <p class="row-sub">@eligibility</p>
                         }
-                        @if (item.CanConfirmIntention || (item.CanCancel && item.IsIndividualTurn))
+                        @if (item.CanConfirmIntention || (item.CanCancel && (item.IsIndividualTurn || item.IsDropInClass)))
                         {
-                            @* T21.2 wires only the individual turn. The drop-in cancel arrives in T21.3, so the
-                               typed shift derived from the appointment kind decides the action; a fixed class keeps
-                               its place and no form is rendered for it. *@
+                            @* The typed shape derived from the appointment kind and modality decides each action: the
+                               individual turn (T21.2) offers confirmation and cancel, the drop-in class (T21.3) offers
+                               its own class cancel, and a fixed class keeps its place with no form at all. *@
                             <div class="row-actions">
                                 @if (item.CanConfirmIntention)
                                 {
@@ -64,6 +64,13 @@
                                     <form method="post" action="/r/@Model.Slug/mis-turnos/@item.BookingId/cancelar">
                                         @Html.AntiForgeryToken()
                                         <button type="submit" class="btn">Cancelar turno</button>
+                                    </form>
+                                }
+                                @if (item.CanCancel && item.IsDropInClass)
+                                {
+                                    <form method="post" action="/r/@Model.Slug/mis-turnos/@item.BookingId/cancelar-clase">
+                                        @Html.AntiForgeryToken()
+                                        <button type="submit" class="btn">Cancelar clase</button>
                                     </form>
                                 }
                             </div>

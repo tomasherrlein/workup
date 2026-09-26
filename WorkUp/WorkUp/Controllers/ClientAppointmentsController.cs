@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using WorkUp.BusinessLogic.Classes;
 using WorkUp.BusinessLogic.Common;
 using WorkUp.BusinessLogic.Scheduling;
 using WorkUp.Infrastructure;
@@ -8,26 +9,30 @@ using WorkUp.ViewModels.ClientPanel;
 namespace WorkUp.Controllers;
 
 /// <summary>
-/// "Mis turnos y clases" of the authenticated client panel (T21.1/T21.2, RF-08, RF-22). The agenda and every
+/// "Mis turnos y clases" of the authenticated client panel (T21.1/T21.2/T21.3, RF-08, RF-22). The agenda and every
 /// mutation are scoped to the tenant and the ficha taken exclusively from the client session cookie through the
 /// inherited properties of <see cref="ClientPanelControllerBase"/>, so no action accepts a business or client id from
 /// the route, the query or a form and one session can never read or mutate another ficha's bookings. The base guard
 /// already refuses a session in another business's route before an action runs.
 /// <para>
-/// The read is a GET and never changes state. Confirm and cancel are POST-only antiforgery routes that receive just
-/// the booking id from the route and prove ownership with the cookie-scoped <c>ClientId</c>; they never reuse the
-/// private-link authorization. A booking of another ficha or another tenant answers the same generic 404 as one that
-/// does not exist; a booking whose state or start no longer allows the action flashes a safe message and returns to
-/// the own agenda without leaking existence.
+/// The read is a GET and never changes state. Confirm and the two cancels (individual turn and drop-in class) are
+/// POST-only antiforgery routes that receive just the booking id from the route and prove ownership with the
+/// cookie-scoped <c>ClientId</c>; they never reuse the private-link authorization. A booking of another ficha or
+/// another tenant answers the same generic 404 as one that does not exist; a booking whose state or start no longer
+/// allows the action flashes a safe message and returns to the own agenda without leaking existence.
 /// </para>
 /// </summary>
 [Route("r/{slug}/mis-turnos")]
 public sealed class ClientAppointmentsController(
     ClientPanelService service,
-    ClientBookingActionsService bookingActionsService) : ClientPanelControllerBase
+    ClientBookingActionsService bookingActionsService,
+    ClientClassCancellationService classCancellationService) : ClientPanelControllerBase
 {
     /// <summary>Failure code of a booking that is not this session's own, inside this tenant, or does not exist.</summary>
     private const string BookingNotFoundCode = "client_booking_not_found";
+
+    /// <summary>Failure code of a class booking that is not this session's own drop-in, inside this tenant, or does not exist.</summary>
+    private const string ClassBookingNotFoundCode = "client_class_booking_not_found";
 
     [HttpGet("")]
     public async Task<IActionResult> Index(CancellationToken ct)
@@ -60,6 +65,19 @@ public sealed class ClientAppointmentsController(
     }
 
     /// <summary>
+    /// Cancels the session's own drop-in annotation of a class before its start (RF-22), without touching payments,
+    /// the fixed schedule or any enrollment. The identity is the ficha of the cookie; the fixed class date and any
+    /// annotation of another ficha or tenant answer the same generic 404 as a missing booking.
+    /// </summary>
+    [HttpPost("{bookingId:int}/cancelar-clase")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> CancelClass(int bookingId, CancellationToken ct)
+    {
+        var result = await classCancellationService.CancelOwnDropInAsync(BusinessId, ClientId, bookingId, ct);
+        return RedirectAfterAction(result, "Cancelaste tu clase suelta.", "No se pudo cancelar esta clase.");
+    }
+
+    /// <summary>
     /// A missing or foreign booking is a generic 404; any other refusal flashes a safe message and returns to the own
     /// agenda. The target is built from the authenticated slug, never from the route value, so it can never retarget
     /// another tenant.
@@ -72,7 +90,9 @@ public sealed class ClientAppointmentsController(
             return RedirectToOwnAgenda();
         }
 
-        if (result.Error?.Code == BookingNotFoundCode)
+        // Both cancel routes share the same generic 404: an individual turn and a drop-in class each use their own
+        // not-found code, and in both cases a foreign or missing booking is indistinguishable from a nonexistent one.
+        if (result.Error?.Code is BookingNotFoundCode or ClassBookingNotFoundCode)
             return NotFound();
 
         this.Flash(result.Error?.Message ?? fallbackMessage, FlashType.Error);

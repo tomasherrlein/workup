@@ -12,9 +12,10 @@ namespace WorkUp.ViewModels.ClientPanel;
 /// ever show the rows the service scoped to that session.
 /// <para>
 /// The kind of booking travels twice on purpose: <see cref="KindLabel"/> is display text only, while
-/// <see cref="IsIndividualTurn"/> is the typed shape derived from the appointment kind. Every action gate uses the
-/// typed flag, so renaming the label can never remove an action. <see cref="EligibilityLabel"/> announces only the
-/// actions whose forms this view wires today, so a row never promises a button that does not exist.
+/// <see cref="IsIndividualTurn"/> and <see cref="IsDropInClass"/> are the typed shapes derived from the appointment
+/// kind and modality. Every action gate uses a typed flag, so renaming the label can never remove an action.
+/// <see cref="EligibilityLabel"/> announces only the actions whose forms this view wires today, so a row never
+/// promises a button that does not exist.
 /// </para>
 /// </summary>
 public sealed record ClientAppointmentRowViewModel(
@@ -25,6 +26,7 @@ public sealed record ClientAppointmentRowViewModel(
     string WorkerName,
     string KindLabel,
     bool IsIndividualTurn,
+    bool IsDropInClass,
     StatusTag Status,
     StatusTag? SuspensionStatus,
     bool CanConfirmIntention,
@@ -33,16 +35,17 @@ public sealed record ClientAppointmentRowViewModel(
     /// <summary>
     /// The sentence that names what the person can still do with this row, or <c>null</c> when the panel has no
     /// action to offer before the start. It counts only the actions wired today: the individual turn (T21.2) offers
-    /// confirmation and, while it stays individual, cancellation; the drop-in cancel arrives in T21.3, so a drop-in
-    /// is not announced here. Whatever this sentence promises has a real button next to it.
+    /// confirmation and, while it stays individual, cancellation; the drop-in class (T21.3) offers cancellation. A
+    /// fixed class offers nothing, so it is never announced. Whatever this sentence promises has a real button next
+    /// to it.
     /// </summary>
     public string? EligibilityLabel
     {
         get
         {
-            // The same typed gate the view uses for the cancel form: a cancellable row of another kind has no
-            // button yet, and text without a button is a dead promise.
-            var canCancel = CanCancel && IsIndividualTurn;
+            // The same typed gates the view uses for its forms: a cancellable row of a kind without a button must
+            // not be announced, and text without a button is a dead promise.
+            var canCancel = CanCancel && (IsIndividualTurn || IsDropInClass);
             if (CanConfirmIntention && canCancel)
                 return "Podés confirmar que vas a asistir o cancelar.";
             if (CanConfirmIntention)
@@ -61,6 +64,7 @@ public sealed record ClientAppointmentRowViewModel(
         booking.WorkerName,
         KindLabelOf(booking),
         booking.AppointmentKind == AppointmentKind.Individual,
+        booking.AppointmentKind == AppointmentKind.ClassSession && booking.Modality == BookingModality.DropIn,
         StatusTag.For(booking.BookingStatus),
         booking.AppointmentStatus == AppointmentStatus.Suspended ? StatusTag.For(booking.AppointmentStatus) : null,
         booking.CanConfirmIntention,

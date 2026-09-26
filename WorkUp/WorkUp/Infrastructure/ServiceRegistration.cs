@@ -184,6 +184,11 @@ public static class ServiceRegistration
         services.AddScoped<IClientBookingActionsRepository, SqlClientBookingActionsRepository>();
         services.AddScoped<ClientBookingActionsService>();
 
+        // Cancel of an own drop-in class from the client panel (T21.3). It reuses the IClassDropInRepository already
+        // registered for the public drop-in reservations (T14) and the shared request DbSession, so no second,
+        // incompatible session is created.
+        services.AddScoped<ClientClassCancellationService>();
+
         return services;
     }
 
