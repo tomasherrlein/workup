@@ -272,6 +272,24 @@ public sealed class ClientInvitationAcceptanceServiceTests
     }
 
     [Fact]
+    public async Task Accept_existing_rolls_back_when_the_invited_ficha_was_linked_after_issue()
+    {
+        var (business, client) = SeedBusinessWithFicha();
+        SeedInvitation(business.Id, client.Id);
+        var pending = _repository.SeedPendingAccount(business.Id, InvitedEmail, _passwordHasher.Hash(Password));
+        _repository.SeedVerifiedAccount(business.Id, "otra@example.com", _passwordHasher.Hash(Password), client.Id, AcceptedAt);
+
+        var result = await _service.AcceptExistingAsync(HairdresserSlug, InvitationToken, Password);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("client_invitation_owner_assistance", result.Error!.Code);
+        Assert.Null(pending.Account.ClientId);
+        Assert.Null(pending.Account.EmailVerifiedAt);
+        Assert.Null(Assert.Single(_repository.Invitations).UsedAt);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
+    [Fact]
     public async Task Accept_existing_does_not_reveal_a_linked_account_without_its_password()
     {
         var (business, client) = SeedBusinessWithFicha();
@@ -411,7 +429,7 @@ public sealed class ClientInvitationAcceptanceServiceTests
         var result = await _service.AcceptExistingAsync(HairdresserSlug, InvitationToken, Password);
 
         Assert.False(result.Succeeded);
-        Assert.Equal("client_invitation_link_unavailable", result.Error!.Code);
+        Assert.Equal("client_invitation_owner_assistance", result.Error!.Code);
         Assert.Null(pending.Account.ClientId);
         Assert.Null(pending.Account.EmailVerifiedAt);
         Assert.Null(Assert.Single(_repository.Invitations).UsedAt);

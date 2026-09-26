@@ -16,8 +16,9 @@ namespace WorkUp.Data.ClientAccounts;
 /// <list type="bullet">
 /// <item>the probe (<see cref="FindInvitationAsync"/>) is a single read-only statement that holds no lock past
 /// itself, so the acceptance never holds a token while it waits for the account;</item>
-/// <item>the existing-account path takes the <c>ClientAccounts</c> row of the invited email
-/// <c>UPDLOCK, HOLDLOCK</c>, then the <c>Clients</c> row, then consumes the invitation;</item>
+/// <item>both paths take the per-business padlock before account keys, matching T20 registration. The
+/// existing-account path then takes the <c>ClientAccounts</c> row of the invited email
+/// <c>UPDLOCK, HOLDLOCK</c>, followed by the <c>Clients</c> row and the invitation;</item>
 /// <item>the new-account path takes the per-business padlock and the two account key guards (the T20 register order)
 /// before the <c>Clients</c> row and the invitation, so the account keys are locked before the ficha and never
 /// after it.</item>
@@ -48,11 +49,17 @@ public sealed class SqlClientInvitationAcceptanceRepository(DbSession session)
         """;
 
     /// <summary>
-    /// Existing-account path, step 1: takes the account row of the invited email <c>UPDLOCK, HOLDLOCK</c> and reports
-    /// whether it is still pending. The invited email selects the account whose password is validated; it is never
-    /// used to look up a ficha. A foreign or missing email returns no row.
+    /// Existing-account path, step 1: takes the same business padlock as T20 registration before taking the account
+    /// row of the invited email <c>UPDLOCK, HOLDLOCK</c>. This keeps registration's Clients-email guard from being
+    /// held while acceptance owns an account lock and waits on the ficha. The invited email selects the account
+    /// whose password is validated; it is never used to look up a ficha. A foreign or missing email returns no row.
     /// </summary>
     private const string LockAccountByEmailSql = """
+        SET NOCOUNT ON;
+
+        DECLARE @padlock INT;
+        SELECT @padlock = Id FROM Businesses WITH (UPDLOCK, ROWLOCK) WHERE Id = @businessId;
+
         SELECT TOP (1) account.Id,
                        account.PasswordHash,
                        CASE WHEN account.ClientId IS NULL AND account.EmailVerifiedAt IS NULL THEN 1 ELSE 0 END AS IsPending
@@ -63,8 +70,8 @@ public sealed class SqlClientInvitationAcceptanceRepository(DbSession session)
 
     /// <summary>
     /// New-account path, step 1. The business row is taken <c>UPDLOCK, ROWLOCK</c> first as the deterministic padlock
-    /// of a per-business account email key, exactly like the T20 registration, so two new-account acceptances of one
-    /// business serialize here. It then reads both account key ranges <c>UPDLOCK, HOLDLOCK</c>: the invited email and
+    /// of a per-business account email key, shared with T20 registration and the existing-account acceptance, so
+    /// these writers of one business serialize here. It then reads both account key ranges <c>UPDLOCK, HOLDLOCK</c>: the invited email and
     /// the invited ficha. Both ranges stay locked until the caller commits or rolls back, so an account row is never
     /// acquired after the ficha, and the ficha-linked guard closes the documented issuer race by refusing an
     /// invitation whose ficha was linked by acceptance time.

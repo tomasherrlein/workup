@@ -51,12 +51,12 @@ public sealed record InvitationAccountKeyState(bool EmailTaken, bool ClientLinke
 /// <item><see cref="FindInvitationAsync"/> is a read-only probe with no lock. It resolves the invited email so the
 /// account can be locked before the ficha; it decides nothing final, because usability is revalidated after the
 /// locks.</item>
-/// <item>The existing-account path locks the account row of the invited email first
-/// (<see cref="LockAccountByEmailAsync"/>), then the ficha (<see cref="LockClientAsync"/>) and only then the
+/// <item>The existing-account path takes the shared T20 business padlock then locks the account row of the invited
+/// email (<see cref="LockAccountByEmailAsync"/>), the ficha (<see cref="LockClientAsync"/>) and only then the
 /// invitation (<see cref="ConsumeInvitationAsync"/>).</item>
-/// <item>The new-account path takes the per-business padlock and the two account key guards first
+/// <item>The new-account path takes the same per-business padlock and the two account key guards first
 /// (<see cref="LockAccountKeyAsync"/>), then the ficha and the invitation, so an account row is never acquired after
-/// the ficha (the T20 register order).</item>
+/// the ficha. T20 registration shares the padlock but probes the Clients-email key before the account email key.</item>
 /// <item><see cref="ConsumeInvitationAsync"/> revalidates <c>UsedAt</c>, <c>RevokedAt</c> and <c>ExpiresAt</c> under
 /// the lock and consumes exactly once; a concurrent consumer blocks and then finds the row used.</item>
 /// <item><see cref="BindPendingAccountAsync"/> and <see cref="InsertVerifiedAccountAsync"/> are the only two bind
@@ -73,16 +73,16 @@ public interface IClientInvitationAcceptanceRepository
         int businessId, byte[] tokenHash, DateTime now, CancellationToken ct = default);
 
     /// <summary>
-    /// Existing-account path, step 1: locks the <c>ClientAccounts</c> row of the invited email inside the business and
-    /// returns its state, or null when no account carries that email. It runs before the ficha lock.
+    /// Existing-account path, step 1: takes the T20 business padlock then locks the <c>ClientAccounts</c> row of
+    /// the invited email and returns its state, or null when no account carries that email. It runs before the ficha lock.
     /// </summary>
     Task<InvitationAccountState?> LockAccountByEmailAsync(
         int businessId, string email, CancellationToken ct = default);
 
     /// <summary>
-    /// New-account path, step 1: takes the per-business padlock and the two account key guards, in the T20 register
-    /// order, and reports whether the invited email is already an account or the ficha is already linked. Both guards
-    /// are held until the caller commits or rolls back, so an account row is never acquired after the ficha.
+    /// New-account path, step 1: takes the same per-business padlock as T20 registration, then the two account
+    /// key guards. It reports whether the invited email or ficha is already linked. Both guards stay locked until
+    /// commit or rollback, so no account row is acquired after the ficha.
     /// </summary>
     Task<InvitationAccountKeyState> LockAccountKeyAsync(
         int businessId, string email, int clientId, CancellationToken ct = default);

@@ -77,7 +77,7 @@ public sealed class ClientInvitationAcceptanceService(
     /// <summary>
     /// Creates a new account with the invited email, already verified and bound to the invited existing ficha, with the
     /// chosen password. No ficha is created and no other ficha is touched. The read-only guards run before the ficha
-    /// lock (the T20 register order), the token is consumed exactly once, and the insert is guarded, so a lost race
+    /// lock (under the shared T20 business padlock), the token is consumed exactly once, and the insert is guarded, so a lost race
     /// returns a closed failure instead of attaching the account to a winner it never verified.
     /// </summary>
     public async Task<Result<AcceptedClientAccount>> AcceptNewAsync(
@@ -95,8 +95,8 @@ public sealed class ClientInvitationAcceptanceService(
         if (target is null)
             return UnavailableAcceptance();
 
-        // New-account path: the account keys are taken before the ficha, so an account row is never acquired after the
-        // ficha. ClientLinked closes the documented issuer race: an invitation whose ficha was linked in between is
+        // New-account path: the shared business padlock and account keys precede the ficha, so account rows are not
+        // acquired after it. ClientLinked closes the issuer race: an invitation linked in between is
         // refused instead of binding a second account to it.
         var keys = await repository.LockAccountKeyAsync(business.Id, target.Email, target.ClientId, ct);
         if (keys.EmailTaken)
@@ -152,8 +152,8 @@ public sealed class ClientInvitationAcceptanceService(
         if (target is null)
             return UnavailableAcceptance();
 
-        // Existing-account path: the account row of the invited email is the first lock, then the ficha, then the
-        // invitation. The invited email only selects the account whose password is validated; it is never a ficha key.
+        // Existing-account path: the shared business padlock precedes the invited account, the ficha and the
+        // invitation. The invited email selects the account whose password is validated, never a ficha key.
         var account = await repository.LockAccountByEmailAsync(business.Id, target.Email, ct);
         if (account is null)
             return UnavailableAcceptance();
@@ -171,7 +171,7 @@ public sealed class ClientInvitationAcceptanceService(
             return UnavailableAcceptance();
 
         if (!await repository.BindPendingAccountAsync(business.Id, account.ClientAccountId, client.Id, now, ct))
-            return UnavailableAcceptance();
+            return OwnerAssistance();
 
         await transaction.CommitAsync(ct);
         return Result<AcceptedClientAccount>.Success(
