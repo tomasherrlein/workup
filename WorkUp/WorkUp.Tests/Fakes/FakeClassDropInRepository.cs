@@ -98,6 +98,31 @@ public sealed class FakeClassDropInRepository : IClassDropInRepository
     /// <summary>Every cancellation the service asked for, so a test can pin the instant it was given.</summary>
     public List<(int BookingId, DateTime Now)> CancelRequests { get; } = [];
 
+    /// <summary>Calls to the lock-free ficha-scoped probe of the client panel cancellation (T21.3).</summary>
+    public int FindOwnProbeCallCount { get; private set; }
+
+    public int? FindOwnProbeBusinessId { get; private set; }
+
+    public int? FindOwnProbeClientId { get; private set; }
+
+    public int? FindOwnProbeBookingId { get; private set; }
+
+    /// <summary>Calls to the ficha-scoped lock read of the client's own annotation.</summary>
+    public int LockClientDropInCallCount { get; private set; }
+
+    /// <summary>Calls to the guarded client-side cancellation.</summary>
+    public int CancelClientCallCount { get; private set; }
+
+    /// <summary>Every client-side cancellation the service asked for, with the instant it was given.</summary>
+    public List<(int BookingId, DateTime Now)> CancelClientRequests { get; } = [];
+
+    /// <summary>
+    /// Ordered repository calls of the client panel cancellation, so a test can prove the lock-free probe runs first,
+    /// then the session lock and only then the annotation lock. The existing paths append to it too, which does not
+    /// change any of their assertions.
+    /// </summary>
+    public List<string> Calls { get; } = [];
+
     public int IdentifyCallCount { get; private set; }
     public string? IdentifiedEmail { get; private set; }
     public string? IdentifiedPhone { get; private set; }
@@ -134,6 +159,7 @@ public sealed class FakeClassDropInRepository : IClassDropInRepository
 
     public Task<ClassSessionRow?> LockSessionAsync(int businessId, int appointmentId, CancellationToken ct = default)
     {
+        Calls.Add("lock-session");
         LockCallCount++;
         LockBusinessId = businessId;
         LockedAppointmentId = appointmentId;
@@ -211,6 +237,93 @@ public sealed class FakeClassDropInRepository : IClassDropInRepository
         ReleasePlace(booking.State.AppointmentId, bookingId);
         return Task.FromResult(true);
     }
+
+    /// <summary>
+    /// Emulates the lock-free, ficha-scoped probe of the client panel cancellation (T21.3): the session of the
+    /// client's own annotation, resolved from the registered session rows, which are the only place the fake keeps the
+    /// owning client of a booking. A booking whose session is not registered, or whose annotation belongs to another
+    /// ficha, is invisible exactly like the scoped <c>WHERE BusinessId = ... AND ClientId = ...</c> of the real read.
+    /// It filters by tenant and ficha but not by modality or kind: those are the service's own guards, and emulating
+    /// them here would hide a service that forgot them.
+    /// </summary>
+    public Task<int?> FindOwnBookingSessionIdAsync(
+        int businessId, int clientId, int bookingId, CancellationToken ct = default)
+    {
+        Calls.Add("probe");
+        FindOwnProbeCallCount++;
+        FindOwnProbeBusinessId = businessId;
+        FindOwnProbeClientId = clientId;
+        FindOwnProbeBookingId = bookingId;
+
+        var session = FindOwnSession(businessId, clientId, bookingId);
+        return Task.FromResult(session is null ? (int?)null : session.Row.AppointmentId);
+    }
+
+    /// <summary>
+    /// Emulates the ficha-scoped lock read of the client's own annotation, including the guard that its session is
+    /// registered under the same business. It deliberately does not filter the modality nor the kind, so a service
+    /// that forgot those guards is caught by its own rules instead of being hidden by the fake.
+    /// </summary>
+    public Task<DropInCancellationState?> LockClientDropInAsync(
+        int businessId, int clientId, int bookingId, CancellationToken ct = default)
+    {
+        Calls.Add("lock-client-drop-in");
+        LockClientDropInCallCount++;
+
+        var session = FindOwnSession(businessId, clientId, bookingId);
+        if (session is null)
+            return Task.FromResult<DropInCancellationState?>(null);
+
+        var booking = DropInBookings.FirstOrDefault(candidate =>
+            candidate.BusinessId == businessId && candidate.State.BookingId == bookingId);
+        return Task.FromResult(booking?.State);
+    }
+
+    /// <summary>
+    /// Emulates the guarded client-side cancellation: only the client's own drop-in annotation, still pending or
+    /// confirmed, of a scheduled class that starts after <paramref name="now"/>, is written — and anything else
+    /// reports that no row changed. <c>CancelledBy = Client</c> mirrors the fixed value of the statement; a fake test
+    /// can pin it, but only the opt-in fixture proves the stored column.
+    /// </summary>
+    public Task<bool> CancelClientDropInAsync(
+        int businessId, int clientId, int bookingId, DateTime now, CancellationToken ct = default)
+    {
+        Calls.Add("cancel-client-drop-in");
+        CancelClientCallCount++;
+        CancelClientRequests.Add((bookingId, now));
+
+        var session = FindOwnSession(businessId, clientId, bookingId);
+        if (session is null)
+            return Task.FromResult(false);
+
+        var booking = DropInBookings.FirstOrDefault(candidate =>
+            candidate.BusinessId == businessId
+            && candidate.State.BookingId == bookingId
+            && candidate.State.Modality == BookingModality.DropIn
+            && candidate.State.Kind == AppointmentKind.ClassSession
+            && candidate.State.AppointmentStatus == AppointmentStatus.Scheduled
+            && candidate.State.StartsAt > now
+            && candidate.State.Status is BookingStatus.Pending or BookingStatus.Confirmed);
+        if (booking is null)
+            return Task.FromResult(false);
+
+        booking.State = booking.State with { Status = BookingStatus.Cancelled };
+        booking.CancelledAt = now;
+        booking.CancelledBy = CancelledBy.Client;
+        ReleasePlace(booking.State.AppointmentId, bookingId);
+        return Task.FromResult(true);
+    }
+
+    /// <summary>
+    /// The registered session that holds <paramref name="bookingId"/> as an annotation of
+    /// <paramref name="clientId"/> inside the business, or <c>null</c>. It is the fake's whole tenant and ficha scope:
+    /// the owning client of a booking is only known through the session row it was registered with.
+    /// </summary>
+    private FakeClassDropInSession? FindOwnSession(int businessId, int clientId, int bookingId) =>
+        Sessions.FirstOrDefault(session =>
+            session.BusinessId == businessId
+            && session.Row.Bookings.Any(booking =>
+                booking.BookingId == bookingId && booking.ClientId == clientId));
 
     /// <summary>
     /// Mirrors the cancelled row into the occupancy of its session, so a later booking sees the released place, just

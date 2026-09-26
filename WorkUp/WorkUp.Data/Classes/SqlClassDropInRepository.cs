@@ -159,6 +159,60 @@ public sealed class SqlClassDropInRepository(DbSession session)
         """;
 
     /// <summary>
+    /// The lock-free probe of the client panel cancellation (T21.3): which class the client's own annotation belongs
+    /// to, scoped by business, ficha and booking. It carries no lock hint, so it cannot block or be blocked and takes
+    /// no part in the lock order; it only discovers which session row the caller has to lock first. The join to
+    /// <c>Appointments</c> repeats the tenant on both sides, so a booking of another business never resolves.
+    /// </summary>
+    private const string FindOwnBookingSessionIdSql = """
+        SELECT b.AppointmentId
+          FROM Bookings AS b
+          JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
+         WHERE b.BusinessId = @businessId
+           AND b.ClientId = @clientId
+           AND b.Id = @bookingId
+        """;
+
+    /// <summary>
+    /// Locks the client's own annotation row of the business inside the caller's transaction. The tenant, the ficha
+    /// and the booking are all part of the predicate, so another client's or another tenant's annotation is simply
+    /// not found and is indistinguishable from a missing one. The modality and the kind are not filtered: the caller
+    /// refuses a booking that is not a drop-in of a class with the same answer as a missing one.
+    /// </summary>
+    private const string LockClientDropInSql = """
+        SELECT b.Id AS BookingId, a.Id AS AppointmentId, a.StartsAt, a.Kind, a.Status AS AppointmentStatus,
+               b.Status AS BookingStatus, b.Modality
+          FROM Bookings AS b WITH (UPDLOCK, ROWLOCK)
+          JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
+         WHERE b.BusinessId = @businessId
+           AND b.ClientId = @clientId
+           AND b.Id = @bookingId
+        """;
+
+    /// <summary>
+    /// The guarded client-side cancellation (T21.3): one statement that writes <c>Cancelado</c>,
+    /// <c>CancelledAt</c> and <c>CancelledBy = Client</c> only while the annotation is the client's own drop-in,
+    /// still pending or confirmed, and its session is still a <c>ClassSession</c>, <c>Programado</c> and starting after
+    /// <paramref name="now"/>. The ficha is part of the predicate as well as the lock, so no other client's row can
+    /// ever be written even if the caller were wrong. It writes those three columns together, so there is no
+    /// read-modify-write window, and it touches no payment, enrollment or fixed schedule (RF-22, D-24).
+    /// </summary>
+    private const string CancelClientDropInSql = """
+        UPDATE b
+           SET Status = @cancelled, CancelledBy = @client, CancelledAt = @now
+          FROM Bookings AS b
+          JOIN Appointments AS a ON a.Id = b.AppointmentId AND a.BusinessId = b.BusinessId
+         WHERE b.BusinessId = @businessId
+           AND b.ClientId = @clientId
+           AND b.Id = @bookingId
+           AND b.Modality = @dropIn
+           AND b.Status IN (@pending, @confirmed)
+           AND a.Kind = @classSession
+           AND a.Status = @scheduled
+           AND a.StartsAt > @now
+        """;
+
+    /// <summary>
     /// Identifies a client by its email inside one business (UQ_Clients_Email). The comparison relies on the
     /// case-insensitive collation the unique index itself relies on, and the projection returns the stored email —
     /// which is the recipient of the notice — not the requested one.
@@ -402,6 +456,47 @@ public sealed class SqlClassDropInRepository(DbSession session)
                 .AddValue("@scheduled", AppointmentStatus.Scheduled)
                 .AddValue("@cancelled", BookingStatus.Cancelled)
                 .AddValue("@owner", CancelledBy.Owner)
+                .AddDateTime2("@now", now),
+            ct) == 1;
+
+    public async Task<int?> FindOwnBookingSessionIdAsync(
+        int businessId, int clientId, int bookingId, CancellationToken ct = default)
+    {
+        var appointmentId = await ScalarAsync<int>(
+            FindOwnBookingSessionIdSql,
+            p => p.AddValue("@businessId", businessId).AddValue("@clientId", clientId)
+                .AddValue("@bookingId", bookingId),
+            ct);
+
+        // The probe returns 0 when no row matched, and no identity value is 0, so the caller can tell "not this
+        // ficha's booking" from a real session id without a second read.
+        return appointmentId > 0 ? appointmentId : null;
+    }
+
+    public Task<DropInCancellationState?> LockClientDropInAsync(
+        int businessId, int clientId, int bookingId, CancellationToken ct = default) =>
+        QuerySingleOrDefaultAsync(
+            LockClientDropInSql,
+            MapDropInCancellationState,
+            p => p.AddValue("@businessId", businessId).AddValue("@clientId", clientId)
+                .AddValue("@bookingId", bookingId),
+            ct);
+
+    public async Task<bool> CancelClientDropInAsync(
+        int businessId, int clientId, int bookingId, DateTime now, CancellationToken ct = default) =>
+        await ExecuteAsync(
+            CancelClientDropInSql,
+            p => p
+                .AddValue("@businessId", businessId)
+                .AddValue("@clientId", clientId)
+                .AddValue("@bookingId", bookingId)
+                .AddValue("@dropIn", BookingModality.DropIn)
+                .AddValue("@pending", BookingStatus.Pending)
+                .AddValue("@confirmed", BookingStatus.Confirmed)
+                .AddValue("@classSession", AppointmentKind.ClassSession)
+                .AddValue("@scheduled", AppointmentStatus.Scheduled)
+                .AddValue("@cancelled", BookingStatus.Cancelled)
+                .AddValue("@client", CancelledBy.Client)
                 .AddDateTime2("@now", now),
             ct) == 1;
 

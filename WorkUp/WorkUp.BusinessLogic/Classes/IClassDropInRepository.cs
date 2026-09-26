@@ -98,6 +98,47 @@ public interface IClassDropInRepository
     Task<bool> CancelDropInAsync(int businessId, int bookingId, DateTime now, CancellationToken ct = default);
 
     /// <summary>
+    /// Lock-free, ficha-scoped probe of the client panel cancellation (T21.3, RF-22): the appointment id of the
+    /// client's own booking, read before any row is locked so the caller can discover which class the annotation
+    /// belongs to and take that session row first. It filters by <c>BusinessId</c>, <c>ClientId</c> and <c>Id</c>
+    /// and takes no lock at all, so it never takes part in a lock order and can never block a writer. It returns
+    /// <c>null</c> when the booking does not belong to that client inside that business, or does not exist: a booking
+    /// of another ficha or another tenant is indistinguishable from a missing one. It does not filter the modality or
+    /// the kind, because the caller decides what to do with a booking that is not a drop-in of a class and answers
+    /// all of those with the same stable code.
+    /// </summary>
+    Task<int?> FindOwnBookingSessionIdAsync(
+        int businessId, int clientId, int bookingId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Locks the client's own annotation row inside the caller's transaction, like
+    /// <c>SELECT ... WITH (UPDLOCK, ROWLOCK)</c>, and reads the facts the client panel cancellation judges
+    /// (T21.3, RF-22). It is scoped by <c>BusinessId</c>, <c>ClientId</c> and <c>Id</c>, so a booking of another
+    /// ficha or another tenant is not found and cannot be told apart from one that does not exist. The caller locks
+    /// the session row first and this annotation second — the order the owner's class date actions use — so both
+    /// paths serialize on the session row instead of interleaving. It does not filter the modality or the kind: the
+    /// service refuses a booking that is not a drop-in of a class with the same answer as a missing one.
+    /// </summary>
+    Task<DropInCancellationState?> LockClientDropInAsync(
+        int businessId, int clientId, int bookingId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Marks the client's own drop-in annotation <c>Cancelado</c>, with <c>CancelledAt = </c><paramref name="now"/>
+    /// and <c>CancelledBy = Client</c> (T21.3, RF-22), and reports whether a row actually changed. It runs inside
+    /// the caller's transaction and is scoped by <c>BusinessId</c>, <c>ClientId</c> and <c>Id</c>, so no other
+    /// ficha's or tenant's row can be written, and its predicate repeats every storage-expressible rule: the
+    /// annotation must be <c>Modality = Suelta</c>, still <c>Pendiente</c> or <c>Confirmado</c>, and its session must
+    /// be a <c>ClassSession</c> that is still <c>Programado</c> and starts strictly after <paramref name="now"/>. It
+    /// writes those three columns together and nothing else: no payment, no enrollment and no fixed schedule is
+    /// touched (RF-22, D-24), and the freed place is released by the status itself, which is what the capacity count
+    /// and <c>UX_Bookings_ActiveClient</c> read. A concurrent double cancel cannot lose an update: the statement
+    /// requires the pre-cancellation status, so the loser changes zero rows instead of overwriting the original
+    /// instant and author.
+    /// </summary>
+    Task<bool> CancelClientDropInAsync(
+        int businessId, int clientId, int bookingId, DateTime now, CancellationToken ct = default);
+
+    /// <summary>
     /// Returns the client identified by <paramref name="email"/> inside the business, creating it without a password
     /// when it does not exist yet (the T09 flow, RF-07 step 5). An existing client is returned as it is, never
     /// duplicated and never updated: its stored email is the recipient of the drop-in notice. Tenant-scoped: the same
