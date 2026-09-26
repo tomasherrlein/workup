@@ -25,6 +25,9 @@ public sealed class FakeBookingRepository : IPublicBookingRepository
     public DateOnly? SnapshotStartDate { get; private set; }
     public DateOnly? SnapshotEndDate { get; private set; }
 
+    /// <summary>True when any recorded call came from the public email lookup or its client insert path.</summary>
+    public bool LookedUpClientByEmail => Calls.Contains("find-client") || Calls.Contains("insert-client");
+
     public Task<Worker?> LockActiveWorkerAsync(int businessId, int workerId, CancellationToken ct = default)
     {
         Calls.Add("lock-worker");
@@ -60,6 +63,12 @@ public sealed class FakeBookingRepository : IPublicBookingRepository
     {
         Calls.Add("find-client");
         return Task.FromResult(Clients.SingleOrDefault(client => client.BusinessId == businessId && client.Email == normalizedEmail));
+    }
+
+    public Task<Client?> GetClientByIdAsync(int businessId, int clientId, CancellationToken ct = default)
+    {
+        Calls.Add("find-client-by-id");
+        return Task.FromResult(Clients.SingleOrDefault(client => client.BusinessId == businessId && client.Id == clientId));
     }
 
     public Task<int?> TryInsertClientAsync(Client client, CancellationToken ct = default)

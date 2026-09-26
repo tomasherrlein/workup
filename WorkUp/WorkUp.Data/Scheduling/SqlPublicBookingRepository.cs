@@ -128,6 +128,13 @@ public sealed class SqlPublicBookingRepository(DbSession session) : SqlRepositor
             p => p.AddValue("@businessId", businessId).AddValue("@email", normalizedEmail),
             ct);
 
+    public Task<Client?> GetClientByIdAsync(int businessId, int clientId, CancellationToken ct = default) =>
+        QuerySingleOrDefaultAsync(
+            "SELECT Id, BusinessId, FirstName, LastName, Email, Phone, HealthNotes, CreatedAt FROM Clients WHERE BusinessId = @businessId AND Id = @clientId",
+            MapClient,
+            p => p.AddValue("@businessId", businessId).AddValue("@clientId", clientId),
+            ct);
+
     public async Task<int?> TryInsertClientAsync(Client client, CancellationToken ct = default)
     {
         try

@@ -9,7 +9,13 @@ using WorkUp.Domain.Rules;
 
 namespace WorkUp.BusinessLogic.Scheduling;
 
-/// <summary>Atomically creates a public individual reservation and its private-link email.</summary>
+/// <summary>
+/// Atomically creates an individual reservation and its private-link email. Both entry points share one
+/// transactional core — the per-worker update lock, the post-lock availability read, the pending booking, the
+/// negotiated price, the private link and the deduplicated notification — and differ only in how the ficha is
+/// resolved: the public form by normalized email (creating it when missing), the authenticated client panel by the
+/// tenant-scoped <c>ClientId</c> from the cookie.
+/// </summary>
 public sealed class BookingService(
     IPublicBookingRepository repository,
     IUnitOfWork unitOfWork,
@@ -20,6 +26,9 @@ public sealed class BookingService(
     private const int AlternativeSearchDays = 30;
     private const int MaxNameLength = 60;
     private const int MaxEmailLength = 254;
+    private const string StartTimeField = nameof(BookIndividualAppointmentRequest.StartTime);
+    private const string ClientNotFoundCode = "client_booking_not_found";
+    private const string ClientNotFoundMessage = "No pudimos completar la reserva.";
 
     public async Task<PublicBookingAttempt> BookIndividualAsync(
         int businessId,
@@ -30,16 +39,97 @@ public sealed class BookingService(
         if (validation is not null)
             return Failed(validation);
 
-        var searchEndDate = request.Date.AddDays(AlternativeSearchDays);
+        return await BookIndividualCoreAsync(
+            businessId,
+            request.ServiceId,
+            request.WorkerId,
+            request.Date,
+            startsAt,
+            async now =>
+            {
+                var client = await repository.GetClientByEmailAsync(businessId, email, ct);
+                if (client is null)
+                {
+                    client = new Client
+                    {
+                        BusinessId = businessId,
+                        FirstName = firstName,
+                        LastName = lastName,
+                        Email = email,
+                        Phone = null,
+                        HealthNotes = null,
+                        CreatedAt = now
+                    };
+                    var clientId = await repository.TryInsertClientAsync(client, ct);
+                    if (clientId is null)
+                        return ClientResolution.Fail(new BusinessError("booking_retry", "No pudimos completar la reserva. Revisá los datos e intentá de nuevo."));
+                    client.Id = clientId.Value;
+                }
+
+                // The public form keeps echoing the submitted (normalized) address, exactly as before the panel path.
+                return ClientResolution.Ok(client, email);
+            },
+            ct);
+    }
+
+    /// <summary>
+    /// Creates the pending individual turn of the client authenticated by the panel cookie. The caller supplies
+    /// <c>businessId</c> and <c>clientId</c> straight from the client session; this method never receives an email or
+    /// a name, never looks a ficha up by email and never inserts a client. It shares the public transactional core:
+    /// the same worker lock, the same post-lock availability read, and the same pending booking, price, private link
+    /// and deduplicated notification. A missing or cross-tenant ficha fails with the generic
+    /// <c>client_booking_not_found</c> and writes nothing.
+    /// </summary>
+    public async Task<PublicBookingAttempt> BookIndividualForClientAsync(
+        int businessId,
+        int clientId,
+        int serviceId,
+        int workerId,
+        DateOnly date,
+        TimeOnly startTime,
+        CancellationToken ct = default)
+    {
+        var validation = ValidateClientRequest(businessId, clientId, serviceId, workerId, date, startTime, clock.Now, out var startsAt);
+        if (validation is not null)
+            return Failed(validation);
+
+        return await BookIndividualCoreAsync(
+            businessId,
+            serviceId,
+            workerId,
+            date,
+            startsAt,
+            async _ =>
+            {
+                var client = await repository.GetClientByIdAsync(businessId, clientId, ct);
+                if (client is null || client.BusinessId != businessId || client.Id != clientId)
+                    return ClientResolution.Fail(new BusinessError(ClientNotFoundCode, ClientNotFoundMessage));
+
+                // The address comes from the persisted ficha, never from the cookie or a resubmitted form field.
+                return ClientResolution.Ok(client, client.Email);
+            },
+            ct);
+    }
+
+    private async Task<PublicBookingAttempt> BookIndividualCoreAsync(
+        int businessId,
+        int serviceId,
+        int workerId,
+        DateOnly date,
+        DateTime startsAt,
+        Func<DateTime, Task<ClientResolution>> resolveClient,
+        CancellationToken ct)
+    {
+        var searchEndDate = date.AddDays(AlternativeSearchDays);
         await using var transaction = await unitOfWork.BeginAsync(ct: ct);
 
         // This worker-row update lock serializes competing reservations before any availability data is read.
-        var worker = await repository.LockActiveWorkerAsync(businessId, request.WorkerId, ct);
-        if (worker is null || !worker.IsActive || worker.BusinessId != businessId || worker.Id != request.WorkerId)
+        var worker = await repository.LockActiveWorkerAsync(businessId, workerId, ct);
+        if (worker is null || !worker.IsActive || worker.BusinessId != businessId || worker.Id != workerId)
             return Failed("worker_unavailable", "No encontramos a esa trabajadora disponible.");
 
-        var service = await repository.GetActiveIndividualServiceAsync(businessId, request.ServiceId, ct);
-        if (service is null || !service.IsActive || !service.IsIndividual || service.BusinessId != businessId || service.Id != request.ServiceId)
+        var service = await repository.GetActiveIndividualServiceAsync(businessId, serviceId, ct);
+        if (service is null || !service.IsActive || !service.IsIndividual || service.BusinessId != businessId || service.Id != serviceId)
             return Failed("service_unavailable", "Ese servicio no está disponible para reservar.");
 
         var business = await repository.GetBusinessSettingsAsync(businessId, ct);
@@ -47,38 +137,24 @@ public sealed class BookingService(
             return Failed("business_unavailable", "No pudimos completar la reserva. Probá de nuevo.");
 
         // Read fresh schedules, breaks, appointments, and bookings only after acquiring the worker lock.
-        var snapshot = await repository.GetAvailabilitySnapshotAsync(businessId, worker.Id, request.Date, searchEndDate, ct);
+        var snapshot = await repository.GetAvailabilitySnapshotAsync(businessId, worker.Id, date, searchEndDate, ct);
         var now = clock.Now;
         if (startsAt <= now)
-            return Failed("booking_start_in_past", "Elegí un horario futuro.", nameof(request.StartTime));
+            return Failed("booking_start_in_past", "Elegí un horario futuro.", StartTimeField);
 
         var availableSlots = AvailabilityCalculator.GetAvailableSlots(
-            worker.Id, request.Date, service, snapshot.Schedules, snapshot.Breaks, snapshot.Appointments, snapshot.Bookings);
+            worker.Id, date, service, snapshot.Schedules, snapshot.Breaks, snapshot.Appointments, snapshot.Bookings);
         if (!availableSlots.Contains(startsAt))
         {
             var alternative = NearestSlotSearch.Find(
-                worker.Id, request.Date, searchEndDate, startsAt, service, snapshot, slot => slot > now);
-            return Failed("slot_unavailable", "Ese horario no está disponible. Elegí otro.", nameof(request.StartTime), alternative);
+                worker.Id, date, searchEndDate, startsAt, service, snapshot, slot => slot > now);
+            return Failed("slot_unavailable", "Ese horario no está disponible. Elegí otro.", StartTimeField, alternative);
         }
 
-        var client = await repository.GetClientByEmailAsync(businessId, email, ct);
-        if (client is null)
-        {
-            client = new Client
-            {
-                BusinessId = businessId,
-                FirstName = firstName,
-                LastName = lastName,
-                Email = email,
-                Phone = null,
-                HealthNotes = null,
-                CreatedAt = now
-            };
-            var clientId = await repository.TryInsertClientAsync(client, ct);
-            if (clientId is null)
-                return Failed("booking_retry", "No pudimos completar la reserva. Revisá los datos e intentá de nuevo.");
-            client.Id = clientId.Value;
-        }
+        var resolution = await resolveClient(now);
+        if (resolution.Error is not null)
+            return Failed(resolution.Error);
+        var client = resolution.Client!;
 
         var appointment = new Appointment
         {
@@ -124,7 +200,7 @@ public sealed class BookingService(
         {
             BusinessId = businessId,
             Type = notificationType,
-            Recipient = email,
+            Recipient = resolution.Recipient,
             Subject = isReminderWindow ? "Recordatorio de tu turno" : "Tu turno quedó reservado",
             BodyHtml = BuildEmailBody(
                 business.Name,
@@ -192,6 +268,42 @@ public sealed class BookingService(
             return new BusinessError("booking_start_in_past", "Elegí un horario futuro.", nameof(request.StartTime));
 
         return null;
+    }
+
+    private static BusinessError? ValidateClientRequest(
+        int businessId,
+        int clientId,
+        int serviceId,
+        int workerId,
+        DateOnly date,
+        TimeOnly startTime,
+        DateTime now,
+        out DateTime startsAt)
+    {
+        startsAt = date.ToDateTime(startTime, DateTimeKind.Unspecified);
+
+        // A missing, foreign or invalid ficha is reported the same generic way and never reaches persistence.
+        if (businessId <= 0 || clientId <= 0)
+            return new BusinessError(ClientNotFoundCode, ClientNotFoundMessage);
+        if (serviceId <= 0)
+            return new BusinessError("service_unavailable", "Ese servicio no está disponible para reservar.", nameof(BookIndividualAppointmentRequest.ServiceId));
+        if (workerId <= 0)
+            return new BusinessError("worker_unavailable", "No encontramos a esa trabajadora disponible.", nameof(BookIndividualAppointmentRequest.WorkerId));
+        if (date.DayNumber >= DateOnly.MaxValue.DayNumber - AlternativeSearchDays)
+            return new BusinessError("booking_date_out_of_range", "Elegí otra fecha para buscar horarios disponibles.", nameof(BookIndividualAppointmentRequest.Date));
+        if (startTime.Ticks % TimeSpan.TicksPerMinute != 0 || startTime.Minute % 15 != 0)
+            return new BusinessError("invalid_booking_grid", "Elegí un horario en la grilla de 15 minutos.", StartTimeField);
+        if (startsAt <= now)
+            return new BusinessError("booking_start_in_past", "Elegí un horario futuro.", StartTimeField);
+
+        return null;
+    }
+
+    /// <summary>The ficha resolved inside the transaction plus the address its notification must go to.</summary>
+    private sealed record ClientResolution(Client? Client, string Recipient, BusinessError? Error)
+    {
+        public static ClientResolution Ok(Client client, string recipient) => new(client, recipient, null);
+        public static ClientResolution Fail(BusinessError error) => new(null, "", error);
     }
 
     private static string BuildEmailBody(

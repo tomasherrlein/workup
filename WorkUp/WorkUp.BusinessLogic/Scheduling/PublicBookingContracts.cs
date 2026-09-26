@@ -51,6 +51,12 @@ public interface IPublicBookingRepository
 
     Task<Client?> GetClientByEmailAsync(int businessId, string normalizedEmail, CancellationToken ct = default);
 
+    /// <summary>
+    /// Reads the persisted ficha by tenant and id for the authenticated client panel. It never creates or mutates a
+    /// client, and returns null when that id does not belong to the business.
+    /// </summary>
+    Task<Client?> GetClientByIdAsync(int businessId, int clientId, CancellationToken ct = default);
+
     /// <summary>Returns null only when the tenant/email unique key lost a concurrent insert race.</summary>
     Task<int?> TryInsertClientAsync(Client client, CancellationToken ct = default);
 
