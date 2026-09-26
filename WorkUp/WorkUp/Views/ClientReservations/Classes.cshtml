@@ -1,0 +1,50 @@
+@using WorkUp.ViewModels.ClientPanel
+@model ClientClassReservationViewModel
+@{
+    Layout = "_ClientLayout";
+    ViewData["Title"] = "Clases sueltas";
+}
+<section class="public-booking" aria-labelledby="client-classes-title">
+    <h1 id="client-classes-title">Clases sueltas</h1>
+    <p>Estas son las clases con lugares disponibles. Anotate en la que quieras.</p>
+    <a class="btn" href="/r/@Model.Slug/mis-turnos">Volver a mis turnos</a>
+</section>
+
+<div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+
+@if (!Model.HasSessions)
+{
+    <div class="empty-state" role="status">
+        <p>@ClientClassReservationViewModel.EmptyMessage</p>
+    </div>
+}
+else
+{
+    @* Each session is booked by its own antiforgery POST form: the appointment id travels in the route and the
+       identity is always the cookie, so the screen has no contact field and no private token. *@
+    <ul class="rows" aria-label="Clases sueltas disponibles">
+        @foreach (var session in Model.Sessions)
+        {
+            <li class="row row-flat">
+                <div class="row-main">
+                    <div class="row-title">
+                        <strong>@session.ServiceName</strong>
+                        <span class="muted">
+                            @session.RemainingPlaces @(session.RemainingPlaces == 1 ? "lugar libre" : "lugares libres")
+                        </span>
+                    </div>
+                    <div class="row-sub">
+                        <time datetime="@session.Date.ToString("yyyy-MM-dd")">@Formatting.LongDate(session.Date)</time>
+                        · @Formatting.Time(session.Date.ToDateTime(session.StartTime)) · @session.TeacherName
+                    </div>
+                    <div class="row-actions">
+                        <form method="post" action="/r/@Model.Slug/mis-turnos/reservar/clase/@session.AppointmentId">
+                            @Html.AntiForgeryToken()
+                            <button type="submit" class="btn">Anotarme</button>
+                        </form>
+                    </div>
+                </div>
+            </li>
+        }
+    </ul>
+}

@@ -7,6 +7,12 @@
 <section class="public-booking" aria-labelledby="client-appointments-title">
     <h1 id="client-appointments-title">Mis turnos y clases</h1>
     <p>Tus turnos individuales, tus clases fijas y tus clases sueltas en este negocio.</p>
+    @* The two reservation entries are always visible, even when the agenda is empty: reserving is what the person
+       came to do, and the empty state must not be the only thing the screen offers. *@
+    <div class="row-actions">
+        <a class="btn-primary" href="/r/@Model.Slug/mis-turnos/reservar/turno">Reservar un turno</a>
+        <a class="btn" href="/r/@Model.Slug/mis-turnos/reservar/clase">Anotarme a una clase suelta</a>
+    </div>
 </section>
 
 <section aria-labelledby="client-appointments-upcoming">
