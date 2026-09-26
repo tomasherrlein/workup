@@ -39,8 +39,16 @@ namespace WorkUp.Tests.ClientAccounts;
 /// <c>Cancelar clase</c> form, a scanner GET of the POST-only route writes nothing, the POST without its anti-CSRF
 /// token is refused, another ficha's annotation answers a generic 404, the own POST persists <c>Cancelled</c> by the
 /// client while the seeded payment stays untouched, a repeat is refused without moving the original timestamp, and
-/// the panel renders neither the seeded owner note nor a private appointment link. A hostile return URL closes the
-/// open-redirect surface.
+/// the panel renders neither the seeded owner note nor a private appointment link. Then the T21.5 panel reservations
+/// run from that same agenda: the two entry links are rendered, the individual screen offers the active service, the
+/// active worker and the real free starts of a future day and its GET writes nothing, the save without its anti-CSRF
+/// token is refused, and the anti-CSRF save ignores a forged email and client id to persist a Pending turn of the
+/// cookie's own ficha with the chosen worker, start and price, a private 32-byte-hash link expiring 24 h after the
+/// start and the booking-keyed notice addressed to the stored ficha email, and to add no client row. The class screen
+/// lists a seeded future session, its GET writes nothing, the save without its anti-CSRF token is refused, the
+/// anti-CSRF save persists a Pending drop-in of the cookie's ficha without a payment or a new client, a duplicate is
+/// refused safely without a second row, and a class session of another tenant answers the generic 404. A hostile
+/// return URL closes the open-redirect surface.
 /// </para>
 /// <para>
 /// The fixture is opt-in through the pair <c>WORKUP_T20_HTTP_CONNECTION</c> and <c>WORKUP_T20_HTTP_KEYS_PATH</c>. Without
@@ -760,6 +768,271 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         Assert.Equal(reschedulePaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
         log.Note("HTTP/SQL: repeating the same slot -> the form with its safe message, no move, no link change and no extra Rescheduled notice.");
 
+        // --- Own individual turn and drop-in class reservation (T21.5, RF-07, RF-22) ------------------------
+        // The two reservation screens are reached from the own agenda. Both GET screens are pure reads, and the
+        // request contract of both saves carries only the catalogue selection: the tenant and the ficha always come
+        // from the client session cookie, so a forged identity field posted along with the form must be ignored by
+        // the binder instead of moving the reservation to another ficha.
+        var reservationNow = TimeZoneInfo.ConvertTimeFromUtc(
+            DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("America/Argentina/Buenos_Aires"));
+        var reservationReadBookingsBefore = await ReadBookingStatesAsync(connection, businessId);
+        var reservationReadPaymentsBefore = await ReadPaymentStatesAsync(connection, businessId);
+        var reservationReadClientsBefore = await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId", ("@businessId", businessId));
+        var reservationReadAppointmentsBefore = await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Appointments WHERE BusinessId = @businessId", ("@businessId", businessId));
+
+        var reserveTurnPath = $"/r/{DemoSlug}/mis-turnos/reservar/turno";
+        var reserveClassPath = $"/r/{DemoSlug}/mis-turnos/reservar/clase";
+        var (reserveEntryStatus, reserveEntryHtml) = await GetHtmlAsync(client, $"/r/{DemoSlug}/mis-turnos");
+        Assert.Equal(HttpStatusCode.OK, reserveEntryStatus);
+        Assert.Contains("client-appointments-title", reserveEntryHtml, StringComparison.Ordinal);
+        Assert.Contains($"href=\"{reserveTurnPath}\"", reserveEntryHtml, StringComparison.Ordinal);
+        Assert.Contains($"href=\"{reserveClassPath}\"", reserveEntryHtml, StringComparison.Ordinal);
+
+        // The screen's own resolved selection is read back from it, so the service and the worker are the real active
+        // ones of the cookie's business and never an id invented by the checkpoint.
+        var (reserveTurnStatus, reserveTurnHtml) = await GetHtmlAsync(client, reserveTurnPath);
+        Assert.Equal(HttpStatusCode.OK, reserveTurnStatus);
+        Assert.Contains("client-reserve-title", reserveTurnHtml, StringComparison.Ordinal);
+        var reserveServiceId = FirstOptionValue(reserveTurnHtml, "serviceId");
+        var reserveWorkerId = FirstOptionValue(reserveTurnHtml, "workerId");
+        Assert.True(reserveServiceId > 0 && reserveWorkerId > 0,
+            "The individual screen must offer an active service and an active worker of the cookie's business.");
+
+        // One future business day is requested and the offered starts are parsed from the returned HTML, so the time
+        // the save posts is the real availability of that service and worker, never an assumed grid.
+        var reservationDate = DateOnly.FromDateTime(PanelReservationDay(reservationNow));
+        var reservationDateText = reservationDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var (reserveSlotsStatus, reserveSlotsHtml) = await GetHtmlAsync(client,
+            $"{reserveTurnPath}?serviceId={reserveServiceId.ToString(CultureInfo.InvariantCulture)}" +
+            $"&workerId={reserveWorkerId.ToString(CultureInfo.InvariantCulture)}&date={reservationDateText}");
+        Assert.Equal(HttpStatusCode.OK, reserveSlotsStatus);
+        Assert.Contains("client-reserve-title", reserveSlotsHtml, StringComparison.Ordinal);
+        var reserveStarts = ExtractStartTimeOptions(reserveSlotsHtml);
+        Assert.NotEmpty(reserveStarts);
+        var chosenReserveStart = reserveStarts[0];
+        var chosenReserveStartAt = reservationDate.ToDateTime(chosenReserveStart);
+        Assert.True(chosenReserveStartAt > reservationNow,
+            "The offered individual start must be in the future of the host clock.");
+        // The rebuilt form echoes the selection it resolved and carries the chosen day, so the save posts exactly it.
+        Assert.Equal(reserveServiceId.ToString(CultureInfo.InvariantCulture),
+            HiddenInputValue(reserveSlotsHtml, "Input.ServiceId"));
+        Assert.Equal(reserveWorkerId.ToString(CultureInfo.InvariantCulture),
+            HiddenInputValue(reserveSlotsHtml, "Input.WorkerId"));
+        Assert.Contains("name=\"Input.Date\"", reserveSlotsHtml, StringComparison.Ordinal);
+
+        // Both GET screens are pure reads: no appointment, booking, payment or client row moved.
+        Assert.Equal(reservationReadBookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        Assert.Equal(reservationReadPaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
+        Assert.Equal(reservationReadClientsBefore, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Assert.Equal(reservationReadAppointmentsBefore, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Appointments WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        log.Note($"HTTP/SQL: the agenda and the individual screen offered service #{reserveServiceId}, worker #{reserveWorkerId} and the real starts of a future day without writing a row.");
+
+        var reserveAntiforgery = ExtractAntiforgeryToken(reserveSlotsHtml);
+        log.KeepSecret(reserveAntiforgery);
+
+        // Without its anti-CSRF token the save is refused before any appointment or booking can be created.
+        using (var noTokenReserve = await client.PostAsync(reserveTurnPath, Form(new Dictionary<string, string>
+               {
+                   ["Input.ServiceId"] = reserveServiceId.ToString(CultureInfo.InvariantCulture),
+                   ["Input.WorkerId"] = reserveWorkerId.ToString(CultureInfo.InvariantCulture),
+                   ["Input.Date"] = reservationDateText,
+                   ["Input.StartTime"] = chosenReserveStart.ToString("HH:mm", CultureInfo.InvariantCulture)
+               })))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, noTokenReserve.StatusCode);
+        }
+        Assert.Equal(reservationReadAppointmentsBefore, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Appointments WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Assert.Equal(reservationReadBookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        log.Note("HTTP/SQL: the individual reservation POST without its anti-CSRF token -> 400 and no appointment or booking row was created.");
+
+        // The forbidden identity fields are posted on purpose: an email and another ficha's client id. The binder has
+        // no field for either, so the persisted ficha stays the one of the cookie and no client row is created.
+        var forgedReserveEmail = $"t21forged{Guid.NewGuid():N}@example.invalid";
+        log.KeepSecret(forgedReserveEmail);
+        using (var reserve = await client.PostAsync(reserveTurnPath, Form(new Dictionary<string, string>
+               {
+                   ["Input.ServiceId"] = reserveServiceId.ToString(CultureInfo.InvariantCulture),
+                   ["Input.WorkerId"] = reserveWorkerId.ToString(CultureInfo.InvariantCulture),
+                   ["Input.Date"] = reservationDateText,
+                   ["Input.StartTime"] = chosenReserveStart.ToString("HH:mm", CultureInfo.InvariantCulture),
+                   ["Email"] = forgedReserveEmail,
+                   ["ClientId"] = otherClientId.ToString(CultureInfo.InvariantCulture),
+                   ["__RequestVerificationToken"] = reserveAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, reserve.StatusCode);
+            Assert.Equal($"/r/{DemoSlug}/mis-turnos", DescribeRedirect(reserve));
+        }
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            """
+            SELECT COUNT(*) FROM Appointments
+             WHERE BusinessId = @businessId AND WorkerId = @workerId AND StartsAt = @startsAt AND Kind = @kind
+            """,
+            ("@businessId", businessId), ("@workerId", reserveWorkerId), ("@startsAt", chosenReserveStartAt),
+            ("@kind", (byte)AppointmentKind.Individual)));
+        var reservedAppointmentId = await ScalarIntAsync(connection,
+            """
+            SELECT TOP (1) Id FROM Appointments
+             WHERE BusinessId = @businessId AND WorkerId = @workerId AND StartsAt = @startsAt AND Kind = @kind
+             ORDER BY Id
+            """,
+            ("@businessId", businessId), ("@workerId", reserveWorkerId), ("@startsAt", chosenReserveStartAt),
+            ("@kind", (byte)AppointmentKind.Individual));
+        // The created turn is the chosen one: same service, same worker, the chosen start and the real service span.
+        Assert.Equal(reserveServiceId, await ScalarIntAsync(connection,
+            "SELECT ServiceId FROM Appointments WHERE Id = @appointmentId", ("@appointmentId", reservedAppointmentId)));
+        var reservedAppointment = await ReadAppointmentRangeAsync(connection, reservedAppointmentId);
+        Assert.Equal(reserveWorkerId, reservedAppointment.WorkerId);
+        Assert.Equal(chosenReserveStartAt, reservedAppointment.StartsAt);
+        var reserveDurationMinutes = await ScalarIntAsync(connection,
+            "SELECT DurationMinutes FROM Services WHERE Id = @serviceId", ("@serviceId", reserveServiceId));
+        Assert.Equal(chosenReserveStartAt.AddMinutes(reserveDurationMinutes), reservedAppointment.EndsAt);
+        var reservedBookingId = await ScalarIntAsync(connection,
+            "SELECT TOP (1) Id FROM Bookings WHERE BusinessId = @businessId AND AppointmentId = @appointmentId ORDER BY Id",
+            ("@businessId", businessId), ("@appointmentId", reservedAppointmentId));
+        var reservedBooking = await ReadCreatedBookingAsync(connection, reservedBookingId);
+        Assert.Equal(businessId, reservedBooking.BusinessId);
+        Assert.Equal(reservedAppointmentId, reservedBooking.AppointmentId);
+        // The saved turn belongs to the cookie's ficha, never to the forged client id, and it is a pending turn.
+        Assert.Equal(clientId, reservedBooking.ClientId);
+        Assert.Equal((byte)BookingStatus.Pending, reservedBooking.Status);
+        Assert.Null(reservedBooking.Modality);
+        var reserveServicePrice = await ScalarDecimalAsync(connection,
+            "SELECT Price FROM Services WHERE Id = @serviceId", ("@serviceId", reserveServiceId));
+        Assert.Equal(reserveServicePrice, reservedBooking.AgreedPrice);
+        // RF-09: the private link carries a real 32-byte hash and expires 24 h after the start of the new turn.
+        var reservedLinkId = await ScalarIntAsync(connection,
+            "SELECT TOP (1) Id FROM AppointmentLinks WHERE BookingId = @bookingId ORDER BY Id",
+            ("@bookingId", reservedBookingId));
+        var reservedLink = await ReadRescheduleLinkAsync(connection, reservedLinkId);
+        Assert.Equal(32, reservedLink.TokenHash.Length);
+        Assert.False(string.IsNullOrWhiteSpace(reservedLink.ProtectedToken),
+            "The private appointment link must carry its protected token material.");
+        Assert.Equal(chosenReserveStartAt.AddHours(24), reservedLink.ExpiresAt);
+        Assert.Null(reservedLink.RevokedAt);
+        // The notice goes to the stored ficha address, keyed by the booking, and never to the forged address.
+        var reservationNotice = Assert.Single(
+            await ReadNotificationsAsync(connection, businessId, NotificationType.BookingCreated, email));
+        Assert.Equal(email, reservationNotice.Recipient);
+        Assert.Equal($"booking:{reservedBookingId}", reservationNotice.DedupKey);
+        Assert.Empty(await ReadNotificationsAsync(connection, businessId, NotificationType.BookingCreated, forgedReserveEmail));
+        Assert.Equal(reservationReadClientsBefore, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId AND Email = @forgedEmail",
+            ("@businessId", businessId), ("@forgedEmail", forgedReserveEmail)));
+        log.Note($"HTTP/SQL: the anti-CSRF individual save -> 302, appointment #{reservedAppointmentId} and booking #{reservedBookingId} belong to the cookie ficha with the chosen worker, start and price, link #{reservedLinkId} expires 24 h after the start, exactly one BookingCreated notice was queued to the stored address, and no client row was added.");
+
+        // The drop-in offer is fed by one synthetic session planted inside the panel window: the shared +30 day
+        // fixture of the earlier checkpoints can fall outside the panel's next thirty days, so this checkpoint plants
+        // its own future session on the reused class service of the tenant.
+        var panelClassSessionId = await SeedFuturePanelClassSessionAsync(connection, businessId, new TimeOnly(11, 0));
+        var classOfferPath = $"{reserveClassPath}/{panelClassSessionId}";
+        var classReadBookingsBefore = await ReadBookingStatesAsync(connection, businessId);
+        var classReadPaymentsBefore = await ReadPaymentStatesAsync(connection, businessId);
+        var classReadAppointmentsBefore = await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Appointments WHERE BusinessId = @businessId", ("@businessId", businessId));
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE BusinessId = @businessId AND AppointmentId = @appointmentId",
+            ("@businessId", businessId), ("@appointmentId", panelClassSessionId)));
+        log.Note($"SQL: seeded panel class session #{panelClassSessionId} one week ahead of the business clock on the class service of business #{businessId}.");
+
+        var (classOfferStatus, classOfferHtml) = await GetHtmlAsync(client, reserveClassPath);
+        Assert.Equal(HttpStatusCode.OK, classOfferStatus);
+        Assert.Contains("client-classes-title", classOfferHtml, StringComparison.Ordinal);
+        Assert.Contains(classOfferPath, classOfferHtml, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(classOfferHtml, $"reservar/clase/{panelClassSessionId}\""));
+        Assert.Equal(classReadBookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        Assert.Equal(classReadPaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
+        Assert.Equal(classReadAppointmentsBefore, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Appointments WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        log.Note("HTTP/SQL: the drop-in offer rendered exactly one booking form for the seeded future session and the read wrote nothing.");
+
+        var panelClassAntiforgery = ExtractAntiforgeryToken(classOfferHtml);
+        log.KeepSecret(panelClassAntiforgery);
+
+        // Without its anti-CSRF token the class save is refused before any booking row exists.
+        using (var noTokenClassBook = await client.PostAsync(classOfferPath, Form(new Dictionary<string, string>())))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, noTokenClassBook.StatusCode);
+        }
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE BusinessId = @businessId AND AppointmentId = @appointmentId",
+            ("@businessId", businessId), ("@appointmentId", panelClassSessionId)));
+        log.Note("HTTP/SQL: the class booking POST without its anti-CSRF token -> 400 and the session kept no booking.");
+
+        // The identity fields posted along with the class form are forged for the same reason: the route carries only
+        // the appointment, so the cookie's ficha is the only client that can be annotated.
+        var forgedClassEmail = $"t21class{Guid.NewGuid():N}@example.invalid";
+        log.KeepSecret(forgedClassEmail);
+        using (var classBook = await client.PostAsync(classOfferPath, Form(new Dictionary<string, string>
+               {
+                   ["Email"] = forgedClassEmail,
+                   ["ClientId"] = otherClientId.ToString(CultureInfo.InvariantCulture),
+                   ["__RequestVerificationToken"] = panelClassAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, classBook.StatusCode);
+            Assert.Equal($"/r/{DemoSlug}/mis-turnos", DescribeRedirect(classBook));
+        }
+        var classBookedId = await ScalarIntAsync(connection,
+            "SELECT TOP (1) Id FROM Bookings WHERE BusinessId = @businessId AND AppointmentId = @appointmentId ORDER BY Id",
+            ("@businessId", businessId), ("@appointmentId", panelClassSessionId));
+        var classBooked = await ReadCreatedBookingAsync(connection, classBookedId);
+        Assert.Equal(clientId, classBooked.ClientId);
+        Assert.Equal((byte)BookingStatus.Pending, classBooked.Status);
+        Assert.Equal((byte)BookingModality.DropIn, classBooked.Modality);
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE BusinessId = @businessId AND AppointmentId = @appointmentId",
+            ("@businessId", businessId), ("@appointmentId", panelClassSessionId)));
+        // RF-22 and D-24: annotating the class writes the booking only, without a payment and without a new client.
+        Assert.Equal(classReadPaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
+        Assert.Equal(reservationReadClientsBefore, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId AND Email = @forgedEmail",
+            ("@businessId", businessId), ("@forgedEmail", forgedClassEmail)));
+        log.Note($"HTTP/SQL: the anti-CSRF class save -> 302, booking #{classBookedId} is a Pending drop-in of the cookie ficha, and no payment or client row was added.");
+
+        // A repeated annotation is a safe refusal: the screen is rebuilt with the fresh offer and no second row.
+        using (var duplicateClassBook = await client.PostAsync(classOfferPath, Form(new Dictionary<string, string>
+               {
+                   ["__RequestVerificationToken"] = panelClassAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.OK, duplicateClassBook.StatusCode);
+            var duplicateClassHtml = await duplicateClassBook.Content.ReadAsStringAsync();
+            Assert.Contains(classOfferPath, duplicateClassHtml, StringComparison.Ordinal);
+        }
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE BusinessId = @businessId AND AppointmentId = @appointmentId",
+            ("@businessId", businessId), ("@appointmentId", panelClassSessionId)));
+        Assert.Equal(classBooked, await ReadCreatedBookingAsync(connection, classBookedId));
+        log.Note("HTTP/SQL: the duplicate class annotation -> the rebuilt offer and no second booking row.");
+
+        // A session of another tenant answers the same generic 404 as one that does not exist, even with a valid
+        // token, and writes nothing for either tenant.
+        var foreignClassSessionId = await SeedFuturePanelClassSessionAsync(connection, otherBusinessId, new TimeOnly(15, 0));
+        using (var foreignClassBook = await client.PostAsync($"{reserveClassPath}/{foreignClassSessionId}", Form(new Dictionary<string, string>
+               {
+                   ["__RequestVerificationToken"] = panelClassAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, foreignClassBook.StatusCode);
+        }
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE BusinessId = @businessId AND AppointmentId = @appointmentId",
+            ("@businessId", businessId), ("@appointmentId", foreignClassSessionId)));
+        Assert.Equal(0, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE BusinessId = @businessId AND AppointmentId = @appointmentId",
+            ("@businessId", otherBusinessId), ("@appointmentId", foreignClassSessionId)));
+        log.Note($"HTTP/SQL: annotating class session #{foreignClassSessionId} of another tenant, even with a valid token, -> 404 and no booking row was written for either tenant.");
+
         // --- Password recovery (RF-27) ---------------------------------------------------------------------
         var recoveryJar = new CookieContainer();
         using var recoveryClient = CreateBrowser(baseUrl, recoveryJar);
@@ -1081,6 +1354,32 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
             .Select(match => TimeOnly.ParseExact(match.Groups[1].Value, "HH:mm", CultureInfo.InvariantCulture))
             .Distinct()
             .ToArray();
+
+    /// <summary>
+    /// Value of the first option of the named select, so a screen that resolves its own default is read back instead
+    /// of the checkpoint inventing a catalogue id it never saw rendered.
+    /// </summary>
+    private static int FirstOptionValue(string html, string selectName)
+    {
+        var match = Regex.Match(html,
+            $"<select[^>]*name=\"{Regex.Escape(selectName)}\"[^>]*>\\s*<option value=\"(\\d+)\"",
+            RegexOptions.CultureInvariant);
+        Assert.True(match.Success, $"The screen must render a '{selectName}' select with at least one option.");
+        return int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Value of the named hidden input, read from its whole tag so the rendered attribute order never matters. The
+    /// explicit value is the only thing compared: the display format of a date field is not part of this contract.
+    /// </summary>
+    private static string HiddenInputValue(string html, string name)
+    {
+        var tag = Regex.Match(html, $"<input[^>]*name=\"{Regex.Escape(name)}\"[^>]*>", RegexOptions.CultureInvariant);
+        Assert.True(tag.Success, $"The screen must render the hidden field '{name}'.");
+        var value = Regex.Match(tag.Value, "value=\"([^\"]*)\"", RegexOptions.CultureInvariant);
+        Assert.True(value.Success, $"The hidden field '{name}' must carry a value.");
+        return value.Groups[1].Value;
+    }
 
     private static string LinkFrom(string bodyHtml)
     {
@@ -1409,6 +1708,46 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
             startsAt, confirmedAt, protectedToken);
     }
 
+    /// <summary>
+    /// The business day the T21.5 reservations are planted on: one week ahead of the business clock, advanced past
+    /// Sunday because the seeded salon keeps no schedule that day, so the real availability always has a start to
+    /// offer. It sits far enough inside the panel's thirty-day window that the offer always carries the session.
+    /// </summary>
+    private static DateTime PanelReservationDay(DateTime businessNow) =>
+        businessNow.Date.AddDays(7).DayOfWeek == DayOfWeek.Sunday
+            ? businessNow.Date.AddDays(8)
+            : businessNow.Date.AddDays(7);
+
+    /// <summary>
+    /// Plants one synthetic future class session inside the panel window for <paramref name="businessId"/>, reusing
+    /// the class service that business already carries instead of inserting another one. The seeded salon only has
+    /// capacity-one individual services, so the T21.3 fixture planted the class service this reuses; the second tenant
+    /// brings its own. The session sits one week ahead of the business clock because the panel offer only covers today
+    /// plus thirty days and the shared +30 day fixture of the earlier checkpoints can fall outside that window.
+    /// </summary>
+    private static async Task<int> SeedFuturePanelClassSessionAsync(
+        SqlConnection connection, int businessId, TimeOnly startTime)
+    {
+        // Business-local now, computed exactly like the host clock, so the planted start stays in the future.
+        var businessNow = TimeZoneInfo.ConvertTimeFromUtc(
+            DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("America/Argentina/Buenos_Aires"));
+
+        var serviceId = await ScalarIntAsync(connection,
+            "SELECT TOP (1) Id FROM Services WHERE BusinessId = @businessId AND MaxCapacity > 1 AND IsActive = 1 ORDER BY Id",
+            ("@businessId", businessId));
+        Assert.True(serviceId > 0, $"Business #{businessId} must have an active class service for this checkpoint.");
+        var maxCapacity = await ScalarIntAsync(connection,
+            "SELECT MaxCapacity FROM Services WHERE Id = @serviceId", ("@serviceId", serviceId));
+        var workerId = await ScalarIntAsync(connection,
+            "SELECT TOP (1) Id FROM Workers WHERE BusinessId = @businessId AND IsActive = 1 ORDER BY Id",
+            ("@businessId", businessId));
+        Assert.True(workerId > 0, $"Business #{businessId} must have an active worker for this checkpoint.");
+
+        return await InsertClassSessionAsync(
+            connection, businessId, serviceId, workerId,
+            DateOnly.FromDateTime(PanelReservationDay(businessNow)).ToDateTime(startTime), maxCapacity, businessNow);
+    }
+
     private static async Task<BookingStateRow> ReadBookingStateAsync(SqlConnection connection, int bookingId)
     {
         await using var command = CreateCommand(connection,
@@ -1490,6 +1829,30 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         return rows;
     }
 
+    /// <summary>
+    /// The persisted reservation the panel just created: its tenant, its appointment, the ficha it belongs to, its
+    /// modality, its state and the negotiated price. Reading the row back — instead of assuming what the service
+    /// wrote — is what makes the cookie scoping and the pending state of the new turn or drop-in a real check.
+    /// </summary>
+    private static async Task<CreatedBookingRow> ReadCreatedBookingAsync(SqlConnection connection, int bookingId)
+    {
+        await using var command = CreateCommand(connection, """
+            SELECT Id, BusinessId, AppointmentId, ClientId, Modality, Status, AgreedPrice
+              FROM Bookings
+             WHERE Id = @bookingId
+            """, [("@bookingId", bookingId)]);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), $"Booking {bookingId} was not found.");
+        return new CreatedBookingRow(
+            reader.GetInt32(0),
+            reader.GetInt32(1),
+            reader.GetInt32(2),
+            reader.GetInt32(3),
+            reader.IsDBNull(4) ? null : reader.GetByte(4),
+            reader.GetByte(5),
+            reader.IsDBNull(6) ? null : reader.GetDecimal(6));
+    }
+
     private static async Task<int> ScalarIntAsync(SqlConnection connection, string sql, params (string Name, object Value)[] args)
     {
         await using var command = CreateCommand(connection, sql, args);
@@ -1501,6 +1864,12 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         await using var command = CreateCommand(connection, sql, args);
         var result = await command.ExecuteScalarAsync();
         return result is null or DBNull ? null : Convert.ToString(result, CultureInfo.InvariantCulture);
+    }
+
+    private static async Task<decimal> ScalarDecimalAsync(SqlConnection connection, string sql, params (string Name, object Value)[] args)
+    {
+        await using var command = CreateCommand(connection, sql, args);
+        return Convert.ToDecimal(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
     }
 
     private static SqlCommand CreateCommand(SqlConnection connection, string sql, (string Name, object Value)[] args)
@@ -1862,6 +2231,9 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
     private sealed record RescheduleLinkRow(int Id, byte[] TokenHash, string ProtectedToken, DateTime ExpiresAt, DateTime? RevokedAt);
 
     private sealed record BookingStateRow(int Id, byte Status, DateTime? ConfirmedAt, DateTime? CancelledAt, byte? CancelledBy);
+
+    private sealed record CreatedBookingRow(int Id, int BusinessId, int AppointmentId, int ClientId,
+        byte? Modality, byte Status, decimal? AgreedPrice);
 
     private sealed record PaymentStateRow(int Id, int? BookingId, decimal Amount, DateTime PaidAt);
 }
