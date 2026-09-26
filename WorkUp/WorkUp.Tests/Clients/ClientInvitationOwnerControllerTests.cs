@@ -458,6 +458,14 @@ public sealed class ClientInvitationOwnerControllerTests
 
         var service = services.Single(descriptor => descriptor.ServiceType == typeof(ClientInvitationService));
         Assert.Equal(ServiceLifetime.Scoped, service.Lifetime);
+
+        var acceptanceRepository = services.Single(descriptor =>
+            descriptor.ServiceType == typeof(IClientInvitationAcceptanceRepository));
+        Assert.Equal(ServiceLifetime.Scoped, acceptanceRepository.Lifetime);
+        Assert.Equal(typeof(SqlClientInvitationAcceptanceRepository), acceptanceRepository.ImplementationType);
+        var acceptanceService = services.Single(descriptor =>
+            descriptor.ServiceType == typeof(ClientInvitationAcceptanceService));
+        Assert.Equal(ServiceLifetime.Scoped, acceptanceService.Lifetime);
     }
 
     private static int SeedBusiness(Harness harness, string slug, string name = "Peluquería Marina")

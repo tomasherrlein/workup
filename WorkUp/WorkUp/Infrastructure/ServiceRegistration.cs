@@ -196,6 +196,11 @@ public static class ServiceRegistration
         services.AddScoped<IClientInvitationRepository, SqlClientInvitationRepository>();
         services.AddScoped<ClientInvitationService>();
 
+        // Acceptance of the invitation from the public link (RF-26, T22): the read-only inspection plus the two
+        // binding paths. The repository and the service are scoped so they share the request DbSession.
+        services.AddScoped<IClientInvitationAcceptanceRepository, SqlClientInvitationAcceptanceRepository>();
+        services.AddScoped<ClientInvitationAcceptanceService>();
+
         return services;
     }
 

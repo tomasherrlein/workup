@@ -23,11 +23,14 @@ namespace WorkUp.Controllers;
 public sealed class ClientAccountController(
     ClientRegistrationService registrationService,
     ClientAccessService accessService,
-    IBusinessRepository businesses) : Controller
+    IBusinessRepository businesses,
+    ClientInvitationAcceptanceService? invitationAcceptanceService = null) : Controller
 {
     private const string BusinessNotFoundCode = "business_not_found";
     private const string OwnerAssistanceCode = "client_record_needs_owner_assistance";
     private const string PasswordTooShortCode = "password_too_short";
+    private const string InvitationLinkUnavailableCode = "client_invitation_link_unavailable";
+    private const string InvitationOwnerAssistanceCode = "client_invitation_owner_assistance";
 
     // --- Registration and email confirmation (RF-25) -----------------------------------------------------------
 
@@ -339,6 +342,148 @@ public sealed class ClientAccountController(
 
         this.Flash("Tu contraseña cambió. Ingresá con la nueva.");
         return Redirect(AccountPath(slug, "ingresar"));
+    }
+
+    // --- Owner-assisted invitation acceptance (RF-26, T22) ------------------------------------------------------
+
+    /// <summary>
+    /// Acceptance screen of an invitation link. It is a pure read: opening the URL spends nothing, so a mail scanner
+    /// that follows the link cannot burn the single use. The page shows only the destination email the link proves and
+    /// the deadline -- never a ficha, a note or a history -- and the token travels back in a hidden field. Every
+    /// response, including the one for an unusable link, is uncached and referrer-free.
+    /// </summary>
+    [HttpGet("invitacion/{token}")]
+    public async Task<IActionResult> Invitation(string slug, string token, CancellationToken ct)
+    {
+        SetTokenPageHeaders();
+        if (await FindBusinessAsync(slug, ct) is not { } business)
+            return NotFound();
+
+        SetPublicLayout(business);
+        if (invitationAcceptanceService is null)
+            return NotFound();
+
+        var inspection = await invitationAcceptanceService.InspectAsync(slug, token, ct);
+        if (!inspection.Succeeded)
+            return View("Status", ClientInvitationStatus.LinkUnavailable());
+
+        return View("Invitation", new ClientInvitationViewModel
+        {
+            Token = token,
+            Email = inspection.Value.Email,
+            ExpiresAt = inspection.Value.ExpiresAt
+        });
+    }
+
+    /// <summary>
+    /// Spends the single-use invitation and either creates a new verified account bound to the invited ficha or
+    /// verifies and binds a pre-existing pending account with its own password. The mode is taken from a server-side
+    /// whitelist and the confirmation is judged here, before the link is read, so a malformed form or a wrong password
+    /// leaves the link and every account exactly as they were. Success never starts a session: the person signs in
+    /// afterwards with the password of the flow. Rejections are generic: an unusable link answers one page, and an
+    /// account already linked to a ficha is sent to the business without revealing that ficha or its history.
+    /// </summary>
+    [HttpPost("invitacion")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Invitation(string slug, ClientInvitationViewModel model, CancellationToken ct)
+    {
+        SetTokenPageHeaders();
+        if (await FindBusinessAsync(slug, ct) is not { } business)
+            return NotFound();
+
+        SetPublicLayout(business);
+        if (invitationAcceptanceService is null)
+            return NotFound();
+
+        ValidateInvitationForm(model);
+        if (!ModelState.IsValid)
+            return await RedisplayInvitationAsync(slug, model, ct);
+
+        var attempt = model.Mode == ClientInvitationModes.NewAccount
+            ? await invitationAcceptanceService.AcceptNewAsync(slug, model.Token, model.Password, ct)
+            : await invitationAcceptanceService.AcceptExistingAsync(slug, model.Token, model.Password, ct);
+
+        if (!attempt.Succeeded)
+        {
+            if (attempt.Error!.Code == BusinessNotFoundCode)
+                return NotFound();
+
+            if (attempt.Error.Code == InvitationOwnerAssistanceCode)
+                return View("Status", ClientInvitationStatus.OwnerAssistanceRequired());
+
+            if (attempt.Error.Code == InvitationLinkUnavailableCode)
+                return View("Status", ClientInvitationStatus.LinkUnavailable());
+
+            // A wrong password and an email that already has an account go back to the form: the link and the
+            // accounts are untouched, so a failed attempt spends nothing.
+            ModelState.AddBusinessError(attempt.Error);
+            return await RedisplayInvitationAsync(slug, model, ct);
+        }
+
+        this.Flash("Listo: vinculamos tu cuenta. Ingresá con tu email y contraseña.");
+        return Redirect(AccountPath(slug, "ingresar"));
+    }
+
+    /// <summary>
+    /// Judges the invitation form before the link is read. The mode is a whitelist, the password is always required,
+    /// and the repetition is compared only in the new-account mode, because a pre-existing account proves its own
+    /// password without a confirmation field and without the new-password minimum.
+    /// </summary>
+    private void ValidateInvitationForm(ClientInvitationViewModel model)
+    {
+        if (!ClientInvitationModes.IsKnown(model.Mode))
+            ModelState.AddModelError(nameof(model.Mode), "Elegí cómo querés continuar.");
+
+        if (string.IsNullOrEmpty(model.Password))
+            ModelState.AddModelError(nameof(model.Password), "Ingresá tu contraseña.");
+        else if (model.Mode == ClientInvitationModes.NewAccount)
+        {
+            if (model.Password.Length < ClientInvitationAcceptanceService.MinimumPasswordLength)
+                ModelState.AddModelError(nameof(model.Password), "La contraseña debe tener al menos 8 caracteres.");
+            else if (model.Password != model.ConfirmPassword)
+                ModelState.AddModelError(nameof(model.ConfirmPassword), "Las contraseñas no coinciden.");
+        }
+    }
+
+    /// <summary>
+    /// Re-renders the acceptance form for a rejected form or a rule violation that did not consume the link. The
+    /// destination and the deadline are refreshed from a read-only inspection, never from the request, so the page can
+    /// only ever echo the email the token proves; when even that inspection fails, the generic page is shown.
+    /// </summary>
+    private async Task<IActionResult> RedisplayInvitationAsync(
+        string slug, ClientInvitationViewModel model, CancellationToken ct)
+    {
+        var inspection = await invitationAcceptanceService!.InspectAsync(slug, model.Token, ct);
+        if (!inspection.Succeeded)
+            return View("Status", ClientInvitationStatus.LinkUnavailable());
+
+        model.Email = inspection.Value.Email;
+        model.ExpiresAt = inspection.Value.ExpiresAt;
+        DiscardSubmittedPasswords(model);
+        return View("Invitation", model);
+    }
+
+    /// <summary>
+    /// A rejected attempt keeps its error messages, but the raw password never travels back into the re-rendered form
+    /// or the validation state: the model fields are cleared and only the attempted values are dropped, so
+    /// <c>asp-validation-for</c> still shows the rejection while no <c>&lt;input&gt;</c> can echo the secret.
+    /// </summary>
+    private void DiscardSubmittedPasswords(ClientInvitationViewModel model)
+    {
+        model.Password = "";
+        model.ConfirmPassword = null;
+        DiscardAttemptedValue(nameof(ClientInvitationViewModel.Password));
+        DiscardAttemptedValue(nameof(ClientInvitationViewModel.ConfirmPassword));
+    }
+
+    /// <summary>Drops the raw value the request carried while keeping the entry's error messages untouched.</summary>
+    private void DiscardAttemptedValue(string key)
+    {
+        if (ModelState.TryGetValue(key, out var entry))
+        {
+            entry.RawValue = null;
+            entry.AttemptedValue = null;
+        }
     }
 
     // --- Shared plumbing ---------------------------------------------------------------------------------------

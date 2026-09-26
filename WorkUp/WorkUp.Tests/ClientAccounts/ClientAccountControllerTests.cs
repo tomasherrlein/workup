@@ -523,7 +523,7 @@ public sealed class ClientAccountControllerTests
         var actions = typeof(ClientAccountController).GetMethods(BindingFlags.Public | BindingFlags.Instance);
 
         var posts = actions.Where(action => action.GetCustomAttribute<HttpPostAttribute>() is not null).ToArray();
-        Assert.Equal(7, posts.Length);
+        Assert.Equal(8, posts.Length);
         Assert.All(posts, post => Assert.True(
             post.GetCustomAttribute<ValidateAntiForgeryTokenAttribute>() is not null,
             $"The POST action {post.Name} must declare ValidateAntiForgeryToken."));
