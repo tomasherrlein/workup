@@ -1,0 +1,62 @@
+@using WorkUp.ViewModels.ClientPanel
+@model ClientRescheduleViewModel
+@{
+    Layout = "_ClientLayout";
+    ViewData["Title"] = "Reprogramar turno";
+    var date = Model.SelectedDate;
+}
+<section class="public-booking" aria-labelledby="client-reschedule-title">
+    <h1 id="client-reschedule-title">Reprogramar turno</h1>
+    <p>Elegí un nuevo día y horario para @Model.ServiceName con @Model.WorkerName.</p>
+    <p>Turno actual: @Formatting.LongDate(Model.CurrentStartsAt), @Formatting.Time(Model.CurrentStartsAt).</p>
+    <a class="btn" href="/r/@Model.Slug/mis-turnos">Volver a mis turnos</a>
+</section>
+
+@* The chosen slot is only a proposal: the save revalidates it under lock, so it may be taken by the time it is
+   confirmed. The page never shows the private link token, an owner note or a health observation. *@
+<p class="notice notice-warning">El horario se valida al guardar y puede ocuparse mientras tanto.</p>
+<div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+
+<form method="get" action="/r/@Model.Slug/mis-turnos/@Model.BookingId/reprogramar" class="agenda-filters" aria-label="Elegir día">
+    <div class="field">
+        <label for="date">Día</label>
+        <input id="date" name="date" type="date" value="@date.ToString("yyyy-MM-dd")" />
+    </div>
+    <button type="submit" class="btn">Ver horarios</button>
+</form>
+
+@if (Model.Options is null || Model.Options.AvailableStartTimes.Count == 0)
+{
+    <div class="empty-state" role="status">
+        <p>No hay horarios disponibles para ese día con @Model.WorkerName.</p>
+        @if (Model.Options?.NearestAlternative is { } nearest)
+        {
+            <a class="btn-primary" href="/r/@Model.Slug/mis-turnos/@Model.BookingId/reprogramar?date=@DateOnly.FromDateTime(nearest).ToString("yyyy-MM-dd")">
+                Horario más cercano: @Formatting.LongDate(DateOnly.FromDateTime(nearest)), @Formatting.Time(nearest)
+            </a>
+        }
+    </div>
+}
+else
+{
+    <form method="post" action="/r/@Model.Slug/mis-turnos/@Model.BookingId/reprogramar" class="form">
+        @Html.AntiForgeryToken()
+        <input asp-for="Input.Date" type="hidden" />
+        <div class="field">
+            <label asp-for="Input.StartTime">Nuevo horario</label>
+            <select asp-for="Input.StartTime">
+                <option value="">Elegí un horario</option>
+                @foreach (var startTime in Model.Options.AvailableStartTimes)
+                {
+                    <option value="@startTime.ToString("HH:mm")">@Formatting.Time(date.ToDateTime(startTime))</option>
+                }
+            </select>
+            <span asp-validation-for="Input.StartTime"></span>
+        </div>
+        <button type="submit" class="btn-primary">Confirmar reprogramación</button>
+    </form>
+}
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

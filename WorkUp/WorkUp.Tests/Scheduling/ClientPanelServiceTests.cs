@@ -27,8 +27,17 @@ public sealed class ClientPanelServiceTests
         AppointmentStatus appointmentStatus = AppointmentStatus.Scheduled,
         string serviceName = "Corte",
         string workerName = "Ana Pérez",
-        int durationMinutes = 30) =>
-        new(bookingId, startsAt, startsAt.AddMinutes(durationMinutes), serviceName, workerName, kind, appointmentStatus, status, modality);
+        int durationMinutes = 30,
+        AppointmentOrigin? origin = null,
+        int maxCapacity = 1,
+        int? enrollmentId = null,
+        DateTime? confirmedAt = null,
+        DateTime? cancelledAt = null,
+        CancelledBy? cancelledBy = null,
+        DateTime? attendanceRecordedAt = null,
+        AbsenceSource? absenceSource = null) =>
+        new(bookingId, startsAt, startsAt.AddMinutes(durationMinutes), serviceName, workerName, kind, appointmentStatus, status, modality,
+            origin, maxCapacity, enrollmentId, confirmedAt, cancelledAt, cancelledBy, attendanceRecordedAt, absenceSource);
 
     private static (ClientPanelService Service, FakeClientPanelRepository Repository) Built()
     {
@@ -159,6 +168,71 @@ public sealed class ClientPanelServiceTests
         Assert.False(ById(agenda, 8).CanCancel);
     }
 
+    // --- T21.4: the typed eligibility flag for reprogramming ----------------------------------------------------
+
+    [Fact]
+    public async Task Agenda_offers_rescheduling_only_for_a_future_reserved_individual_turn_of_its_own_ficha()
+    {
+        var (service, repository) = Built();
+        repository.Add(BusinessId, ClientId, Row(1, Now.AddHours(1), origin: AppointmentOrigin.Reserved));
+        repository.Add(BusinessId, ClientId, Row(2, Now.AddHours(1), origin: AppointmentOrigin.Reserved, status: BookingStatus.Confirmed, confirmedAt: Now.AddMinutes(-30)));
+        repository.Add(BusinessId, ClientId, Row(3, Now.AddHours(1), origin: AppointmentOrigin.WalkIn));
+        repository.Add(BusinessId, ClientId, Row(4, Now.AddHours(1), origin: null));
+        repository.Add(BusinessId, ClientId, Row(5, Now.AddHours(1), AppointmentKind.ClassSession, BookingModality.Fixed, origin: AppointmentOrigin.Reserved));
+        repository.Add(BusinessId, ClientId, Row(6, Now.AddHours(1), AppointmentKind.ClassSession, BookingModality.DropIn, origin: AppointmentOrigin.Reserved));
+        repository.Add(BusinessId, ClientId, Row(7, Now.AddHours(1), origin: AppointmentOrigin.Reserved, status: BookingStatus.Cancelled));
+        repository.Add(BusinessId, ClientId, Row(8, Now.AddHours(1), origin: AppointmentOrigin.Reserved, appointmentStatus: AppointmentStatus.Suspended));
+        repository.Add(BusinessId, ClientId, Row(9, Now.AddHours(-1), origin: AppointmentOrigin.Reserved));
+        repository.Add(BusinessId, ClientId, Row(10, Now.AddHours(1), origin: AppointmentOrigin.Reserved, maxCapacity: 2));
+        repository.Add(BusinessId, ClientId, Row(11, Now.AddHours(1), origin: AppointmentOrigin.Reserved, enrollmentId: 5));
+
+        var agenda = await service.GetAgendaAsync(BusinessId, ClientId);
+
+        // Only the own future reserved individual turn that still holds its place can be reprogrammed: a walk-in, a
+        // class date (fixed or drop-in), a cancelled or suspended turn, one already started, a shared-capacity
+        // appointment and an enrollment annotation are all excluded by the typed eligibility, not by a label.
+        Assert.True(ById(agenda, 1).CanReschedule);
+        Assert.True(ById(agenda, 2).CanReschedule);
+        Assert.False(ById(agenda, 3).CanReschedule);
+        Assert.False(ById(agenda, 4).CanReschedule);
+        Assert.False(ById(agenda, 5).CanReschedule);
+        Assert.False(ById(agenda, 6).CanReschedule);
+        Assert.False(ById(agenda, 7).CanReschedule);
+        Assert.False(ById(agenda, 8).CanReschedule);
+        Assert.False(ById(agenda, 9).CanReschedule);
+        Assert.False(ById(agenda, 10).CanReschedule);
+        Assert.False(ById(agenda, 11).CanReschedule);
+    }
+
+    [Fact]
+    public async Task Agenda_refuses_rescheduling_when_the_confirmation_instant_disagrees_with_the_status()
+    {
+        var (service, repository) = Built();
+        repository.Add(BusinessId, ClientId, Row(1, Now.AddHours(1), origin: AppointmentOrigin.Reserved, status: BookingStatus.Pending, confirmedAt: Now));
+        repository.Add(BusinessId, ClientId, Row(2, Now.AddHours(1), origin: AppointmentOrigin.Reserved, status: BookingStatus.Confirmed, confirmedAt: null));
+
+        var agenda = await service.GetAgendaAsync(BusinessId, ClientId);
+
+        // The client core revalidates the same pair under lock; offering a link for a shape it would refuse is a dead
+        // promise, so the panel projection mirrors the eligibility exactly.
+        Assert.False(ById(agenda, 1).CanReschedule);
+        Assert.False(ById(agenda, 2).CanReschedule);
+    }
+
+    [Fact]
+    public async Task Agenda_keeps_the_cancel_and_confirmation_actions_of_a_reschedulable_turn()
+    {
+        var (service, repository) = Built();
+        repository.Add(BusinessId, ClientId, Row(1, Now.AddHours(1), origin: AppointmentOrigin.Reserved));
+
+        var agenda = await service.GetAgendaAsync(BusinessId, ClientId);
+        var row = ById(agenda, 1);
+
+        // Adding the reprogramming flag must not disturb the T21.2/T21.3 eligibility of the same row.
+        Assert.True(row.CanConfirmIntention);
+        Assert.True(row.CanCancel);
+    }
+
     [Fact]
     public void Panel_projection_exposes_only_the_safe_agenda_fields()
     {
@@ -176,6 +250,7 @@ public sealed class ClientPanelServiceTests
                 nameof(ClientPanelBooking.BookingStatus),
                 nameof(ClientPanelBooking.CanCancel),
                 nameof(ClientPanelBooking.CanConfirmIntention),
+                nameof(ClientPanelBooking.CanReschedule),
                 nameof(ClientPanelBooking.EndsAt),
                 nameof(ClientPanelBooking.Modality),
                 nameof(ClientPanelBooking.ServiceName),

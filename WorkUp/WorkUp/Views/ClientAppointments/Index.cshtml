@@ -46,11 +46,12 @@
                         {
                             <p class="row-sub">@eligibility</p>
                         }
-                        @if (item.CanConfirmIntention || (item.CanCancel && (item.IsIndividualTurn || item.IsDropInClass)))
+                        @if (item.CanConfirmIntention || (item.CanCancel && (item.IsIndividualTurn || item.IsDropInClass)) || item.CanReschedule)
                         {
                             @* The typed shape derived from the appointment kind and modality decides each action: the
                                individual turn (T21.2) offers confirmation and cancel, the drop-in class (T21.3) offers
-                               its own class cancel, and a fixed class keeps its place with no form at all. *@
+                               its own class cancel, a fixed class keeps its place with no form at all, and the future
+                               reserved individual turn (T21.4) offers a GET link to its own reprogramming screen. *@
                             <div class="row-actions">
                                 @if (item.CanConfirmIntention)
                                 {
@@ -72,6 +73,12 @@
                                         @Html.AntiForgeryToken()
                                         <button type="submit" class="btn">Cancelar clase</button>
                                     </form>
+                                }
+                                @if (item.CanReschedule)
+                                {
+                                    @* A GET link to its own form: the move starts on the next screen, never on the
+                                       agenda, so opening the panel can never trigger a state change. *@
+                                    <a class="btn" href="/r/@Model.Slug/mis-turnos/@item.BookingId/reprogramar">Reprogramar</a>
                                 }
                             </div>
                         }

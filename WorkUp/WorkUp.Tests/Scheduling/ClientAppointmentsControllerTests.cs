@@ -1,3 +1,4 @@
+using System.Data;
 using System.Reflection;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
@@ -7,9 +8,11 @@ using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Routing;
+using WorkUp.BusinessLogic.Abstractions;
 using WorkUp.BusinessLogic.Classes;
 using WorkUp.BusinessLogic.Scheduling;
 using WorkUp.Controllers;
+using WorkUp.Domain.Entities;
 using WorkUp.Domain.Enums;
 using WorkUp.Infrastructure.Auth;
 using WorkUp.Tests.Fakes;
@@ -49,8 +52,17 @@ public sealed class ClientAppointmentsControllerTests
         AppointmentStatus appointmentStatus = AppointmentStatus.Scheduled,
         string serviceName = "Corte",
         string workerName = "Ana Pérez",
-        int durationMinutes = 30) =>
-        new(bookingId, startsAt, startsAt.AddMinutes(durationMinutes), serviceName, workerName, kind, appointmentStatus, status, modality);
+        int durationMinutes = 30,
+        AppointmentOrigin? origin = null,
+        int maxCapacity = 1,
+        int? enrollmentId = null,
+        DateTime? confirmedAt = null,
+        DateTime? cancelledAt = null,
+        CancelledBy? cancelledBy = null,
+        DateTime? attendanceRecordedAt = null,
+        AbsenceSource? absenceSource = null) =>
+        new(bookingId, startsAt, startsAt.AddMinutes(durationMinutes), serviceName, workerName, kind, appointmentStatus, status, modality,
+            origin, maxCapacity, enrollmentId, confirmedAt, cancelledAt, cancelledBy, attendanceRecordedAt, absenceSource);
 
     // --- Identity comes only from the session cookie ------------------------------------------------------------
 
@@ -678,6 +690,305 @@ public sealed class ClientAppointmentsControllerTests
         Assert.Equal("/r/peluqueria/mis-turnos", Assert.IsType<RedirectResult>(result).Url);
     }
 
+    // --- T21.4: reprogram the own individual turn from the panel ------------------------------------------------
+
+    private static readonly DateTime RescheduleOriginalStart = new(2026, 3, 11, 10, 0, 0);
+    private static readonly DateTime RescheduleNewStart = new(2026, 3, 12, 10, 15, 0);
+
+    [Fact]
+    public async Task Reschedule_get_of_an_own_eligible_turn_offers_the_same_workers_free_starts()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, ReschedulableRow(BookingId, RescheduleOriginalStart));
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository,
+            reschedule: ReschedulableRepository(BusinessId, ClientId, BookingId));
+
+        var view = Assert.IsType<ViewResult>(await controller.Reschedule(BookingId, (DateOnly?)null, CancellationToken.None));
+
+        Assert.Equal("Reschedule", view.ViewName);
+        var model = Assert.IsType<ClientRescheduleViewModel>(view.Model);
+        Assert.Equal(BookingId, model.BookingId);
+        Assert.Equal("Corte", model.ServiceName);
+        Assert.Equal("Ana Pérez", model.WorkerName);
+        Assert.Equal(RescheduleOriginalStart, model.CurrentStartsAt);
+        Assert.Equal(DateOnly.FromDateTime(RescheduleOriginalStart), model.Input.Date);
+        Assert.NotNull(model.Options);
+        Assert.Contains(new TimeOnly(9, 0), model.Options!.AvailableStartTimes);
+        Assert.DoesNotContain(TimeOnly.FromDateTime(RescheduleOriginalStart), model.Options.AvailableStartTimes);
+        Assert.Null(model.Options.NearestAlternative);
+    }
+
+    [Fact]
+    public async Task Reschedule_get_navigates_to_the_requested_day_and_keeps_it_on_the_form()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, ReschedulableRow(BookingId, RescheduleOriginalStart));
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository,
+            reschedule: ReschedulableRepository(BusinessId, ClientId, BookingId));
+        var requestedDate = DateOnly.FromDateTime(RescheduleNewStart);
+
+        var view = Assert.IsType<ViewResult>(await controller.Reschedule(BookingId, requestedDate, CancellationToken.None));
+        var model = Assert.IsType<ClientRescheduleViewModel>(view.Model);
+
+        Assert.Equal(requestedDate, model.Input.Date);
+        Assert.Equal(requestedDate, model.Options!.Date);
+        Assert.Contains(TimeOnly.FromDateTime(RescheduleNewStart), model.Options.AvailableStartTimes);
+    }
+
+    [Fact]
+    public async Task Reschedule_get_suggests_the_nearest_alternative_when_the_day_has_no_option()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, ReschedulableRow(BookingId, RescheduleOriginalStart));
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository,
+            reschedule: ReschedulableRepository(BusinessId, ClientId, BookingId));
+
+        // A date already in the past offers no slot of its own, so the same worker's closest future start is offered.
+        var view = Assert.IsType<ViewResult>(await controller.Reschedule(BookingId, new DateOnly(2026, 3, 1), CancellationToken.None));
+        var model = Assert.IsType<ClientRescheduleViewModel>(view.Model);
+
+        Assert.Empty(model.Options!.AvailableStartTimes);
+        Assert.NotNull(model.Options.NearestAlternative);
+        Assert.Equal(DateOnly.FromDateTime(Now), DateOnly.FromDateTime(model.Options.NearestAlternative!.Value));
+    }
+
+    [Fact]
+    public async Task Reschedule_get_of_a_foreign_missing_or_non_eligible_booking_is_a_generic_not_found()
+    {
+        // A booking of another ficha is simply absent from the own agenda, so the read answers exactly like a booking
+        // that does not exist: the route never discloses whether the row is foreign or missing.
+        var foreignPanel = new RecordingClientPanelRepository();
+        foreignPanel.Add(BusinessId, OtherClientId, ReschedulableRow(BookingId, RescheduleOriginalStart));
+        var foreign = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), foreignPanel,
+            reschedule: ReschedulableRepository(BusinessId, OtherClientId, BookingId));
+        Assert.IsType<NotFoundResult>(await foreign.Reschedule(BookingId, (DateOnly?)null, CancellationToken.None));
+
+        var missing = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository());
+        Assert.IsType<NotFoundResult>(await missing.Reschedule(BookingId, (DateOnly?)null, CancellationToken.None));
+
+        // An own row whose shape the core would refuse (a walk-in, a started turn, a class) offers no page at all.
+        var walkInPanel = new RecordingClientPanelRepository();
+        walkInPanel.Add(BusinessId, ClientId, Row(BookingId, RescheduleOriginalStart, origin: AppointmentOrigin.WalkIn));
+        var nonEligible = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), walkInPanel,
+            reschedule: ReschedulableRepository(BusinessId, ClientId, BookingId));
+        Assert.IsType<NotFoundResult>(await nonEligible.Reschedule(BookingId, (DateOnly?)null, CancellationToken.None));
+        Assert.Null(nonEligible.TempData["FlashMessage"]);
+    }
+
+    [Fact]
+    public async Task Reschedule_post_of_an_own_eligible_turn_moves_it_and_returns_to_the_own_agenda()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, ReschedulableRow(BookingId, RescheduleOriginalStart));
+        var reschedule = ReschedulableRepository(BusinessId, ClientId, BookingId);
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository, reschedule: reschedule);
+
+        var result = await controller.Reschedule(BookingId, ValidRescheduleInput(RescheduleNewStart), CancellationToken.None);
+
+        Assert.Equal("/r/peluqueria/mis-turnos", Assert.IsType<RedirectResult>(result).Url);
+        Assert.Equal("Success", controller.TempData["FlashType"]);
+        Assert.Equal("Reprogramaste tu turno.", controller.TempData["FlashMessage"]);
+        Assert.Equal(BusinessId, reschedule.Booking!.BusinessId);
+        Assert.Equal(RescheduleNewStart, reschedule.Booking.StartsAt);
+        Assert.Equal(BookingStatus.Confirmed, reschedule.Booking.BookingStatus);
+        Assert.Single(reschedule.Notifications);
+    }
+
+    [Fact]
+    public async Task Reschedule_post_of_a_foreign_or_missing_booking_is_a_generic_not_found()
+    {
+        var foreign = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository(),
+            reschedule: ReschedulableRepository(BusinessId, OtherClientId, BookingId));
+        Assert.IsType<NotFoundResult>(
+            await foreign.Reschedule(BookingId, ValidRescheduleInput(RescheduleNewStart), CancellationToken.None));
+
+        var missing = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), new RecordingClientPanelRepository());
+        Assert.IsType<NotFoundResult>(
+            await missing.Reschedule(BookingId, ValidRescheduleInput(RescheduleNewStart), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Reschedule_post_of_an_occupied_slot_keeps_the_form_with_a_safe_message_and_no_write()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, ReschedulableRow(BookingId, RescheduleOriginalStart));
+        var reschedule = ReschedulableRepository(BusinessId, ClientId, BookingId);
+        reschedule.Snapshot = reschedule.Snapshot with
+        {
+            Appointments =
+            [
+                new Appointment
+                {
+                    Id = 99, BusinessId = BusinessId, WorkerId = WorkerId, ServiceId = 3,
+                    Kind = AppointmentKind.Individual, Origin = AppointmentOrigin.Reserved,
+                    Status = AppointmentStatus.Scheduled, StartsAt = RescheduleNewStart, EndsAt = RescheduleNewStart.AddMinutes(30)
+                }
+            ],
+            Bookings = [new Booking { Id = 100, BusinessId = BusinessId, AppointmentId = 99, Status = BookingStatus.Pending }]
+        };
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository, reschedule: reschedule);
+
+        var view = Assert.IsType<ViewResult>(
+            await controller.Reschedule(BookingId, ValidRescheduleInput(RescheduleNewStart), CancellationToken.None));
+
+        Assert.Equal("Reschedule", view.ViewName);
+        // The occupied slot is a business-rule outcome on the own booking, not an existence leak.
+        Assert.Contains(view.ViewData.ModelState.Values.SelectMany(value => value.Errors), error =>
+            error.ErrorMessage.Contains("Ese horario no está disponible", StringComparison.Ordinal));
+        Assert.Equal(RescheduleOriginalStart, reschedule.Booking!.StartsAt);
+        Assert.Equal(BookingStatus.Pending, reschedule.Booking.BookingStatus);
+        Assert.Empty(reschedule.Notifications);
+    }
+
+    [Fact]
+    public async Task Reschedule_post_of_the_current_slot_keeps_the_form_with_its_safe_message()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, ReschedulableRow(BookingId, RescheduleOriginalStart));
+        var reschedule = ReschedulableRepository(BusinessId, ClientId, BookingId);
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository, reschedule: reschedule);
+
+        var view = Assert.IsType<ViewResult>(
+            await controller.Reschedule(BookingId, ValidRescheduleInput(RescheduleOriginalStart), CancellationToken.None));
+
+        Assert.Contains(view.ViewData.ModelState.Values.SelectMany(value => value.Errors),
+            error => error.ErrorMessage == "Elegí un horario distinto al actual.");
+        Assert.Equal(RescheduleOriginalStart, reschedule.Booking!.StartsAt);
+        Assert.Empty(reschedule.Notifications);
+    }
+
+    [Fact]
+    public async Task Reschedule_post_of_a_non_eligible_own_turn_keeps_the_form_with_a_safe_message()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, Row(BookingId, RescheduleOriginalStart, origin: AppointmentOrigin.WalkIn));
+        var reschedule = ReschedulableRepository(BusinessId, ClientId, BookingId);
+        reschedule.Booking = reschedule.Booking! with { Origin = AppointmentOrigin.WalkIn };
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository, reschedule: reschedule);
+
+        var view = Assert.IsType<ViewResult>(
+            await controller.Reschedule(BookingId, ValidRescheduleInput(RescheduleNewStart), CancellationToken.None));
+
+        // <c>client_booking_unavailable</c> stays behind the generic message: a shape the core refuses is not an
+        // existence disclosure, but its exact reason is not something the panel repeats back.
+        Assert.Contains(view.ViewData.ModelState.Values.SelectMany(value => value.Errors), error =>
+            error.ErrorMessage.Contains("No se pudo reprogramar", StringComparison.Ordinal));
+        Assert.Equal(RescheduleOriginalStart, reschedule.Booking!.StartsAt);
+        Assert.Empty(reschedule.Notifications);
+    }
+
+    [Fact]
+    public async Task Reschedule_post_requires_a_day_and_a_time()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, ReschedulableRow(BookingId, RescheduleOriginalStart));
+        var reschedule = ReschedulableRepository(BusinessId, ClientId, BookingId);
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository, reschedule: reschedule);
+
+        var view = Assert.IsType<ViewResult>(await controller.Reschedule(BookingId, new ClientRescheduleInput(), CancellationToken.None));
+
+        var messages = view.ViewData.ModelState.Values.SelectMany(value => value.Errors).Select(error => error.ErrorMessage).ToArray();
+        Assert.Contains("Elegí un día.", messages);
+        Assert.Contains("Elegí un horario.", messages);
+        // The form is rebuilt from the fresh options, but an incomplete choice never reaches the save.
+        Assert.DoesNotContain("apply-reschedule", reschedule.Calls);
+        Assert.Equal(RescheduleOriginalStart, reschedule.Booking!.StartsAt);
+        Assert.Empty(reschedule.Notifications);
+    }
+
+    [Fact]
+    public void The_reschedule_get_takes_only_the_booking_and_the_optional_day()
+    {
+        var get = typeof(ClientAppointmentsController).GetMethod(
+            nameof(ClientAppointmentsController.Reschedule), [typeof(int), typeof(DateOnly?), typeof(CancellationToken)])!;
+
+        Assert.NotNull(get.GetCustomAttribute<HttpGetAttribute>());
+        Assert.Equal(
+            new[] { "bookingId", "date", "ct" },
+            get.GetParameters().Select(parameter => parameter.Name!).ToArray());
+        foreach (var forbidden in new[] { "client", "business", "slug", "worker", "token" })
+            Assert.DoesNotContain(get.GetParameters(), parameter =>
+                parameter.Name!.Contains(forbidden, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void The_reschedule_post_is_a_post_only_antiforgery_endpoint_with_the_booking_id_in_the_route()
+    {
+        var post = typeof(ClientAppointmentsController).GetMethod(
+            nameof(ClientAppointmentsController.Reschedule), [typeof(int), typeof(ClientRescheduleInput), typeof(CancellationToken)])!;
+
+        var httpPost = post.GetCustomAttribute<HttpPostAttribute>();
+        Assert.NotNull(httpPost);
+        Assert.Equal("{bookingId:int}/reprogramar", httpPost!.Template);
+        Assert.NotNull(post.GetCustomAttribute<ValidateAntiForgeryTokenAttribute>());
+        Assert.Null(post.GetCustomAttribute<HttpGetAttribute>());
+    }
+
+    [Fact]
+    public void The_reschedule_post_accepts_only_the_booking_id_and_the_chosen_day_and_time()
+    {
+        var post = typeof(ClientAppointmentsController).GetMethod(
+            nameof(ClientAppointmentsController.Reschedule), [typeof(int), typeof(ClientRescheduleInput), typeof(CancellationToken)])!;
+
+        Assert.Equal(
+            new[] { "bookingId", "input", "ct" },
+            post.GetParameters().Select(parameter => parameter.Name!).ToArray());
+
+        var fields = typeof(ClientRescheduleInput).GetProperties()
+            .Select(property => property.Name).Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(new[] { "Date", "StartTime" }, fields);
+        foreach (var forbidden in new[] { "Worker", "Client", "Business", "Token", "Email" })
+            Assert.DoesNotContain(fields, name => name.Contains(forbidden, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Index_exposes_the_reschedule_flag_for_an_eligible_own_individual_turn()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, ReschedulableRow(1, Now.AddHours(1)));
+        repository.Add(BusinessId, ClientId, Row(2, Now.AddHours(2), origin: AppointmentOrigin.WalkIn));
+        repository.Add(BusinessId, ClientId, Row(3, Now.AddHours(3), AppointmentKind.ClassSession, BookingModality.DropIn, origin: AppointmentOrigin.Reserved));
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository);
+
+        var model = await IndexAsync(controller);
+        var byId = model.Upcoming.ToDictionary(row => row.BookingId);
+
+        Assert.True(byId[1].CanReschedule);
+        Assert.False(byId[2].CanReschedule);
+        Assert.False(byId[3].CanReschedule);
+        Assert.Contains("reprogramar", byId[1].EligibilityLabel);
+        Assert.DoesNotContain("reprogramar", byId[2].EligibilityLabel ?? string.Empty);
+    }
+
+    [Fact]
+    public void The_agenda_view_offers_the_reschedule_get_link_only_for_the_typed_flag()
+    {
+        var view = ReadClientAppointmentsView("Index.cshtml");
+
+        // The gate is the typed eligibility flag, and the action is a GET link to its own form: the agenda never
+        // starts a move with a form of its own.
+        Assert.Contains("item.CanReschedule", view);
+        Assert.Contains("href=\"/r/@Model.Slug/mis-turnos/@item.BookingId/reprogramar\"", view);
+        Assert.DoesNotContain("KindLabel =", view);
+        Assert.DoesNotContain("/t/", view);
+        Assert.DoesNotContain("BookingToken", view);
+    }
+
+    [Fact]
+    public void The_reschedule_view_posts_with_antiforgery_and_never_shows_a_private_token()
+    {
+        var view = ReadClientAppointmentsView("Reschedule.cshtml");
+
+        Assert.Contains("method=\"post\"", view);
+        Assert.Contains("@Html.AntiForgeryToken()", view);
+        Assert.Contains("asp-for=\"Input.Date\"", view);
+        Assert.Contains("asp-for=\"Input.StartTime\"", view);
+        Assert.DoesNotContain("WorkerId", view);
+        Assert.DoesNotContain("BookingToken", view);
+        Assert.DoesNotContain("LinkToken", view);
+        Assert.DoesNotContain("/t/", view);
+    }
+
     // --- Helpers -------------------------------------------------------------------------------------------------
 
     private static async Task<ClientAppointmentsViewModel> IndexAsync(ClientAppointmentsController controller)
@@ -718,7 +1029,8 @@ public sealed class ClientAppointmentsControllerTests
         RecordingClientPanelRepository repository,
         RecordingClientBookingActionsRepository? bookingActions = null,
         FakeClock? clock = null,
-        FakeClassDropInRepository? classDropIns = null)
+        FakeClassDropInRepository? classDropIns = null,
+        FakeOwnerRescheduleRepository? reschedule = null)
     {
         var sharedClock = clock ?? new FakeClock { Now = Now };
         var panelService = new ClientPanelService(repository, sharedClock);
@@ -726,10 +1038,13 @@ public sealed class ClientAppointmentsControllerTests
             bookingActions ?? new RecordingClientBookingActionsRepository(), new FakeUnitOfWork(), sharedClock);
         var classCancellationService = new ClientClassCancellationService(
             classDropIns ?? new FakeClassDropInRepository(), new FakeUnitOfWork(), sharedClock);
+        var rescheduleRepository = reschedule ?? new FakeOwnerRescheduleRepository();
+        var rescheduleService = new OwnerRescheduleService(
+            rescheduleRepository, new CommittingUnitOfWork(rescheduleRepository), sharedClock);
         var routeData = new RouteData();
         routeData.Values["slug"] = routeSlug;
         var httpContext = new DefaultHttpContext { User = user };
-        return new ClientAppointmentsController(panelService, actionsService, classCancellationService)
+        return new ClientAppointmentsController(panelService, actionsService, classCancellationService, rescheduleService)
         {
             ControllerContext = new ControllerContext
             {
@@ -739,6 +1054,87 @@ public sealed class ClientAppointmentsControllerTests
             },
             TempData = new TempDataDictionary(httpContext, new DictionaryTempDataProvider())
         };
+    }
+
+    /// <summary>One own future individual reservation that the panel projection marks as reschedulable.</summary>
+    private static ClientPanelBookingRecord ReschedulableRow(int bookingId, DateTime startsAt) =>
+        Row(bookingId, startsAt, origin: AppointmentOrigin.Reserved, maxCapacity: 1);
+
+    private static ClientRescheduleInput ValidRescheduleInput(DateTime startsAt) => new()
+    {
+        Date = DateOnly.FromDateTime(startsAt),
+        StartTime = TimeOnly.FromDateTime(startsAt)
+    };
+
+    /// <summary>
+    /// One own pending individual reservation of the reschedule fake, with a full-day schedule so the preview offers
+    /// the same worker's free starts and the save revalidates them.
+    /// </summary>
+    private static FakeOwnerRescheduleRepository ReschedulableRepository(int businessId, int clientId, int bookingId) =>
+        new()
+        {
+            BookingClientId = clientId,
+            WorkerBusinessId = businessId,
+            Booking = new OwnerRescheduleBooking(
+                BusinessId: businessId,
+                BookingId: bookingId,
+                AppointmentId: 30,
+                WorkerId: WorkerId,
+                AppointmentKind: AppointmentKind.Individual,
+                AppointmentStatus: AppointmentStatus.Scheduled,
+                Origin: AppointmentOrigin.Reserved,
+                MaxCapacity: 1,
+                Modality: null,
+                EnrollmentId: null,
+                BookingStatus: BookingStatus.Pending,
+                StartsAt: RescheduleOriginalStart,
+                EndsAt: RescheduleOriginalStart.AddMinutes(45),
+                ConfirmedAt: null,
+                CancelledAt: null,
+                CancelledBy: null,
+                AttendanceRecordedAt: null,
+                AbsenceSource: null,
+                ServiceDurationMinutes: 45,
+                BusinessName: "Peluquería Marina",
+                ClientFirstName: "Ana",
+                ClientEmail: "ana@example.invalid",
+                ServiceName: "Corte",
+                WorkerName: "Ana Pérez"),
+            Snapshot = new BookingAvailabilitySnapshot(
+                Enum.GetValues<DayOfWeek>().Select(day => new WorkerSchedule
+                {
+                    WorkerId = WorkerId,
+                    DayOfWeek = day,
+                    StartTime = new TimeOnly(9, 0),
+                    EndTime = new TimeOnly(17, 0)
+                }).ToArray(), [], [], [])
+        };
+
+    /// <summary>Applies the pending writes on commit, exactly like the SQL transaction the service opens.</summary>
+    private sealed class CommittingUnitOfWork(FakeOwnerRescheduleRepository repository) : IUnitOfWork
+    {
+        public Task<ITransaction> BeginAsync(
+            IsolationLevel isolationLevel = IsolationLevel.ReadCommitted,
+            CancellationToken ct = default) => Task.FromResult<ITransaction>(new Transaction(repository));
+
+        private sealed class Transaction(FakeOwnerRescheduleRepository repository) : ITransaction
+        {
+            private bool _committed;
+
+            public Task CommitAsync(CancellationToken ct = default)
+            {
+                repository.CommitPendingChanges();
+                _committed = true;
+                return Task.CompletedTask;
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                if (!_committed)
+                    repository.DiscardPendingChanges();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
     /// <summary>
