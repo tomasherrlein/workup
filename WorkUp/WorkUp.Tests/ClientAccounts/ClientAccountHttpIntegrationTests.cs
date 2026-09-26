@@ -392,7 +392,7 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
             "The own agenda must never render a row, a label or a form for another ficha's booking.");
         // The labels show the intention and both wired actions; an ASCII-safe fragment is used because Razor may
         // escape the accented character of the sentence. The confirm and cancel forms exist only for the own turn.
-        Assert.Contains("confirmar que vas a asistir o cancelar.", agendaHtml, StringComparison.Ordinal);
+        Assert.Contains("confirmar que vas a asistir, cancelar o reprogramar.", agendaHtml, StringComparison.Ordinal);
         Assert.Contains("Confirmar que voy a asistir", agendaHtml, StringComparison.Ordinal);
         Assert.Contains("Cancelar turno", agendaHtml, StringComparison.Ordinal);
         Assert.Equal(new[] { seeded.OwnBookingId }, ExtractActionBookingIds(agendaHtml));
@@ -611,6 +611,154 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         Assert.Equal((byte)CancelledBy.Client, afterRepeatClassCancel.CancelledBy);
         Assert.Equal(classCancelledAt, afterRepeatClassCancel.CancelledAt);
         log.Note("HTTP/SQL: repeating the class cancel returned to the own agenda and the original CancelledAt and author did not move.");
+
+        // --- Own individual turn reprogramming (T21.4, RF-09) ----------------------------------------------
+        // The T21.2 own turn was cancelled and the T21.3 class was cancelled, so neither can be moved again; one
+        // fresh own future reserved individual turn of the cookie ficha is planted with a synthetic private link.
+        // It shares the day and the worker of the T21.2 foreign booking and the T21.3 class, so the real
+        // availability the reprogramming screen reads already knows occupied starts the chosen slot must avoid.
+        var rescheduleSeed = await SeedRescheduleTurnAsync(connection, businessId, clientId);
+        var ownReschedulePath = $"/r/{DemoSlug}/mis-turnos/{rescheduleSeed.BookingId}/reprogramar";
+        var foreignReschedulePath = $"/r/{DemoSlug}/mis-turnos/{seeded.OtherBookingId}/reprogramar";
+        var rescheduleDate = DateOnly.FromDateTime(rescheduleSeed.OriginalStart);
+        log.KeepSecret(rescheduleSeed.ProtectedToken);
+        var rescheduleBookingsBefore = await ReadBookingStatesAsync(connection, businessId);
+        var rescheduleAppointmentBefore = await ReadAppointmentRangeAsync(connection, rescheduleSeed.AppointmentId);
+        var rescheduleLinkBefore = await ReadRescheduleLinkAsync(connection, rescheduleSeed.LinkId);
+        var reschedulePaymentsBefore = await ReadPaymentStatesAsync(connection, businessId);
+        // The class payment of T21.3 is reused here: it keeps the "payments unchanged" check from comparing two
+        // empty lists, so its presence in the snapshot is asserted before the save.
+        Assert.NotEmpty(reschedulePaymentsBefore);
+        Assert.Empty(await ReadNotificationsAsync(connection, businessId, NotificationType.Rescheduled, email));
+        log.Note($"SQL: seeded own confirmed individual turn #{rescheduleSeed.BookingId} with private link #{rescheduleSeed.LinkId} into business #{businessId}; a foreign turn and a class share its worker and day.");
+
+        // The real GET wires one reprogramming link for the own eligible turn and nothing at all for another ficha.
+        var (rescheduleAgendaStatus, rescheduleAgendaHtml) = await GetHtmlAsync(client, $"/r/{DemoSlug}/mis-turnos");
+        Assert.Equal(HttpStatusCode.OK, rescheduleAgendaStatus);
+        Assert.Contains("client-appointments-title", rescheduleAgendaHtml, StringComparison.Ordinal);
+        Assert.Contains("Reprogramar", rescheduleAgendaHtml, StringComparison.Ordinal);
+        Assert.Contains(ownReschedulePath, rescheduleAgendaHtml, StringComparison.Ordinal);
+        Assert.Equal(1, CountOccurrences(rescheduleAgendaHtml, "/reprogramar"));
+        Assert.True(!rescheduleAgendaHtml.Contains($"/mis-turnos/{seeded.OtherBookingId}/", StringComparison.Ordinal),
+            "The own agenda must never render a reprogramming link for another ficha's booking.");
+        Assert.True(!rescheduleAgendaHtml.Contains(rescheduleSeed.ProtectedToken, StringComparison.Ordinal),
+            "The panel must never render the private appointment link token.");
+        Assert.True(!rescheduleAgendaHtml.Contains(OwnerNoteMarker, StringComparison.Ordinal),
+            "The panel must never render an owner note or health observation.");
+        log.Note("HTTP: the agenda rendered exactly one reprogramming link for the own eligible turn and no link, note or token for anything else.");
+
+        // The reprogramming GET is a pure read: it offers the same worker's real free starts and writes nothing.
+        var (rescheduleFormStatus, rescheduleFormHtml) = await GetHtmlAsync(client, ownReschedulePath);
+        Assert.Equal(HttpStatusCode.OK, rescheduleFormStatus);
+        Assert.Contains("client-reschedule-title", rescheduleFormHtml, StringComparison.Ordinal);
+        Assert.True(!rescheduleFormHtml.Contains(rescheduleSeed.ProtectedToken, StringComparison.Ordinal),
+            "The reprogramming screen must never render the private appointment link token.");
+        Assert.True(!rescheduleFormHtml.Contains(OwnerNoteMarker, StringComparison.Ordinal),
+            "The reprogramming screen must never render an owner note or health observation.");
+        // The offered start is the real availability of the seeded demo worker, never an assumed time: the current
+        // start is dropped and the occupied foreign turn and class of the same worker and day are not offered.
+        var offeredStarts = ExtractStartTimeOptions(rescheduleFormHtml);
+        Assert.NotEmpty(offeredStarts);
+        Assert.DoesNotContain(TimeOnly.FromDateTime(rescheduleSeed.OriginalStart), offeredStarts);
+        Assert.DoesNotContain(new TimeOnly(12, 0), offeredStarts);
+        Assert.DoesNotContain(new TimeOnly(14, 0), offeredStarts);
+        var chosenStart = offeredStarts[0];
+        Assert.NotEqual(TimeOnly.FromDateTime(rescheduleSeed.OriginalStart), chosenStart);
+        Assert.Equal(rescheduleBookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        Assert.Equal(rescheduleAppointmentBefore, await ReadAppointmentRangeAsync(connection, rescheduleSeed.AppointmentId));
+        AssertLinkUnchanged(rescheduleLinkBefore, await ReadRescheduleLinkAsync(connection, rescheduleSeed.LinkId));
+        Assert.Empty(await ReadNotificationsAsync(connection, businessId, NotificationType.Rescheduled, email));
+        log.Note("HTTP/SQL: the reprogramming GET offered the own worker's real free starts and left every row in place.");
+
+        var rescheduleAntiforgery = ExtractAntiforgeryToken(rescheduleFormHtml);
+        log.KeepSecret(rescheduleAntiforgery);
+
+        // Another ficha's booking is the same generic 404 for the read and, with a valid token, for the save.
+        using (var foreignRescheduleForm = await client.GetAsync(foreignReschedulePath))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, foreignRescheduleForm.StatusCode);
+        }
+        using (var foreignReschedule = await client.PostAsync(foreignReschedulePath, Form(new Dictionary<string, string>
+               {
+                   ["Input.Date"] = rescheduleSeed.OriginalStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                   ["Input.StartTime"] = chosenStart.ToString("HH:mm", CultureInfo.InvariantCulture),
+                   ["__RequestVerificationToken"] = rescheduleAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, foreignReschedule.StatusCode);
+        }
+        Assert.Equal(rescheduleBookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        log.Note("HTTP/SQL: reading and saving another ficha's reprogramming, even with a valid token, answered 404 without touching any row.");
+
+        // Without its anti-CSRF token the save is refused before any appointment, booking, link or payment moves.
+        using (var noTokenReschedule = await client.PostAsync(ownReschedulePath, Form(new Dictionary<string, string>
+               {
+                   ["Input.Date"] = rescheduleSeed.OriginalStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                   ["Input.StartTime"] = chosenStart.ToString("HH:mm", CultureInfo.InvariantCulture)
+               })))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, noTokenReschedule.StatusCode);
+        }
+        Assert.Equal(rescheduleAppointmentBefore, await ReadAppointmentRangeAsync(connection, rescheduleSeed.AppointmentId));
+        AssertLinkUnchanged(rescheduleLinkBefore, await ReadRescheduleLinkAsync(connection, rescheduleSeed.LinkId));
+        Assert.Equal(reschedulePaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
+        Assert.Equal((byte)BookingStatus.Confirmed, (await ReadBookingStateAsync(connection, rescheduleSeed.BookingId)).Status);
+        log.Note("HTTP/SQL: the save POST without its anti-CSRF token -> 400 and no appointment, booking, link or payment moved.");
+
+        // The valid save moves the appointment with its own worker, confirms it and refreshes only the link expiry.
+        using (var reschedule = await client.PostAsync(ownReschedulePath, Form(new Dictionary<string, string>
+               {
+                   ["Input.Date"] = rescheduleSeed.OriginalStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                   ["Input.StartTime"] = chosenStart.ToString("HH:mm", CultureInfo.InvariantCulture),
+                   ["__RequestVerificationToken"] = rescheduleAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, reschedule.StatusCode);
+            Assert.Equal($"/r/{DemoSlug}/mis-turnos", DescribeRedirect(reschedule));
+        }
+        var newStart = rescheduleDate.ToDateTime(chosenStart);
+        var movedAppointment = await ReadAppointmentRangeAsync(connection, rescheduleSeed.AppointmentId);
+        Assert.Equal(newStart, movedAppointment.StartsAt);
+        Assert.Equal(newStart.AddMinutes(rescheduleSeed.DurationMinutes), movedAppointment.EndsAt);
+        Assert.Equal(rescheduleSeed.WorkerId, movedAppointment.WorkerId);
+        Assert.NotEqual(rescheduleAppointmentBefore.StartsAt, movedAppointment.StartsAt);
+        var afterReschedule = await ReadBookingStateAsync(connection, rescheduleSeed.BookingId);
+        Assert.Equal((byte)BookingStatus.Confirmed, afterReschedule.Status);
+        // The booking was already confirmed, so the instant the client first confirmed must not be restamped.
+        Assert.Equal(rescheduleSeed.ConfirmedAt, afterReschedule.ConfirmedAt);
+        Assert.Null(afterReschedule.CancelledAt);
+        Assert.Null(afterReschedule.CancelledBy);
+        // RF-09: the private link keeps every byte of its token material; only the expiry moves to the new start + 24 h.
+        var movedLink = await ReadRescheduleLinkAsync(connection, rescheduleSeed.LinkId);
+        Assert.Equal(rescheduleLinkBefore.Id, movedLink.Id);
+        Assert.Equal(rescheduleLinkBefore.ProtectedToken, movedLink.ProtectedToken);
+        Assert.True(rescheduleLinkBefore.TokenHash.AsSpan().SequenceEqual(movedLink.TokenHash),
+            "The private appointment-link token hash changed on reprogramming.");
+        Assert.Null(movedLink.RevokedAt);
+        Assert.Equal(newStart.AddHours(24), movedLink.ExpiresAt);
+        Assert.Equal((byte)NotificationType.Rescheduled,
+            Assert.Single(await ReadNotificationsAsync(connection, businessId, NotificationType.Rescheduled, email)).Type);
+        Assert.Equal(reschedulePaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
+        log.Note($"HTTP/SQL: reprogram -> 302, appointment #{rescheduleSeed.AppointmentId} moved with the same worker, the confirmed instant stayed, the link expiry became the new start + 24 h, exactly one Rescheduled notice was queued and no payment row moved.");
+
+        // Repeating the same slot is a safe same-slot refusal: no move and no second notification.
+        using (var repeatReschedule = await client.PostAsync(ownReschedulePath, Form(new Dictionary<string, string>
+               {
+                   ["Input.Date"] = rescheduleSeed.OriginalStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                   ["Input.StartTime"] = chosenStart.ToString("HH:mm", CultureInfo.InvariantCulture),
+                   ["__RequestVerificationToken"] = rescheduleAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.OK, repeatReschedule.StatusCode);
+            var repeatHtml = await repeatReschedule.Content.ReadAsStringAsync();
+            Assert.Contains("un horario distinto al actual.", repeatHtml, StringComparison.Ordinal);
+        }
+        Assert.Equal(movedAppointment, await ReadAppointmentRangeAsync(connection, rescheduleSeed.AppointmentId));
+        Assert.Equal(rescheduleSeed.ConfirmedAt, (await ReadBookingStateAsync(connection, rescheduleSeed.BookingId)).ConfirmedAt);
+        AssertLinkUnchanged(movedLink, await ReadRescheduleLinkAsync(connection, rescheduleSeed.LinkId));
+        Assert.Single(await ReadNotificationsAsync(connection, businessId, NotificationType.Rescheduled, email));
+        Assert.Equal(reschedulePaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
+        log.Note("HTTP/SQL: repeating the same slot -> the form with its safe message, no move, no link change and no extra Rescheduled notice.");
 
         // --- Password recovery (RF-27) ---------------------------------------------------------------------
         var recoveryJar = new CookieContainer();
@@ -927,6 +1075,13 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
             .Distinct()
             .ToArray();
 
+    /// <summary>Distinct free start times the reprogramming screen offers, parsed from its option values as HH:mm.</summary>
+    private static TimeOnly[] ExtractStartTimeOptions(string html) =>
+        Regex.Matches(html, "<option value=\"(\\d{2}:\\d{2})\"", RegexOptions.CultureInvariant)
+            .Select(match => TimeOnly.ParseExact(match.Groups[1].Value, "HH:mm", CultureInfo.InvariantCulture))
+            .Distinct()
+            .ToArray();
+
     private static string LinkFrom(string bodyHtml)
     {
         var match = Regex.Match(bodyHtml, "href=\"([^\"]+)\"", RegexOptions.CultureInvariant);
@@ -1047,9 +1202,9 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
             ("@businessId", businessId), ("@email", otherEmail), ("@createdAt", businessNow));
 
         var ownAppointmentId = await InsertIndividualTurnAsync(
-            connection, businessId, serviceId, workerId, businessNow.Date.AddDays(30).AddHours(10), businessNow);
+            connection, businessId, serviceId, workerId, FutureBusinessDay(businessNow).AddHours(10), businessNow);
         var otherAppointmentId = await InsertIndividualTurnAsync(
-            connection, businessId, serviceId, workerId, businessNow.Date.AddDays(30).AddHours(12), businessNow);
+            connection, businessId, serviceId, workerId, FutureBusinessDay(businessNow).AddHours(12), businessNow);
 
         var ownBookingId = await InsertPendingTurnBookingAsync(connection, businessId, ownAppointmentId, clientId, businessNow);
         var otherBookingId = await InsertPendingTurnBookingAsync(connection, businessId, otherAppointmentId, otherClientId, businessNow);
@@ -1120,7 +1275,7 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
             ("@businessId", businessId));
 
         var sessionId = await InsertClassSessionAsync(
-            connection, businessId, serviceId, workerId, businessNow.Date.AddDays(30).AddHours(14), 12, businessNow);
+            connection, businessId, serviceId, workerId, FutureBusinessDay(businessNow).AddHours(14), 12, businessNow);
         var ownBookingId = await InsertPendingDropInBookingAsync(connection, businessId, sessionId, clientId, businessNow);
         var otherBookingId = await InsertPendingDropInBookingAsync(connection, businessId, sessionId, otherClientId, businessNow);
 
@@ -1177,6 +1332,83 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
             ("@modality", (byte)BookingModality.DropIn), ("@status", (byte)BookingStatus.Pending),
             ("@createdAt", createdAt));
 
+    /// <summary>
+    /// The shared future business day of every T21 fixture: thirty days ahead, advanced past Sunday because the
+    /// seeded demo salon keeps no schedule that day, so the reprogramming checkpoint always has real availability
+    /// whatever the machine date is.
+    /// </summary>
+    private static DateTime FutureBusinessDay(DateTime businessNow) =>
+        businessNow.Date.AddDays(30).DayOfWeek == DayOfWeek.Sunday
+            ? businessNow.Date.AddDays(31)
+            : businessNow.Date.AddDays(30);
+
+    /// <summary>
+    /// Plants one own future reserved individual turn of the trusted <paramref name="clientId"/> with the seeded demo
+    /// worker and individual service, already confirmed at a known instant, plus one synthetic private appointment
+    /// link. It shares the worker and the future business day of the T21.2 foreign turn and the T21.3 class, so the
+    /// real availability the reprogramming screen reads already carries their occupied starts.
+    /// </summary>
+    private static async Task<SeededReschedule> SeedRescheduleTurnAsync(SqlConnection connection, int businessId, int clientId)
+    {
+        // Business-local now, computed exactly like the host clock, so the planted start stays in the future for the
+        // environment the requests run against whatever the machine time zone is.
+        var businessNow = TimeZoneInfo.ConvertTimeFromUtc(
+            DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("America/Argentina/Buenos_Aires"));
+
+        var serviceId = await ScalarIntAsync(connection,
+            "SELECT TOP (1) Id FROM Services WHERE BusinessId = @businessId AND MaxCapacity = 1 AND IsActive = 1 ORDER BY Id",
+            ("@businessId", businessId));
+        Assert.True(serviceId > 0, "The seeded demo tenant must have an active individual service for this checkpoint.");
+        var workerId = await ScalarIntAsync(connection,
+            "SELECT TOP (1) Id FROM Workers WHERE BusinessId = @businessId AND IsActive = 1 ORDER BY Id",
+            ("@businessId", businessId));
+        Assert.True(workerId > 0, "The seeded demo tenant must have an active worker for this checkpoint.");
+        var durationMinutes = await ScalarIntAsync(connection,
+            "SELECT DurationMinutes FROM Services WHERE Id = @serviceId", ("@serviceId", serviceId));
+        Assert.True(durationMinutes > 0, "The seeded individual service must have a positive duration.");
+
+        var startsAt = FutureBusinessDay(businessNow).AddHours(9);
+        // ConfirmedAt is DATETIME2(0); truncate to whole seconds so the value read back equals the planted one.
+        var confirmedAt = businessNow.AddTicks(-(businessNow.Ticks % TimeSpan.TicksPerSecond)).AddMinutes(-10);
+        var appointmentId = await ScalarIntAsync(connection,
+            """
+            INSERT INTO Appointments
+                        (BusinessId, Kind, ServiceId, WorkerId, GridClassId, StartsAt, EndsAt, MaxCapacity, Origin, Status, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @kind, @serviceId, @workerId, NULL, @startsAt, @endsAt, 1, @origin, @status, @createdAt)
+            """,
+            ("@businessId", businessId), ("@kind", (byte)AppointmentKind.Individual), ("@serviceId", serviceId),
+            ("@workerId", workerId), ("@startsAt", startsAt), ("@endsAt", startsAt.AddMinutes(durationMinutes)),
+            ("@origin", (byte)AppointmentOrigin.Reserved), ("@status", (byte)AppointmentStatus.Scheduled),
+            ("@createdAt", businessNow));
+
+        var bookingId = await ScalarIntAsync(connection,
+            """
+            INSERT INTO Bookings (BusinessId, AppointmentId, ClientId, EnrollmentId, Modality, Status, CreatedAt, ConfirmedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@businessId, @appointmentId, @clientId, NULL, NULL, @status, @createdAt, @confirmedAt)
+            """,
+            ("@businessId", businessId), ("@appointmentId", appointmentId), ("@clientId", clientId),
+            ("@status", (byte)BookingStatus.Confirmed), ("@createdAt", businessNow), ("@confirmedAt", confirmedAt));
+
+        // A synthetic private link with real 32-byte hash and protected-token material; its expiry follows the start.
+        var protectedToken = "synthetic-protected-" + Guid.NewGuid().ToString("N");
+        var tokenHash = Enumerable.Range(0, 32).Select(index => (byte)(index + 7)).ToArray();
+        var linkId = await ScalarIntAsync(connection,
+            """
+            INSERT INTO AppointmentLinks (BookingId, TokenHash, ProtectedToken, ExpiresAt, CreatedAt)
+            OUTPUT INSERTED.Id
+            VALUES (@bookingId, @tokenHash, @protectedToken, @expiresAt, @createdAt)
+            """,
+            ("@bookingId", bookingId), ("@tokenHash", tokenHash), ("@protectedToken", protectedToken),
+            ("@expiresAt", startsAt.AddHours(24)), ("@createdAt", businessNow));
+
+        // The planted rows are what the assertions rely on: the turn belongs to the trusted ficha and carries a link.
+        Assert.Equal(clientId, await ScalarIntAsync(connection, "SELECT ClientId FROM Bookings WHERE Id = @id", ("@id", bookingId)));
+        return new SeededReschedule(bookingId, appointmentId, linkId, workerId, durationMinutes,
+            startsAt, confirmedAt, protectedToken);
+    }
+
     private static async Task<BookingStateRow> ReadBookingStateAsync(SqlConnection connection, int bookingId)
     {
         await using var command = CreateCommand(connection,
@@ -1205,6 +1437,39 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         reader.IsDBNull(offset + 1) ? null : reader.GetDateTime(offset + 1),
         reader.IsDBNull(offset + 2) ? null : reader.GetDateTime(offset + 2),
         reader.IsDBNull(offset + 3) ? null : reader.GetByte(offset + 3));
+
+    private static async Task<AppointmentRangeRow> ReadAppointmentRangeAsync(SqlConnection connection, int appointmentId)
+    {
+        await using var command = CreateCommand(connection,
+            "SELECT Id, WorkerId, StartsAt, EndsAt FROM Appointments WHERE Id = @appointmentId",
+            [("@appointmentId", appointmentId)]);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), $"Seeded appointment {appointmentId} was not found.");
+        return new AppointmentRangeRow(reader.GetInt32(0), reader.GetInt32(1), reader.GetDateTime(2), reader.GetDateTime(3));
+    }
+
+    private static async Task<RescheduleLinkRow> ReadRescheduleLinkAsync(SqlConnection connection, int linkId)
+    {
+        await using var command = CreateCommand(connection,
+            "SELECT Id, TokenHash, ProtectedToken, ExpiresAt, RevokedAt FROM AppointmentLinks WHERE Id = @linkId",
+            [("@linkId", linkId)]);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), $"Seeded appointment link {linkId} was not found.");
+        return new RescheduleLinkRow(
+            reader.GetInt32(0), (byte[])reader.GetValue(1), reader.GetString(2), reader.GetDateTime(3),
+            reader.IsDBNull(4) ? null : reader.GetDateTime(4));
+    }
+
+    /// <summary>Compares every byte of a private link by value; a record equality would compare the hash array by reference.</summary>
+    private static void AssertLinkUnchanged(RescheduleLinkRow before, RescheduleLinkRow after)
+    {
+        Assert.Equal(before.Id, after.Id);
+        Assert.Equal(before.ProtectedToken, after.ProtectedToken);
+        Assert.True(before.TokenHash.AsSpan().SequenceEqual(after.TokenHash),
+            "The private appointment-link token hash changed.");
+        Assert.Equal(before.ExpiresAt, after.ExpiresAt);
+        Assert.Equal(before.RevokedAt, after.RevokedAt);
+    }
 
     private static async Task<IReadOnlyList<PaymentStateRow>> ReadPaymentStatesAsync(SqlConnection connection, int businessId)
     {
@@ -1588,6 +1853,13 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
     private sealed record SeededClientTurn(int OwnBookingId, int OtherBookingId);
 
     private sealed record SeededDropInClass(int OwnBookingId, int OtherBookingId, int PaymentId);
+
+    private sealed record SeededReschedule(int BookingId, int AppointmentId, int LinkId, int WorkerId,
+        int DurationMinutes, DateTime OriginalStart, DateTime ConfirmedAt, string ProtectedToken);
+
+    private sealed record AppointmentRangeRow(int Id, int WorkerId, DateTime StartsAt, DateTime EndsAt);
+
+    private sealed record RescheduleLinkRow(int Id, byte[] TokenHash, string ProtectedToken, DateTime ExpiresAt, DateTime? RevokedAt);
 
     private sealed record BookingStateRow(int Id, byte Status, DateTime? ConfirmedAt, DateTime? CancelledAt, byte? CancelledBy);
 
