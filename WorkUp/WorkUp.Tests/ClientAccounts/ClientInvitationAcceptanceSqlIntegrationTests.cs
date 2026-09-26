@@ -33,8 +33,8 @@ namespace WorkUp.Tests.ClientAccounts;
 /// matching, the generic refusal of a revoked, expired or foreign invitation, the owner-assistance refusal without
 /// reassignment, the stale issuer target that is refused because its ficha is linked, and a failure after the consume
 /// whose rollback returns the link to its usable state, and two concurrent SQL consumers of the same invitation
-/// where exactly one conditional update wins, two complete acceptances racing on one token, and a link expiring
-/// while its acceptance holds a ficha lock that refuses to consume on the post-lock clock read.
+/// where exactly one conditional update wins, two complete acceptances racing on one token, a revoke that commits
+/// after the token probe, and expiry while the acceptance holds a ficha lock before the post-lock clock read.
 /// </para>
 /// </summary>
 public sealed class ClientInvitationAcceptanceSqlIntegrationTests(ITestOutputHelper output)

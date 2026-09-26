@@ -19,7 +19,7 @@ namespace WorkUp.Data.ClientAccounts;
 /// <item>both paths take the per-business padlock before account keys, matching T20 registration. The
 /// existing-account path then takes the <c>ClientAccounts</c> row of the invited email
 /// <c>UPDLOCK, HOLDLOCK</c>, followed by the <c>Clients</c> row and the invitation;</item>
-/// <item>the new-account path takes the per-business padlock and the two account key guards (the T20 register order)
+/// <item>the new-account path takes the same business padlock and then the two account key guards
 /// before the <c>Clients</c> row and the invitation, so the account keys are locked before the ficha and never
 /// after it.</item>
 /// </list>

@@ -58,6 +58,7 @@ public sealed class ClientInvitationHttpIntegrationTests(ITestOutputHelper outpu
     private const string OwnerUsername = "marina.demo";
 
     private const string InvitationMarker = "/cuenta/invitacion/";
+    private const string SpoofedHost = "spoofed.invalid";
 
     /// <summary>
     /// Owner health note planted on the invited ficha. The public link and the client agenda must never render it, so
@@ -84,7 +85,7 @@ public sealed class ClientInvitationHttpIntegrationTests(ITestOutputHelper outpu
             return;
         }
 
-        // Preflight runs before any SQL connection: an unsafe target or a reused database or keyring stops the run here.
+        // Validate the input and keyring before any SQL connection; DB_ID is checked on master just before creation.
         var plan = PlanHarness(suppliedConnection);
         output.WriteLine($"Runtime: database '{plan.DatabaseName}', isolated keyring '{plan.KeysPath}', next free port {plan.Port}.");
 
@@ -168,6 +169,19 @@ public sealed class ClientInvitationHttpIntegrationTests(ITestOutputHelper outpu
         var ownerAntiforgery = ExtractAntiforgeryToken(detailHtml);
         output.WriteLine("HTTP: owner login accepted with anti-CSRF and the ficha detail rendered its invitation form.");
 
+        using (var anonymous = CreateBrowser(baseUrl, new CookieContainer()))
+        using (var foreignInvite = await anonymous.PostAsync($"/panel/Clients/Invite/{fichaId}", Form(new Dictionary<string, string>
+               {
+                   ["Email"] = destinationEmail,
+                   ["EmailConfirmed"] = "true"
+               })))
+        {
+            Assert.Equal(HttpStatusCode.Redirect, foreignInvite.StatusCode);
+            Assert.Equal("/panel/Account/Login", DescribeRedirect(foreignInvite));
+        }
+        Assert.Equal(0, await CountInvitationsAsync(connection, businessId, fichaId));
+        output.WriteLine("HTTP/SQL: an anonymous invite attempt was redirected to owner login and wrote no invitation.");
+
         // An unchecked confirmation is judged before the service starts a transaction: nothing is stored.
         using (var uncheckedInvite = await owner.PostAsync($"/panel/Clients/Invite/{fichaId}", Form(new Dictionary<string, string>
                {
@@ -194,13 +208,20 @@ public sealed class ClientInvitationHttpIntegrationTests(ITestOutputHelper outpu
         Assert.Equal(0, await CountInvitationsAsync(connection, businessId, fichaId));
         output.WriteLine("HTTP/SQL: the invite POST without an anti-CSRF token -> 400 and wrote no invitation.");
 
-        using (var invite = await owner.PostAsync($"/panel/Clients/Invite/{fichaId}", Form(new Dictionary<string, string>
+        // A forged Host may not retarget the email. The configured public base URL remains the real loopback
+        // authority, so this check distinguishes configuration from a request-derived link.
+        using (var inviteRequest = new HttpRequestMessage(HttpMethod.Post, $"/panel/Clients/Invite/{fichaId}")
                {
-                   ["Email"] = destinationEmail,
-                   ["EmailConfirmed"] = "true",
-                   ["__RequestVerificationToken"] = ownerAntiforgery
-               })))
+                   Content = Form(new Dictionary<string, string>
+                   {
+                       ["Email"] = destinationEmail,
+                       ["EmailConfirmed"] = "true",
+                       ["__RequestVerificationToken"] = ownerAntiforgery
+                   })
+               })
         {
+            inviteRequest.Headers.Host = SpoofedHost;
+            using var invite = await owner.SendAsync(inviteRequest);
             Assert.Equal(HttpStatusCode.Redirect, invite.StatusCode);
             Assert.Equal($"/panel/Clients/Detail/{fichaId}", DescribeRedirect(invite));
         }
@@ -219,7 +240,9 @@ public sealed class ClientInvitationHttpIntegrationTests(ITestOutputHelper outpu
         var invitationLink = LinkFrom(notice.BodyHtml);
         var invitationToken = TokenFrom(notice.BodyHtml, InvitationMarker);
         Assert.True(invitationLink.StartsWith(trustedAuthority + "/", StringComparison.Ordinal),
-            "The invitation email must link to the configured trusted base URL and nothing else.");
+            "The invitation email must link to the configured trusted base URL despite a forged request Host.");
+        Assert.False(invitationLink.Contains(SpoofedHost, StringComparison.Ordinal),
+            "The forged request Host must never appear in the queued invitation link.");
         Assert.True(SecureToken.Hash(invitationToken).SequenceEqual(invitation.TokenHash),
             "AccountInvitations must keep the SHA-256 hash of the emailed token, never the token itself.");
         output.WriteLine($"SQL: one 48 h invitation #{invitation.Id} (hash only) and one queued AccountInvitation notice built from the trusted base URL.");
