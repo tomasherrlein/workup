@@ -189,6 +189,13 @@ public static class ServiceRegistration
         // incompatible session is created.
         services.AddScoped<ClientClassCancellationService>();
 
+        // Owner-assisted invitation of an existing ficha: issue and revoke (RF-26, T22). The URL builder is a
+        // singleton because it only reads the validated PublicBaseUrl, exactly like the other link builders; the
+        // repository and the service are scoped so they share the request DbSession.
+        services.AddSingleton<IClientInvitationUrlBuilder, ClientInvitationUrlBuilder>();
+        services.AddScoped<IClientInvitationRepository, SqlClientInvitationRepository>();
+        services.AddScoped<ClientInvitationService>();
+
         return services;
     }
 

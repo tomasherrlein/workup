@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
+using WorkUp.BusinessLogic.ClientAccounts;
 using WorkUp.BusinessLogic.Clients;
 using WorkUp.Infrastructure;
 
@@ -34,8 +35,25 @@ public sealed class ClientFormViewModel
     public string? HealthNotes { get; set; }
 }
 
+/// <summary>
+/// Destination of an owner-assisted invitation (RF-26, T22). The email is prefilled with the one stored on the ficha
+/// but stays editable, because the owner is the one who confirms it with the person; <see cref="EmailConfirmed"/> is
+/// the explicit confirmation the form cannot skip.
+/// </summary>
+public sealed class ClientInvitationFormViewModel
+{
+    [Display(Name = "Email de destino")]
+    [Required(ErrorMessage = "Ingresá el email de destino.")]
+    public string Email { get; set; } = "";
+
+    [Display(Name = "Confirmé este email con la persona")]
+    public bool EmailConfirmed { get; set; }
+}
+
 /// <summary>Owner-only client fichas. Health observations and notes never leave this controller's owner area.</summary>
-public sealed class ClientsController(ClientsService clientsService) : OwnerControllerBase
+public sealed class ClientsController(
+    ClientsService clientsService,
+    ClientInvitationService? invitationService = null) : OwnerControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> Index(string? query, CancellationToken ct)
@@ -118,6 +136,79 @@ public sealed class ClientsController(ClientsService clientsService) : OwnerCont
     {
         var result = await clientsService.AddNoteAsync(BusinessId, id, text, ct: ct);
         this.Flash(result.Succeeded ? "Observación agregada." : result.Error!.Message, result.Succeeded ? FlashType.Success : FlashType.Error);
+        return RedirectToAction(nameof(Detail), new { id });
+    }
+
+    /// <summary>
+    /// States that a missing or foreign ficha is never disclosed: the invitation service answers both with the same
+    /// code, and the panel turns that code into the same generic 404 instead of a message that would confirm existence.
+    /// </summary>
+    private const string UnavailableCode = "client_invitation_unavailable";
+
+    /// <summary>
+    /// The message of an unconfirmed or malformed destination. It is judged before the service starts a transaction, so
+    /// an unconfirmed email never reaches storage.
+    /// </summary>
+    private const string InvitationFormMessage = "Revisá el email de destino y confirmá que lo verificaste con la persona.";
+
+    private const string InvitationRevokedMessage = "Invitación revocada.";
+
+    /// <summary>
+    /// Sends the 48 h assisted invitation of a real ficha of this business (RF-26) and redirects to the ficha
+    /// (POST/redirect/GET). The owner confirms the destination email with the person, so that editable value — not the
+    /// one stored on the ficha — is the email the invitation proves and the account will use. The confirmation checkbox
+    /// is mandatory and judged here, before the service opens its transaction; the tenant always comes from the owner
+    /// cookie, never from the form. The flash reports the notice as queued and says in words that the email is not sent
+    /// yet (the outbox sender is a later delivery), and it carries neither the raw token, which exists only inside the
+    /// queued email, nor the stored hash.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Invite(int id, ClientInvitationFormViewModel input, CancellationToken ct = default)
+    {
+        if (invitationService is null)
+            return NotFound();
+
+        if (!input.EmailConfirmed)
+            ModelState.AddModelError(nameof(input.EmailConfirmed), InvitationFormMessage);
+
+        if (!ModelState.IsValid)
+        {
+            this.Flash(InvitationFormMessage, FlashType.Error);
+            return RedirectToAction(nameof(Detail), new { id });
+        }
+
+        var result = await invitationService.IssueAsync(BusinessId, id, input.Email, ct);
+        if (result.Error?.Code == UnavailableCode)
+            return NotFound();
+
+        this.Flash(result.Succeeded
+            ? $"Invitación encolada para {result.Value.Email}. El correo todavía no se envía: el envío automático de " +
+              $"emails no está activo en esta versión. El enlace vence el {Formatting.ShortDate(result.Value.ExpiresAt)} " +
+              $"a las {Formatting.Time(result.Value.ExpiresAt)}."
+            : result.Error!.Message, result.Succeeded ? FlashType.Success : FlashType.Error);
+        return RedirectToAction(nameof(Detail), new { id });
+    }
+
+    /// <summary>
+    /// Revokes every live invitation of a ficha of this business (RF-26) and redirects to the ficha
+    /// (POST/redirect/GET). It is idempotent: repeating it reports success and changes nothing new, which is what the
+    /// panel needs because it offers the action while the ficha has no account, even with no outstanding invitation.
+    /// The action is owner-only and tenant-scoped: a missing or foreign ficha answers the same generic 404.
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RevokeInvitation(int id, CancellationToken ct = default)
+    {
+        if (invitationService is null)
+            return NotFound();
+
+        var result = await invitationService.RevokeAsync(BusinessId, id, ct);
+        if (result.Error?.Code == UnavailableCode)
+            return NotFound();
+
+        this.Flash(result.Succeeded ? InvitationRevokedMessage : result.Error!.Message,
+            result.Succeeded ? FlashType.Success : FlashType.Error);
         return RedirectToAction(nameof(Detail), new { id });
     }
 }
