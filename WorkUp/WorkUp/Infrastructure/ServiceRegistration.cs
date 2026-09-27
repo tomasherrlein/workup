@@ -216,8 +216,10 @@ public static class ServiceRegistration
 
         // Scheduled jobs and outbox dispatch (T23). The repository, the dispatcher, the outbox job and the runner are
         // scoped so every tick gets a fresh scope with its own DbSession; the sender is chosen once by the validated
-        // mode, and the hosted worker is registered exactly once. There is intentionally no job-enabled gate: the
-        // default Outbox tick short-circuits before SQL and leaves an existing HTTP smoke inert.
+        // mode, and the hosted worker is registered exactly once. There is intentionally no job-enabled gate: in the
+        // default Outbox mode OutboxDispatchService claims nothing and contacts no provider, but the jobs of the tick
+        // still run, so the tick performs each job's own bounded SQL read (the reminder scan registered below) while an
+        // existing HTTP smoke stays inert and the fixed tick-complete marker keeps proving that the tick ran.
         services.AddScoped<IOutboxRepository, SqlOutboxRepository>();
         services.AddScoped(sp => new OutboxDispatchService(
             sp.GetRequiredService<IOutboxRepository>(),
@@ -229,6 +231,14 @@ public static class ServiceRegistration
             services.AddScoped<IEmailSender, SmtpEmailSender>();
         else
             services.AddScoped<IEmailSender, RetainEmailSender>();
+        // Scheduled reminder (T24, RF-17). The repository and the core are scoped so they share the tick's DbSession,
+        // and the job is registered BEFORE the outbox job: the runner preserves registration order, so a notice the
+        // reminder job queues during a tick already exists when the outbox job of that same tick runs, and a due
+        // reminder is dispatched in the tick that queued it instead of a minute later.
+        services.AddScoped<IReminderRepository, SqlReminderRepository>();
+        services.AddScoped<ReminderService>();
+        services.AddScoped<IScheduledJob, ReminderScheduledJob>();
+
         services.AddScoped<IScheduledJob, OutboxScheduledJob>();
         services.AddScoped<ScheduledJobRunner>();
         services.AddHostedService<ScheduledJobsHostedService>();

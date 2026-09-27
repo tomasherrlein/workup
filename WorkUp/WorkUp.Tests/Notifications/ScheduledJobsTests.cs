@@ -6,7 +6,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using WorkUp.BusinessLogic.Abstractions;
 using WorkUp.BusinessLogic.Notifications;
+using WorkUp.BusinessLogic.Scheduling;
 using WorkUp.Data.Notifications;
+using WorkUp.Domain.Entities;
 using WorkUp.Domain.Enums;
 using WorkUp.Infrastructure;
 using WorkUp.Infrastructure.Jobs;
@@ -24,7 +26,10 @@ namespace WorkUp.Tests.Notifications;
 /// provider text, a recipient, a body or a password, and does not stop the following ticks; shutdown cancels a running
 /// tick without hanging; the outbox tick claims nothing and contacts no provider while the mode retains notices; and
 /// the composition root fails fast on an unknown mode or on unusable SMTP settings without echoing any configured
-/// value, before any database claim or migration.
+/// value, before any database claim or migration. With the T24 reminder job wired in, it also proves that the
+/// composition root registers the reminder graph scoped and before the outbox job, that a due reminder queued in a
+/// tick is dispatched by the outbox job of that same tick in SMTP mode and retained <c>Pending</c> in Outbox mode,
+/// and that the clock is read again for every tick instead of cached.
 /// </summary>
 public sealed class ScheduledJobsTests
 {
@@ -577,6 +582,11 @@ public sealed class ScheduledJobsTests
         services.AddScoped<IOutboxRepository>(_ => repository);
         services.AddSingleton<IClock>(new FakeClock { Now = Start });
         services.AddSingleton<ILogger<ScheduledJobsHostedService>>(capture);
+        // T24: the tick now also runs the reminder job, whose real port would open the never-created database and
+        // turn the tick into a reported failure. An empty fake reminder port and a fake protector keep this test's
+        // premise — an inert Outbox tick that claims nothing — while the real reminder graph is covered below.
+        services.AddScoped<IReminderRepository>(_ => new FakeReminderRepository());
+        services.AddSingleton<ILinkTokenProtector>(new TestLinkTokenProtector());
 
         await using var provider = services.BuildServiceProvider();
         var host = provider.GetRequiredService<IHostedService>();
@@ -615,6 +625,10 @@ public sealed class ScheduledJobsTests
         // test and is proven by the SQL fixture instead.
         services.AddScoped<IUnitOfWork>(_ => new NoopUnitOfWork());
         services.AddSingleton<IClock>(new FakeClock { Now = Start });
+        // The reminder job of the tick has to be stubbed too, so this test observes the outbox path on its own instead
+        // of relying on the runner swallowing a reminder failure.
+        services.AddScoped<IReminderRepository>(_ => new FakeReminderRepository());
+        services.AddSingleton<ILinkTokenProtector>(new TestLinkTokenProtector());
 
         await using var provider = services.BuildServiceProvider();
         var host = provider.GetRequiredService<IHostedService>();
@@ -633,6 +647,163 @@ public sealed class ScheduledJobsTests
         Assert.Equal(1, repository.ClaimCount);
         Assert.Equal(1, sender.CallCount);
         Assert.Equal("ana@example.com", Assert.Single(sender.Messages).Recipient);
+    }
+
+    // ---- Host wiring of the reminder job (T24): registration, order and same-tick visibility ----
+
+    [Fact]
+    public void WorkUp_registers_the_reminder_graph_and_orders_the_reminder_job_before_the_outbox_job()
+    {
+        var services = new ServiceCollection();
+        RegisterWorkUp(services, DefaultSettings());
+
+        var reminderRepository = Assert.Single(services, d => d.ServiceType == typeof(IReminderRepository));
+        Assert.Equal(typeof(SqlReminderRepository), reminderRepository.ImplementationType);
+        Assert.Equal(ServiceLifetime.Scoped, reminderRepository.Lifetime);
+
+        var reminderService = Assert.Single(services, d => d.ServiceType == typeof(ReminderService));
+        Assert.Equal(ServiceLifetime.Scoped, reminderService.Lifetime);
+
+        var jobTypes = services
+            .Where(d => d.ServiceType == typeof(IScheduledJob))
+            .Select(d => d.ImplementationType)
+            .ToArray();
+        var reminderIndex = Array.IndexOf(jobTypes, typeof(ReminderScheduledJob));
+        var outboxIndex = Array.IndexOf(jobTypes, typeof(OutboxScheduledJob));
+        Assert.True(reminderIndex >= 0, "the reminder job must be registered as a scheduled job");
+        Assert.True(outboxIndex >= 0, "the outbox job must still be registered as a scheduled job");
+        // Same-tick visibility: a notice queued by the reminder job has to exist before the outbox job of the same tick
+        // claims it, so the reminder job must be registered first.
+        Assert.True(reminderIndex < outboxIndex, "the reminder job must run before the outbox job in a tick");
+
+        var reminderJob = Assert.Single(services, d =>
+            d.ServiceType == typeof(IScheduledJob) && d.ImplementationType == typeof(ReminderScheduledJob));
+        Assert.Equal(ServiceLifetime.Scoped, reminderJob.Lifetime);
+
+        // Unrelated wiring stays untouched: exactly one sender and exactly one hosted worker.
+        Assert.Single(services, d => d.ServiceType == typeof(IEmailSender));
+        Assert.Single(services, d =>
+            d.ServiceType == typeof(IHostedService)
+            && d.ImplementationType == typeof(ScheduledJobsHostedService));
+    }
+
+    [Fact]
+    public async Task Outbox_mode_tick_enqueues_a_due_reminder_in_the_same_scoped_tick_and_leaves_it_pending()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        // Default settings are Outbox mode, so the outbox job must retain and the sender must never be reached.
+        RegisterWorkUp(services, DefaultSettings());
+        var bridge = NewReminderBridge(out var outbox, out var sender, out var clock);
+        services.AddScoped<IReminderRepository>(_ => bridge.Repository);
+        services.AddScoped<IOutboxRepository>(_ => outbox);
+        services.AddScoped<IEmailSender>(_ => sender);
+        services.AddSingleton<IClock>(clock);
+        services.AddSingleton<ILinkTokenProtector>(new TestLinkTokenProtector());
+
+        await using var provider = services.BuildServiceProvider();
+        var host = provider.GetRequiredService<IHostedService>();
+        await host.StartAsync(CancellationToken.None);
+        try
+        {
+            await WaitUntilAsync(
+                () => bridge.EnqueuedCount == 1,
+                "the reminder job of the immediate tick to queue its due notice");
+        }
+        finally
+        {
+            await host.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+
+        // The reminder job ran inside the tick's scope and queued exactly one due notice.
+        Assert.Equal(1, bridge.EnqueuedCount);
+        var queued = Assert.Single(bridge.OutboxRows);
+        Assert.Equal("reminder:booking:1", queued.DedupKey);
+        Assert.Equal(ReminderService.PendingSubject, queued.Subject);
+        // Retention: the outbox job of the same tick claimed nothing and the fake sender observed nothing, so the
+        // fresh reminder is still Pending for the T26 viewer.
+        Assert.Equal(NotificationStatus.Pending, queued.Status);
+        Assert.Equal(0, outbox.ClaimCount);
+        Assert.Equal(0, sender.CallCount);
+        Assert.Null(queued.LastError);
+        Assert.Equal(0, queued.Attempts);
+    }
+
+    [Fact]
+    public async Task Smtp_mode_tick_sends_the_reminder_queued_by_the_reminder_job_of_the_same_tick()
+    {
+        var settings = DefaultSettings();
+        settings["WorkUp:Email:Mode"] = "Smtp";
+        settings["WorkUp:Email:Smtp:Host"] = "smtp.example.test";
+        var services = new ServiceCollection();
+        services.AddLogging();
+        RegisterWorkUp(services, settings);
+        var bridge = NewReminderBridge(out var outbox, out var sender, out var clock);
+        services.AddScoped<IReminderRepository>(_ => bridge.Repository);
+        services.AddScoped<IOutboxRepository>(_ => outbox);
+        services.AddScoped<IEmailSender>(_ => sender);
+        // The real DbSession would open the never-created database; SQL persistence is proven by the SQL fixture.
+        services.AddScoped<IUnitOfWork>(_ => new NoopUnitOfWork());
+        services.AddSingleton<IClock>(clock);
+        services.AddSingleton<ILinkTokenProtector>(new TestLinkTokenProtector());
+        services.AddSingleton<IPublicAppointmentUrlBuilder>(new TestAppointmentUrlBuilder());
+
+        await using var provider = services.BuildServiceProvider();
+        var host = provider.GetRequiredService<IHostedService>();
+        await host.StartAsync(CancellationToken.None);
+        try
+        {
+            await WaitUntilAsync(
+                () => sender.CallCount == 1,
+                "the outbox job to dispatch the reminder queued by the same tick");
+        }
+        finally
+        {
+            await host.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+
+        // The outbox job could only see the notice because the reminder job ran first in the same tick and scope.
+        var message = Assert.Single(sender.Messages);
+        Assert.Equal("ana@example.com", message.Recipient);
+        Assert.Equal(ReminderService.PendingSubject, message.Subject);
+        Assert.Contains(ReminderService.ConfirmationLead, message.BodyHtml, StringComparison.Ordinal);
+        Assert.Equal(1, outbox.ClaimCount);
+        Assert.Equal(NotificationStatus.Sent, Assert.Single(bridge.OutboxRows).Status);
+        // The raw private token lives only inside the body: it never reaches the recipient or the subject.
+        Assert.Contains("https://workup.test/t/token-1", message.BodyHtml, StringComparison.Ordinal);
+        Assert.DoesNotContain("token-1", message.Subject, StringComparison.Ordinal);
+        Assert.DoesNotContain("token-1", message.Recipient, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_registered_jobs_read_the_clock_of_every_tick_and_never_a_cached_instant()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        RegisterWorkUp(services, DefaultSettings());
+        var reminders = new FakeReminderRepository();
+        var clock = new FakeClock { Now = Start };
+        // Only the first booking is due at the first tick; the second one is due one minute later, so the notice it
+        // produces proves the clock was read again for the second tick instead of reused.
+        var first = reminders.AddIndividual(1, Start.AddHours(24), Start.AddHours(-30));
+        reminders.AddLink(first, "token-1", Start.AddHours(48));
+        var second = reminders.AddIndividual(2, Start.AddHours(24).AddMinutes(1), Start.AddHours(-30));
+        reminders.AddLink(second, "token-2", Start.AddHours(48));
+        services.AddScoped<IReminderRepository>(_ => reminders);
+        services.AddSingleton<IClock>(clock);
+        services.AddSingleton<ILinkTokenProtector>(new TestLinkTokenProtector());
+
+        await using var provider = services.BuildServiceProvider();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+        var logger = provider.GetRequiredService<ILogger<ScheduledJobsHostedService>>();
+        var host = new ClockAdvancingHostedService(scopeFactory, logger, clock, extraTicks: 1);
+
+        await host.StartAsync(CancellationToken.None);
+        await host.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(
+            new[] { Start, Start.AddMinutes(1) },
+            reminders.Notifications.Select(notice => notice.CreatedAt).ToArray());
     }
 
     // ---- Test harness ----
@@ -751,6 +922,92 @@ public sealed class ScheduledJobsTests
             state.DisposedJobs.Add(_instanceId);
             return ValueTask.CompletedTask;
         }
+    }
+
+    /// <summary>
+    /// Same worker as production but with a clock that moves one minute between ticks, exactly like the real
+    /// <c>BusinessClock</c> would on the next surrounding tick. It never changes the production one-minute interval.
+    /// </summary>
+    private sealed class ClockAdvancingHostedService(
+        IServiceScopeFactory scopeFactory,
+        ILogger<ScheduledJobsHostedService> logger,
+        FakeClock clock,
+        int extraTicks) : ScheduledJobsHostedService(scopeFactory, logger)
+    {
+        private int _remaining = extraTicks;
+
+        protected override Task<bool> WaitForNextTickAsync(PeriodicTimer timer, CancellationToken ct)
+        {
+            clock.Now = clock.Now.AddMinutes(1);
+            return Task.FromResult(_remaining-- > 0);
+        }
+    }
+
+    /// <summary>
+    /// Test-only bridge between the two in-memory ports the reminder job and the outbox job touch. In production both
+    /// write and read the same <c>Notifications</c> table, so a notice queued by the reminder job of a tick is exactly
+    /// what the outbox job of that same tick claims. The two fakes are independent objects, so every notice the guarded
+    /// reminder enqueue accepted is copied into the outbox fake, and only then; a rejected enqueue copies nothing.
+    /// </summary>
+    private sealed class ReminderBridge(FakeReminderRepository reminders, FakeOutboxRepository outbox)
+    {
+        public FakeReminderRepository Reminders { get; } = reminders;
+
+        public List<Notification> OutboxRows { get; } = [];
+
+        public int EnqueuedCount { get; private set; }
+
+        public IReminderRepository Repository => new Adapter(this);
+
+        private bool Accept(ReminderNotice notice)
+        {
+            EnqueuedCount++;
+            OutboxRows.Add(outbox.Seed(
+                notice.Notification.DedupKey,
+                notice.Notification.CreatedAt,
+                recipient: notice.Notification.Recipient,
+                subject: notice.Notification.Subject,
+                bodyHtml: notice.Notification.BodyHtml));
+            return true;
+        }
+
+        private sealed class Adapter(ReminderBridge bridge) : IReminderRepository
+        {
+            public Task<IReadOnlyList<ReminderCandidate>> ListCandidatesAsync(
+                DateTime now, int batchSize, CancellationToken ct = default) =>
+                bridge.Reminders.ListCandidatesAsync(now, batchSize, ct);
+
+            public async Task<bool> TryEnqueueReminderAsync(ReminderNotice notice, CancellationToken ct = default) =>
+                await bridge.Reminders.TryEnqueueReminderAsync(notice, ct) && bridge.Accept(notice);
+        }
+    }
+
+    private static ReminderBridge NewReminderBridge(
+        out FakeOutboxRepository outbox,
+        out FakeEmailSender sender,
+        out FakeClock clock)
+    {
+        var reminders = new FakeReminderRepository();
+        var booking = reminders.AddIndividual(1, Start.AddHours(24), Start.AddHours(-30));
+        reminders.AddLink(booking, "token-1", Start.AddHours(48));
+        outbox = new FakeOutboxRepository();
+        sender = new FakeEmailSender();
+        clock = new FakeClock { Now = Start };
+        return new ReminderBridge(reminders, outbox);
+    }
+
+    /// <summary>Fake protector, so these wiring tests never read or write the real data-protection keyring.</summary>
+    private sealed class TestLinkTokenProtector : ILinkTokenProtector
+    {
+        public string Protect(string token) => "protected:" + token;
+
+        public string Unprotect(string protectedToken) => protectedToken["protected:".Length..];
+    }
+
+    /// <summary>Fake link builder, so the assertion can name the exact URL the raw token was embedded in.</summary>
+    private sealed class TestAppointmentUrlBuilder : IPublicAppointmentUrlBuilder
+    {
+        public string Build(string token) => "https://workup.test/t/" + token;
     }
 
     private sealed record LogEntry(LogLevel Level, string Message, Exception? Exception);
