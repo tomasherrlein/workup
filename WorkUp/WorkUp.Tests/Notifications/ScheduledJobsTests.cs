@@ -587,6 +587,7 @@ public sealed class ScheduledJobsTests
         // premise — an inert Outbox tick that claims nothing — while the real reminder graph is covered below.
         services.AddScoped<IReminderRepository>(_ => new FakeReminderRepository());
         services.AddSingleton<ILinkTokenProtector>(new TestLinkTokenProtector());
+        StubT25NoticeJobs(services);
 
         await using var provider = services.BuildServiceProvider();
         var host = provider.GetRequiredService<IHostedService>();
@@ -629,6 +630,7 @@ public sealed class ScheduledJobsTests
         // of relying on the runner swallowing a reminder failure.
         services.AddScoped<IReminderRepository>(_ => new FakeReminderRepository());
         services.AddSingleton<ILinkTokenProtector>(new TestLinkTokenProtector());
+        StubT25NoticeJobs(services);
 
         await using var provider = services.BuildServiceProvider();
         var host = provider.GetRequiredService<IHostedService>();
@@ -700,6 +702,7 @@ public sealed class ScheduledJobsTests
         services.AddScoped<IEmailSender>(_ => sender);
         services.AddSingleton<IClock>(clock);
         services.AddSingleton<ILinkTokenProtector>(new TestLinkTokenProtector());
+        StubT25NoticeJobs(services);
 
         await using var provider = services.BuildServiceProvider();
         var host = provider.GetRequiredService<IHostedService>();
@@ -747,6 +750,7 @@ public sealed class ScheduledJobsTests
         services.AddSingleton<IClock>(clock);
         services.AddSingleton<ILinkTokenProtector>(new TestLinkTokenProtector());
         services.AddSingleton<IPublicAppointmentUrlBuilder>(new TestAppointmentUrlBuilder());
+        StubT25NoticeJobs(services);
 
         await using var provider = services.BuildServiceProvider();
         var host = provider.GetRequiredService<IHostedService>();
@@ -792,6 +796,7 @@ public sealed class ScheduledJobsTests
         services.AddScoped<IReminderRepository>(_ => reminders);
         services.AddSingleton<IClock>(clock);
         services.AddSingleton<ILinkTokenProtector>(new TestLinkTokenProtector());
+        StubT25NoticeJobs(services);
 
         await using var provider = services.BuildServiceProvider();
         var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
@@ -817,6 +822,19 @@ public sealed class ScheduledJobsTests
 
     private static void RegisterWorkUp(IServiceCollection services, IDictionary<string, string?> settings) =>
         services.AddWorkUp(BuildConfiguration(settings), new FakeHostEnvironment());
+
+    /// <summary>
+    /// T25: the tick now also runs the daily-summary, stock-review and membership-expiry jobs. Their real ports would
+    /// open the never-created database, turn the tick into a reported failure and hide the T23/T24 path this harness
+    /// observes. Empty fakes keep the original premise — the T25 jobs enqueue nothing here — while the T25 graph itself
+    /// is covered by <c>ScheduledNoticeJobsTests</c>.
+    /// </summary>
+    private static void StubT25NoticeJobs(IServiceCollection services)
+    {
+        services.AddScoped<IDailySummaryRepository>(_ => new FakeDailySummaryRepository());
+        services.AddScoped<IStockReviewRepository>(_ => new FakeStockReviewRepository());
+        services.AddScoped<IMembershipExpiryRepository>(_ => new FakeMembershipExpiryRepository());
+    }
 
     private static ServiceProvider BuildProvider(IDictionary<string, string?> settings)
     {

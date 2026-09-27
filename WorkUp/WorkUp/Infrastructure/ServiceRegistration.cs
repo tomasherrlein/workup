@@ -239,6 +239,22 @@ public static class ServiceRegistration
         services.AddScoped<ReminderService>();
         services.AddScoped<IScheduledJob, ReminderScheduledJob>();
 
+        // Scheduled owner/client notices (T25, RF-18/RF-19/RF-30): the daily summary, the periodic stock review and the
+        // membership expiry notice. Each repository and its core are scoped so they share the tick's DbSession, exactly
+        // like the reminder graph above, and each job is registered AFTER the reminder job and BEFORE the outbox job:
+        // the runner preserves registration order, so a notice one of these jobs queues during a tick already exists
+        // when the outbox job of that same tick runs, and it is dispatched in the tick that queued it instead of a
+        // minute later. The three jobs forward the runner-supplied instant and have no IClock of their own.
+        services.AddScoped<IDailySummaryRepository, SqlDailySummaryRepository>();
+        services.AddScoped<DailySummaryService>();
+        services.AddScoped<IScheduledJob, DailySummaryScheduledJob>();
+        services.AddScoped<IStockReviewRepository, SqlStockReviewRepository>();
+        services.AddScoped<StockReviewService>();
+        services.AddScoped<IScheduledJob, StockReviewScheduledJob>();
+        services.AddScoped<IMembershipExpiryRepository, SqlMembershipExpiryRepository>();
+        services.AddScoped<MembershipExpiryService>();
+        services.AddScoped<IScheduledJob, MembershipExpiryScheduledJob>();
+
         services.AddScoped<IScheduledJob, OutboxScheduledJob>();
         services.AddScoped<ScheduledJobRunner>();
         services.AddHostedService<ScheduledJobsHostedService>();
