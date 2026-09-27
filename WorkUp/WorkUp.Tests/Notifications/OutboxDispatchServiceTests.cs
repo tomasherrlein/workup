@@ -66,10 +66,12 @@ public sealed class OutboxDispatchServiceTests
     [InlineData("Smpt")]
     [InlineData("Smtp2")]
     [InlineData("true")]
-    public void An_unknown_email_mode_fails_fast_instead_of_silently_retaining(string configured)
+    [InlineData("smtp-password=SuperSecreto")]
+    public void An_unknown_email_mode_fails_fast_without_echoing_configuration(string configured)
     {
         var error = Assert.Throws<InvalidOperationException>(() => OutboxModeParser.Parse(configured));
-        Assert.Contains(configured, error.Message);
+        Assert.Contains("WorkUp:Email:Mode", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(configured, error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

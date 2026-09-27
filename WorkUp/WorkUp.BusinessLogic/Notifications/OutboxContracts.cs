@@ -36,8 +36,9 @@ public static class OutboxModeParser
         if (string.Equals(value, "Smtp", StringComparison.OrdinalIgnoreCase))
             return OutboxMode.Deliver;
 
+        // A miswired configuration can contain credentials. Fail loudly without echoing the supplied value into logs.
         throw new InvalidOperationException(
-            $"Configuración WorkUp:Email:Mode inválida: '{value}'. Valores válidos: Outbox, Smtp.");
+            "Configuración WorkUp:Email:Mode inválida. Valores válidos: Outbox, Smtp.");
     }
 }
 
