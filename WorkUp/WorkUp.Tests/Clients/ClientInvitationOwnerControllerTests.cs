@@ -249,6 +249,45 @@ public sealed class ClientInvitationOwnerControllerTests
         Assert.Empty(harness.Invitations.Invitations);
     }
 
+    [Theory]
+    [InlineData("Outbox")]
+    [InlineData("Smtp")]
+    public async Task Invite_post_states_the_email_mode_without_promising_delivery(string mode)
+    {
+        var clock = new FakeClock { Now = ClockNow };
+        var harness = Create(clock, options: new WorkUpOptions { Email = new EmailOptions { Mode = mode } });
+        var clientId = SeedRealClient(harness, BusinessId, "ana@example.com");
+
+        var redirect = Assert.IsType<RedirectToActionResult>(await harness.Controller.Invite(
+            clientId, Input("nueva@example.com", confirmed: true), CancellationToken.None));
+
+        Assert.Equal("Detail", redirect.ActionName);
+        Assert.Equal("Success", harness.Controller.TempData["FlashType"]);
+        var flash = Assert.IsType<string>(harness.Controller.TempData["FlashMessage"]);
+        Assert.Contains("encolada", flash, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("nueva@example.com", flash, StringComparison.Ordinal);
+        Assert.DoesNotContain("enviado", flash, StringComparison.OrdinalIgnoreCase);
+
+        if (mode == "Smtp")
+        {
+            // Deliver only hands the notice to the scheduled dispatch: the inbox delivery is not promised.
+            Assert.Contains("envío automático", flash, StringComparison.Ordinal);
+            Assert.Contains("no podemos garantizar", flash, StringComparison.Ordinal);
+            Assert.DoesNotContain("todavía no se envía", flash, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("todavía no se envía", flash, StringComparison.Ordinal);
+            Assert.DoesNotContain("no podemos garantizar", flash, StringComparison.Ordinal);
+        }
+
+        // The copy never changes what the action stores or the raw token it keeps out of the panel.
+        var notification = Assert.Single(harness.Invitations.Notifications);
+        Assert.Equal("nueva@example.com", notification.Recipient);
+        Assert.DoesNotContain(TokenFrom(notification), flash, StringComparison.Ordinal);
+        Assert.Equal(1, harness.UnitOfWork.CommitCount);
+    }
+
     [Fact]
     public async Task RevokeInvitation_post_redirects_to_the_detail_and_is_idempotent()
     {
@@ -512,7 +551,11 @@ public sealed class ClientInvitationOwnerControllerTests
     /// false emulates the shorter constructor: the invitation service is missing, which is what the fail-closed test
     /// exercises.
     /// </summary>
-    private static Harness Create(IClock clock, int businessId = BusinessId, bool wireInvitationService = true)
+    private static Harness Create(
+        IClock clock,
+        int businessId = BusinessId,
+        bool wireInvitationService = true,
+        WorkUpOptions? options = null)
     {
         var businesses = new FakeBusinessRepository();
         var clients = new FakeClientRepository();
@@ -531,7 +574,8 @@ public sealed class ClientInvitationOwnerControllerTests
             new ClientsService(clients, new FakeClientNoteRepository(), clock),
             wireInvitationService
                 ? new ClientInvitationService(businesses, invitations, unitOfWork, new TrustedInvitationUrlBuilder(), clock)
-                : null)
+                : null,
+            options is null ? null : Options.Create(options))
         {
             ControllerContext = new ControllerContext { HttpContext = context },
             TempData = new TempDataDictionary(context, new DictionaryTempDataProvider())

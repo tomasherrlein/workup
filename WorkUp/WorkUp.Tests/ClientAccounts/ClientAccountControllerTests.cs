@@ -10,10 +10,13 @@ using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.AspNetCore.Mvc.Routing;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Options;
 using WorkUp.BusinessLogic.ClientAccounts;
+using WorkUp.BusinessLogic.Notifications;
 using WorkUp.Controllers;
 using WorkUp.Domain.Entities;
 using WorkUp.Domain.Enums;
+using WorkUp.Infrastructure;
 using WorkUp.Infrastructure.Auth;
 using WorkUp.Tests.Fakes;
 using WorkUp.ViewModels.ClientAccounts;
@@ -515,6 +518,147 @@ public sealed class ClientAccountControllerTests
         Assert.Single(_registrations.Notifications);
     }
 
+    // --- Email mode copy (T23) ----------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Register_post_without_an_options_dependency_reads_the_mode_as_outbox()
+    {
+        var withoutOptions = await _controller.Register(Slug, RegisterModel(), CancellationToken.None);
+        var explicitOutbox = CreateController(new WorkUpOptions());
+        var explicitOutboxResult = await explicitOutbox.Register(
+            Slug, RegisterModel("otra@example.com"), CancellationToken.None);
+
+        Assert.Equal("/r/peluqueria/cuenta/reenviar", Assert.IsType<RedirectResult>(withoutOptions).Url);
+        Assert.Equal("/r/peluqueria/cuenta/reenviar", Assert.IsType<RedirectResult>(explicitOutboxResult).Url);
+        // The missing dependency is the retained default, so both flashes say the email is not sent yet.
+        Assert.Equal(
+            Assert.IsType<string>(_controller.TempData["FlashMessage"]),
+            Assert.IsType<string>(explicitOutbox.TempData["FlashMessage"]));
+        Assert.Contains("no está activo", Assert.IsType<string>(_controller.TempData["FlashMessage"]), StringComparison.Ordinal);
+        Assert.DoesNotContain("Te enviamos", Assert.IsType<string>(_controller.TempData["FlashMessage"]), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Outbox")]
+    [InlineData("Smtp")]
+    public async Task Register_post_states_the_email_mode_without_claiming_the_email_was_sent(string mode)
+    {
+        var controller = CreateController(new WorkUpOptions { Email = new EmailOptions { Mode = mode } });
+
+        var result = await controller.Register(Slug, RegisterModel(), CancellationToken.None);
+
+        Assert.Equal("/r/peluqueria/cuenta/reenviar", Assert.IsType<RedirectResult>(result).Url);
+        Assert.Single(_registrations.Notifications);
+        // The copy is the only thing the mode changes: the account is still pending and no session starts.
+        Assert.Single(_registrations.Accounts);
+        Assert.Null(Assert.Single(_registrations.Accounts).ClientId);
+        Assert.Empty(_authentication.SignInSchemes);
+        var flash = Assert.IsType<string>(controller.TempData["FlashMessage"]);
+        Assert.DoesNotContain("Te enviamos", flash, StringComparison.Ordinal);
+        Assert.Contains("48 horas", flash, StringComparison.Ordinal);
+
+        if (mode == "Smtp")
+        {
+            // Deliver only queues the notice for the scheduled dispatch: no inbox delivery is promised.
+            Assert.Contains("envío automático", flash, StringComparison.Ordinal);
+            Assert.Contains("no podemos garantizar", flash, StringComparison.Ordinal);
+            Assert.DoesNotContain("no está activo", flash, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("no está activo", flash, StringComparison.Ordinal);
+            Assert.DoesNotContain("no podemos garantizar", flash, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("Outbox")]
+    [InlineData("Smtp")]
+    public async Task Resend_post_keeps_one_conditional_message_per_mode_and_never_confirms_an_account(string mode)
+    {
+        var controller = CreateController(new WorkUpOptions { Email = new EmailOptions { Mode = mode } });
+
+        var unknown = await controller.Resend(
+            Slug, new ClientResendVerificationViewModel { Email = "nadie@example.com" }, CancellationToken.None);
+        var unknownFlash = Assert.IsType<string>(controller.TempData["FlashMessage"]);
+
+        var account = SeedPendingAccount();
+        var pending = await controller.Resend(
+            Slug, new ClientResendVerificationViewModel { Email = Email }, CancellationToken.None);
+
+        Assert.Equal("/r/peluqueria/cuenta/reenviar", Assert.IsType<RedirectResult>(unknown).Url);
+        Assert.Equal("/r/peluqueria/cuenta/reenviar", Assert.IsType<RedirectResult>(pending).Url);
+        // The answer stays exactly conditional, so an existent pending account and an absent one are indistinguishable.
+        Assert.Equal(unknownFlash, Assert.IsType<string>(controller.TempData["FlashMessage"]));
+        Assert.StartsWith("Si esa cuenta está pendiente de confirmar,", unknownFlash, StringComparison.Ordinal);
+        Assert.DoesNotContain(Email, unknownFlash, StringComparison.Ordinal);
+        Assert.DoesNotContain("Te enviamos", unknownFlash, StringComparison.Ordinal);
+        Assert.Null(account.EmailVerifiedAt);
+
+        if (mode == "Smtp")
+        {
+            Assert.Contains("no podemos garantizar", unknownFlash, StringComparison.Ordinal);
+            Assert.DoesNotContain("no está activo", unknownFlash, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("no está activo", unknownFlash, StringComparison.Ordinal);
+            Assert.DoesNotContain("no podemos garantizar", unknownFlash, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("Outbox")]
+    [InlineData("Smtp")]
+    public async Task Recover_post_keeps_one_conditional_message_per_mode_for_absent_pending_and_active_email(string mode)
+    {
+        var controller = CreateController(new WorkUpOptions { Email = new EmailOptions { Mode = mode } });
+        _accesses.SeedActiveAccount(BusinessId(Slug), Email, "hashed:" + PlainPassword, Now.AddDays(-1));
+        _accesses.SeedPendingAccount(BusinessId(Slug), "pendiente@example.com", "hashed:" + PlainPassword, Now);
+
+        var messages = new List<string>();
+        foreach (var email in new[] { "nadie@example.com", "pendiente@example.com", Email })
+        {
+            var result = await controller.Recover(
+                Slug, new ClientRecoverPasswordViewModel { Email = email }, CancellationToken.None);
+
+            Assert.Equal("/r/peluqueria/cuenta/recuperar", Assert.IsType<RedirectResult>(result).Url);
+            messages.Add(Assert.IsType<string>(controller.TempData["FlashMessage"]));
+        }
+
+        // Every state of the email gets the same conditional answer, revealing who has an account to no one (RF-27).
+        Assert.Single(messages.Distinct());
+        Assert.StartsWith("Si ese email tiene una cuenta,", messages[0], StringComparison.Ordinal);
+        Assert.DoesNotContain(Email, messages[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("Te enviamos", messages[0], StringComparison.Ordinal);
+        Assert.Contains("30 minutos", messages[0], StringComparison.Ordinal);
+
+        if (mode == "Smtp")
+        {
+            Assert.Contains("no podemos garantizar", messages[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("no está activo", messages[0], StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("no está activo", messages[0], StringComparison.Ordinal);
+            Assert.DoesNotContain("no podemos garantizar", messages[0], StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void An_unknown_email_mode_fails_fast_without_echoing_the_configuration_or_writing()
+    {
+        // The controller delegates to the same fail-fast parser as the startup, so a typo can never be read as Outbox.
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            CreateController(new WorkUpOptions { Email = new EmailOptions { Mode = "Smpt" } }));
+
+        Assert.Contains("WorkUp:Email:Mode", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Smpt", error.Message, StringComparison.Ordinal);
+        Assert.Empty(_registrations.Accounts);
+        Assert.Empty(_registrations.Notifications);
+        Assert.Equal(0, _unitOfWork.BeginCount);
+    }
+
     // --- Public surface ----------------------------------------------------------------------------------------
 
     [Fact]
@@ -615,7 +759,7 @@ public sealed class ClientAccountControllerTests
 
     // --- Helpers -----------------------------------------------------------------------------------------------
 
-    private ClientAccountController CreateController()
+    private ClientAccountController CreateController(WorkUpOptions? options = null)
     {
         var httpContext = new DefaultHttpContext { RequestServices = new SingleServiceProvider(_authentication) };
         return new ClientAccountController(
@@ -623,7 +767,9 @@ public sealed class ClientAccountControllerTests
                 _businesses, _registrations, _unitOfWork, _passwordHasher, new TrustedUrlBuilder(), _clock),
             new ClientAccessService(
                 _businesses, _accesses, _unitOfWork, _passwordHasher, new TrustedUrlBuilder(), _clock),
-            _businesses)
+            _businesses,
+            invitationAcceptanceService: null,
+            options is null ? null : Options.Create(options!))
         {
             ControllerContext = new ControllerContext
             {
@@ -706,11 +852,11 @@ public sealed class ClientAccountControllerTests
     private FakeClientAccount SeedPendingAccount() =>
         _registrations.SeedPendingAccount(BusinessId(Slug), Email, "hashed:" + PlainPassword, "Ana", "Gómez", Now);
 
-    private static ClientRegisterViewModel RegisterModel() => new()
+    private static ClientRegisterViewModel RegisterModel(string email = Email) => new()
     {
         FirstName = "Ana",
         LastName = "Gómez",
-        Email = Email,
+        Email = email,
         Password = PlainPassword,
         ConfirmPassword = PlainPassword
     };

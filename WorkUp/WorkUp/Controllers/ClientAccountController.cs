@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using WorkUp.BusinessLogic.Businesses;
 using WorkUp.BusinessLogic.ClientAccounts;
+using WorkUp.BusinessLogic.Notifications;
 using WorkUp.Domain.Entities;
 using WorkUp.Infrastructure;
 using WorkUp.Infrastructure.Auth;
@@ -24,13 +26,32 @@ public sealed class ClientAccountController(
     ClientRegistrationService registrationService,
     ClientAccessService accessService,
     IBusinessRepository businesses,
-    ClientInvitationAcceptanceService? invitationAcceptanceService = null) : Controller
+    ClientInvitationAcceptanceService? invitationAcceptanceService = null,
+    IOptions<WorkUpOptions>? options = null) : Controller
 {
     private const string BusinessNotFoundCode = "business_not_found";
     private const string OwnerAssistanceCode = "client_record_needs_owner_assistance";
     private const string PasswordTooShortCode = "password_too_short";
     private const string InvitationLinkUnavailableCode = "client_invitation_link_unavailable";
     private const string InvitationOwnerAssistanceCode = "client_invitation_owner_assistance";
+
+    /// <summary>
+    /// The configured email mode (<c>WorkUp:Email:Mode</c>), parsed once with the same fail-fast parser the startup
+    /// uses. The flash of every action that queues an email depends on it, because the two modes really do different
+    /// things: <see cref="OutboxMode.Retain"/> keeps the notice <c>Pending</c> and nothing is sent, while
+    /// <see cref="OutboxMode.Deliver"/> only hands it to the scheduled dispatch. A missing options dependency is read
+    /// as the retained default, and an unusable value throws here, before the action can write anything.
+    /// </summary>
+    private readonly OutboxMode _emailMode = OutboxModeParser.Parse(options?.Value?.Email?.Mode);
+
+    /// <summary>
+    /// Chooses the flash that matches what the configured mode really does with a queued notice:
+    /// <see cref="OutboxMode.Deliver"/> only hands it to the scheduled dispatch, and <see cref="OutboxMode.Retain"/>
+    /// leaves it <c>Pending</c> without sending anything. Neither branch claims an inbox delivery, because the
+    /// dispatcher cannot promise one even in Smtp.
+    /// </summary>
+    private string ModeCopy(string deliverCopy, string retainCopy) =>
+        _emailMode == OutboxMode.Deliver ? deliverCopy : retainCopy;
 
     // --- Registration and email confirmation (RF-25) -----------------------------------------------------------
 
@@ -47,7 +68,8 @@ public sealed class ClientAccountController(
     /// <summary>
     /// Creates a pending account with the password hash and the temporary names of the future ficha, and queues the
     /// single confirmation email. No session is started here: the account only becomes usable when the emailed link
-    /// is consumed, so registering never signs anyone in (D-18).
+    /// is consumed, so registering never signs anyone in (D-18). The flash describes what the configured mode really
+    /// does with that notice: in Outbox nothing is sent yet, and in Smtp it is only queued for the automatic dispatch.
     /// </summary>
     [HttpPost("registrarse")]
     [ValidateAntiForgeryToken]
@@ -81,7 +103,13 @@ public sealed class ClientAccountController(
         }
 
         this.Flash(
-            "Te enviamos un email para confirmar tu cuenta. El enlace vence en 48 horas y sirve una sola vez.",
+            ModeCopy(
+                "Tu cuenta quedó pendiente de confirmación y el email para confirmarla quedó en cola para su envío " +
+                "automático, aunque no podemos garantizar que llegue a tu casilla. El enlace vence en 48 horas y " +
+                "sirve una sola vez.",
+                "Tu cuenta quedó pendiente de confirmación y el email para confirmarla todavía no se envía: el " +
+                "envío automático de emails no está activo en esta versión. El enlace vence en 48 horas y sirve una " +
+                "sola vez."),
             FlashType.Info);
         return Redirect(AccountPath(slug, "reenviar"));
     }
@@ -146,8 +174,10 @@ public sealed class ClientAccountController(
     }
 
     /// <summary>
-    /// Sends a new 48 h confirmation link to a pending account, so an expired link is never a dead end. The answer is
-    /// the same for an unknown email and for an already confirmed account: the request enumerates nothing.
+    /// Queues a new 48 h confirmation link for a pending account, so an expired link is never a dead end. The answer
+    /// is the same for an unknown email and for an already confirmed account: the request enumerates nothing. The
+    /// conditional wording is kept identical in both modes, and only says what the queued notice will really do --
+    /// nothing is sent in Outbox, and Smtp hands it to the automatic dispatch without promising the inbox.
     /// </summary>
     [HttpPost("reenviar")]
     [ValidateAntiForgeryToken]
@@ -171,7 +201,13 @@ public sealed class ClientAccountController(
             return View("Resend", model);
         }
 
-        this.Flash("Si esa cuenta está pendiente de confirmar, te enviamos un enlace nuevo.", FlashType.Info);
+        this.Flash(
+            ModeCopy(
+                "Si esa cuenta está pendiente de confirmar, el enlace nuevo quedó en cola para su envío automático; " +
+                "no podemos garantizar que llegue a esa casilla.",
+                "Si esa cuenta está pendiente de confirmar, el enlace nuevo queda en cola y todavía no se envía: el " +
+                "envío automático de emails no está activo en esta versión."),
+            FlashType.Info);
         return Redirect(AccountPath(slug, "reenviar"));
     }
 
@@ -253,7 +289,8 @@ public sealed class ClientAccountController(
 
     /// <summary>
     /// Queues a single-use 30 minute recovery link. The answer never depends on whether the email has an active
-    /// account, so the request reveals nothing; the message is the same for an absent, a pending and an active one.
+    /// account, so the request reveals nothing; the message is the same for an absent, a pending and an active one,
+    /// and stays conditional in both email modes, which only change what the queued notice will really do.
     /// </summary>
     [HttpPost("recuperar")]
     [ValidateAntiForgeryToken]
@@ -278,8 +315,12 @@ public sealed class ClientAccountController(
         }
 
         this.Flash(
-            "Si ese email tiene una cuenta, te enviamos un enlace para restablecer tu contraseña. " +
-            "Vence en 30 minutos y sirve una sola vez.",
+            ModeCopy(
+                "Si ese email tiene una cuenta, el enlace para restablecer tu contraseña quedó en cola para su envío " +
+                "automático; no podemos garantizar que llegue a esa casilla. Vence en 30 minutos y sirve una sola vez.",
+                "Si ese email tiene una cuenta, el enlace para restablecer tu contraseña queda en cola y todavía no " +
+                "se envía: el envío automático de emails no está activo en esta versión. Vence en 30 minutos y sirve " +
+                "una sola vez."),
             FlashType.Info);
         return Redirect(AccountPath(slug, "recuperar"));
     }

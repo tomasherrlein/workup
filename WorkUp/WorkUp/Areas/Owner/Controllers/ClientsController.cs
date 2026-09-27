@@ -1,7 +1,9 @@
 using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using WorkUp.BusinessLogic.ClientAccounts;
 using WorkUp.BusinessLogic.Clients;
+using WorkUp.BusinessLogic.Notifications;
 using WorkUp.Infrastructure;
 
 namespace WorkUp.Areas.Owner.Controllers;
@@ -53,8 +55,32 @@ public sealed class ClientInvitationFormViewModel
 /// <summary>Owner-only client fichas. Health observations and notes never leave this controller's owner area.</summary>
 public sealed class ClientsController(
     ClientsService clientsService,
-    ClientInvitationService? invitationService = null) : OwnerControllerBase
+    ClientInvitationService? invitationService = null,
+    IOptions<WorkUpOptions>? options = null) : OwnerControllerBase
 {
+    /// <summary>
+    /// The configured email mode (<c>WorkUp:Email:Mode</c>), parsed once with the same fail-fast parser the startup
+    /// uses. The invitation flash depends on it: in <see cref="OutboxMode.Retain"/> the notice stays <c>Pending</c>
+    /// and no email is sent, and in <see cref="OutboxMode.Deliver"/> it is only handed to the scheduled dispatch. A
+    /// missing options dependency is read as the retained default, and an unusable value throws at construction.
+    /// </summary>
+    private readonly OutboxMode _emailMode = OutboxModeParser.Parse(options?.Value?.Email?.Mode);
+
+    /// <summary>
+    /// What the panel may state about an invitation it just queued. In Outbox nothing is sent and the notice stays
+    /// <c>Pending</c>; in Smtp it is only handed to the scheduled dispatch, so the message never promises the inbox
+    /// of the destination. It carries neither the raw token, which exists only inside the queued email, nor the
+    /// stored hash.
+    /// </summary>
+    private string QueuedInvitationMessage(string email, DateTime expiresAt) =>
+        _emailMode == OutboxMode.Deliver
+            ? $"Invitación encolada para {email}. El correo quedó en cola para su envío automático; no podemos " +
+              $"garantizar que llegue a esa casilla. El enlace vence el {Formatting.ShortDate(expiresAt)} a las " +
+              $"{Formatting.Time(expiresAt)}."
+            : $"Invitación encolada para {email}. El correo todavía no se envía: el envío automático de emails no " +
+              $"está activo en esta versión. El enlace vence el {Formatting.ShortDate(expiresAt)} a las " +
+              $"{Formatting.Time(expiresAt)}.";
+
     [HttpGet]
     public async Task<IActionResult> Index(string? query, CancellationToken ct)
     {
@@ -154,13 +180,14 @@ public sealed class ClientsController(
     private const string InvitationRevokedMessage = "Invitación revocada.";
 
     /// <summary>
-    /// Sends the 48 h assisted invitation of a real ficha of this business (RF-26) and redirects to the ficha
+    /// Queues the 48 h assisted invitation of a real ficha of this business (RF-26) and redirects to the ficha
     /// (POST/redirect/GET). The owner confirms the destination email with the person, so that editable value — not the
     /// one stored on the ficha — is the email the invitation proves and the account will use. The confirmation checkbox
     /// is mandatory and judged here, before the service opens its transaction; the tenant always comes from the owner
-    /// cookie, never from the form. The flash reports the notice as queued and says in words that the email is not sent
-    /// yet (the outbox sender is a later delivery), and it carries neither the raw token, which exists only inside the
-    /// queued email, nor the stored hash.
+    /// cookie, never from the form. The flash reports the notice as queued and says in words what the configured email
+    /// mode really does with it: Outbox sends nothing yet, and Smtp only hands it to the automatic dispatch without
+    /// promising the inbox. It carries neither the raw token, which exists only inside the queued email, nor the stored
+    /// hash.
     /// </summary>
     [HttpPost]
     [ValidateAntiForgeryToken]
@@ -182,11 +209,10 @@ public sealed class ClientsController(
         if (result.Error?.Code == UnavailableCode)
             return NotFound();
 
-        this.Flash(result.Succeeded
-            ? $"Invitación encolada para {result.Value.Email}. El correo todavía no se envía: el envío automático de " +
-              $"emails no está activo en esta versión. El enlace vence el {Formatting.ShortDate(result.Value.ExpiresAt)} " +
-              $"a las {Formatting.Time(result.Value.ExpiresAt)}."
-            : result.Error!.Message, result.Succeeded ? FlashType.Success : FlashType.Error);
+        var message = result.Succeeded
+            ? QueuedInvitationMessage(result.Value.Email, result.Value.ExpiresAt)
+            : result.Error!.Message;
+        this.Flash(message, result.Succeeded ? FlashType.Success : FlashType.Error);
         return RedirectToAction(nameof(Detail), new { id });
     }
 
