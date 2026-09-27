@@ -104,11 +104,20 @@ public enum NotificationType : byte
     AccountInvitation = 13
 }
 
+/// <summary>
+/// Lifecycle of a queued notice. The dispatcher (T23) moves a row from <c>Pending</c> to <c>Dispatching</c> in the same
+/// transaction that commits the claim, and only then calls the sender.
+/// </summary>
 public enum NotificationStatus : byte
 {
     Pending = 1,
     Sent = 2,
-    Failed = 3
+    /// <summary>Terminal: a definite failure, or the retry budget exhausted. Never claimed again.</summary>
+    Failed = 3,
+    /// <summary>Claimed and being sent right now. Never reclaimed automatically: only a human resolves it.</summary>
+    Dispatching = 4,
+    /// <summary>Send outcome unknown; needs a manual decision. Never retried or reclaimed automatically.</summary>
+    ReviewRequired = 5
 }
 
 /// <summary>Membership state on a given date: <c>Vigente</c> (Current) or <c>Vencido</c> (Expired).</summary>
