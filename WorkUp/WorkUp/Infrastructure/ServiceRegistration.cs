@@ -271,13 +271,20 @@ public static class ServiceRegistration
 
         services.AddScoped<IScheduledJob, OutboxScheduledJob>();
         services.AddScoped<ScheduledJobRunner>();
+        // Manual execution lease (T26): one singleton shared by the automatic tick and the owner-only manual run of the
+        // DevTools controller, so the same scoped runner graph can never run a job twice at once and a second manual
+        // click is answered Busy instead of queueing behind a tick. It is a singleton because the lease must outlive a
+        // single tick scope and a single request scope. The manual run resolves it from the request scope only after
+        // the DevToolsGate accepted the request, so a closed gate leaves the job graph and this lease unactivated.
+        services.AddSingleton<ScheduledExecutionGate>();
         services.AddHostedService<ScheduledJobsHostedService>();
 
         // Generated-email viewer of the test tools (T26, plan assumptions 10 and 11). Read-only adapter over the same
         // Notifications table the dispatcher writes, scoped so it shares the request DbSession. It is registered
-        // unconditionally because the access decision is not its own: the owner-only controller consults the
-        // singleton DevToolsGate above (Development + Features.DevTools + Outbox mode) and answers 404 before this
-        // repository is ever resolved.
+        // unconditionally because the access decision is not its own: the owner-only controller checks the singleton
+        // DevToolsGate above (Development + Features.DevTools + Outbox mode) and answers 404 before this repository or
+        // the scheduled-job graph is ever resolved from the request scope. The refusal therefore depends on the
+        // resolution order inside the action, not on construction activation of the controller.
         services.AddScoped<INotificationViewerRepository, SqlNotificationViewerRepository>();
 
         return services;

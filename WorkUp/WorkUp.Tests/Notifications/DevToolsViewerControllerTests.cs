@@ -3,6 +3,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
@@ -14,6 +15,7 @@ using WorkUp.Data.Notifications;
 using WorkUp.Domain.Enums;
 using WorkUp.Infrastructure;
 using WorkUp.Infrastructure.Auth;
+using WorkUp.Infrastructure.Jobs;
 using WorkUp.Tests.Fakes;
 
 namespace WorkUp.Tests.Notifications;
@@ -27,6 +29,12 @@ namespace WorkUp.Tests.Notifications;
 /// never cached and carry no referrer, and the rendered view shows the body as escaped plain text with no unsafe link
 /// and no hidden attribute.
 /// <para>
+/// The fail-closed proof here is also about activation order: the controller defers every collaborator to the scoped
+/// provider and resolves it inside each action only after the gate accepted the request, so a closed gate answers 404
+/// with zero viewer, runner or lease resolutions. The tests use a recording provider that throws on any resolution, so
+/// the assertion cannot be satisfied by a service that merely happened to be inactive.
+/// </para>
+/// <para>
 /// The HTML-escaping proof here is structural: the Razor source must use the encoded <c>@Model.BodyHtml</c> inside a
 /// <c>&lt;pre&gt;</c> and must never call <c>Html.Raw</c>, build an <c>&lt;iframe&gt;</c> or place the body in an
 /// attribute or a URL. Rendering the real markup through the shipped pipeline is deferred to the opt-in host fixture,
@@ -38,6 +46,8 @@ public sealed class DevToolsViewerControllerTests
 {
     private const int BusinessId = 7;
     private const string OwnerUsername = "lucia.demo";
+
+    private static readonly DateTime Start = new(2026, 3, 10, 9, 0, 0);
 
     private readonly FakeNotificationViewerRepository _viewer = new();
 
@@ -55,7 +65,11 @@ public sealed class DevToolsViewerControllerTests
         return new DevToolsGate(environment, Options.Create(options), OutboxMode.Retain);
     }
 
-    private DevToolsController Create(bool gateOpen = true)
+    private DevToolsController Create(
+        bool gateOpen = true,
+        ScheduledExecutionGate? execution = null,
+        ScheduledJobRunner? runner = null,
+        RecordingServiceProvider? services = null)
     {
         var context = new DefaultHttpContext
         {
@@ -67,11 +81,23 @@ public sealed class DevToolsViewerControllerTests
             ], AuthSchemes.Owner))
         };
 
-        return new DevToolsController(Gate(gateOpen), _viewer)
+        // The controller defers every collaborator to the scoped provider after its fail-closed gate check, so the
+        // harness passes exactly that provider. A test that proves the closed gate activated nothing passes an empty
+        // recording provider, which throws on any resolution instead of hiding the access behind a harmless stub.
+        var provider = services ?? new RecordingServiceProvider(
+            (typeof(INotificationViewerRepository), _viewer),
+            (typeof(ScheduledJobRunner), runner ?? Runner(new DevToolsJob("outbox"))),
+            (typeof(ScheduledExecutionGate), execution ?? new ScheduledExecutionGate()));
+
+        return new DevToolsController(Gate(gateOpen), provider)
         {
-            ControllerContext = new ControllerContext { HttpContext = context }
+            ControllerContext = new ControllerContext { HttpContext = context },
+            TempData = new TempDataDictionary(context, new DictionaryTempDataProvider())
         };
     }
+
+    private static ScheduledJobRunner Runner(params DevToolsJob[] jobs) =>
+        new(jobs, new FakeClock { Now = Start });
 
     private static async Task<IReadOnlyList<NotificationViewerListItem>> List(
         DevToolsController controller, int? beforeId = null) =>
@@ -88,12 +114,15 @@ public sealed class DevToolsViewerControllerTests
     public async Task Index_answers_not_found_and_never_reads_when_the_gate_is_closed()
     {
         _viewer.Seed(businessId: BusinessId);
+        // An empty provider throws on any resolution, so a 404 with an empty record proves the action touched nothing.
+        var services = new RecordingServiceProvider();
 
-        var result = await Create(gateOpen: false).Index(null, CancellationToken.None);
+        var result = await Create(gateOpen: false, services: services).Index(null, CancellationToken.None);
 
         // A flag mistakenly on in production is a refusal, and the refusal never reaches storage: the caller learns
         // nothing about whether a notice exists.
         Assert.IsType<NotFoundResult>(result);
+        Assert.Empty(services.Requested);
         Assert.Equal(0, _viewer.ListCallCount);
     }
 
@@ -101,12 +130,229 @@ public sealed class DevToolsViewerControllerTests
     public async Task Detail_answers_not_found_and_never_reads_when_the_gate_is_closed_for_a_valid_id()
     {
         var seeded = _viewer.Seed(businessId: BusinessId);
+        var services = new RecordingServiceProvider();
 
-        var result = await Create(gateOpen: false).Detail(seeded.Id, CancellationToken.None);
+        var result = await Create(gateOpen: false, services: services).Detail(seeded.Id, CancellationToken.None);
 
-        // The direct URL is refused exactly like the list: the gate runs first and the repository is never consulted.
+        // The direct URL is refused exactly like the list: the gate runs first and the repository is never consulted
+        // nor even resolved.
         Assert.IsType<NotFoundResult>(result);
+        Assert.Empty(services.Requested);
         Assert.Equal(0, _viewer.DetailCallCount);
+    }
+
+    // --- The gate runs before any collaborator is resolved (T26) ------------------------------------------------
+
+    [Fact]
+    public async Task Detail_resolves_only_the_viewer_and_never_the_job_graph()
+    {
+        var seeded = _viewer.Seed(businessId: BusinessId, bodyHtml: "<p>Mi cuerpo</p>");
+        // Only the read adapter is registered: resolving the runner or the lease would throw, so this pins that the
+        // one-row page never activates the job graph or the execution lease.
+        var services = new RecordingServiceProvider((typeof(INotificationViewerRepository), _viewer));
+
+        var detail = await Detail(Create(services: services), seeded.Id);
+
+        Assert.Equal(seeded.Id, detail.Id);
+        Assert.Equal([typeof(INotificationViewerRepository)], services.Requested);
+    }
+
+    [Fact]
+    public async Task Index_resolves_the_viewer_and_the_runner_but_never_the_lease()
+    {
+        var services = new RecordingServiceProvider(
+            (typeof(INotificationViewerRepository), _viewer),
+            (typeof(ScheduledJobRunner), Runner(new DevToolsJob("outbox"))));
+
+        await Create(services: services).Index(null, CancellationToken.None);
+
+        // The list needs the read adapter and the stable keys; it never runs a job, so it must leave the lease alone.
+        Assert.Contains(typeof(INotificationViewerRepository), services.Requested);
+        Assert.Contains(typeof(ScheduledJobRunner), services.Requested);
+        Assert.DoesNotContain(typeof(ScheduledExecutionGate), services.Requested);
+    }
+
+    [Fact]
+    public async Task Run_job_resolves_the_runner_and_the_lease_but_never_the_viewer()
+    {
+        var runs = new List<string>();
+        var services = new RecordingServiceProvider(
+            (typeof(ScheduledJobRunner), Runner(new DevToolsJob("outbox", () =>
+            {
+                runs.Add("outbox");
+                return Task.CompletedTask;
+            }))),
+            (typeof(ScheduledExecutionGate), new ScheduledExecutionGate()));
+
+        var result = await Create(services: services).RunJob("outbox", CancellationToken.None);
+
+        Assert.IsType<RedirectToActionResult>(result);
+        Assert.Contains(typeof(ScheduledJobRunner), services.Requested);
+        Assert.Contains(typeof(ScheduledExecutionGate), services.Requested);
+        Assert.DoesNotContain(typeof(INotificationViewerRepository), services.Requested);
+        Assert.Equal(new[] { "outbox" }, runs);
+    }
+
+    // --- Manual run: owner-only, fail-closed, serialized and never echoing the input (T26) ----------------------
+
+    [Fact]
+    public async Task Run_job_answers_not_found_and_activates_nothing_when_the_gate_is_closed()
+    {
+        var runs = new List<string>();
+        var services = new RecordingServiceProvider();
+
+        var result = await Create(gateOpen: false, services: services).RunJob("outbox", CancellationToken.None);
+
+        // The feature gate is checked before anything else, so a disabled tool cannot run a job by direct POST and does
+        // not resolve the viewer, the runner or the lease.
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Empty(services.Requested);
+        Assert.Empty(runs);
+    }
+
+    [Fact]
+    public async Task Run_job_answers_the_neutral_not_found_for_an_unknown_key_without_running_or_echoing_it()
+    {
+        var runs = new List<string>();
+        var services = new RecordingServiceProvider(
+            (typeof(ScheduledJobRunner), Runner(new DevToolsJob("outbox", () =>
+            {
+                runs.Add("outbox");
+                return Task.CompletedTask;
+            }))),
+            (typeof(ScheduledExecutionGate), new ScheduledExecutionGate()));
+        var controller = Create(services: services);
+
+        var result = await controller.RunJob("outbox-typo", CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Empty(runs);
+        // No read adapter is even resolved for an unknown key: the refusal never touches storage.
+        Assert.DoesNotContain(typeof(INotificationViewerRepository), services.Requested);
+        // The untrusted key is never reflected into the state the next page renders or the log could carry.
+        Assert.DoesNotContain(
+            controller.TempData.Values,
+            value => value?.ToString()?.Contains("outbox-typo", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public async Task Run_job_redirects_with_the_fixed_completion_message_after_a_successful_run()
+    {
+        var runs = new List<string>();
+        var controller = Create(runner: Runner(new DevToolsJob("outbox", () =>
+        {
+            runs.Add("outbox");
+            return Task.CompletedTask;
+        })));
+
+        var result = await controller.RunJob("outbox", CancellationToken.None);
+
+        // Post/Redirect/Get: a fixed one-time message plus a redirect, never a view that re-posts on refresh.
+        var redirect = Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(nameof(DevToolsController.Index), redirect.ActionName);
+        Assert.Equal(new[] { "outbox" }, runs);
+        Assert.Equal(DevToolsController.RunCompletedMessage, controller.TempData["FlashMessage"]);
+        Assert.Equal("Success", controller.TempData["FlashType"]);
+    }
+
+    [Fact]
+    public async Task Run_job_redirects_with_the_fixed_busy_message_when_another_run_holds_the_lease()
+    {
+        var execution = new ScheduledExecutionGate();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holder = execution.TryRunOneAsync(
+            Runner(new DevToolsJob("outbox", () =>
+            {
+                started.TrySetResult();
+                return release.Task;
+            })),
+            "outbox",
+            CancellationToken.None);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var runs = new List<string>();
+        var controller = Create(
+            execution: execution,
+            runner: Runner(new DevToolsJob("outbox", () =>
+            {
+                runs.Add("outbox");
+                return Task.CompletedTask;
+            })));
+
+        var result = await controller.RunJob("outbox", CancellationToken.None);
+
+        Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(DevToolsController.RunBusyMessage, controller.TempData["FlashMessage"]);
+        Assert.Empty(runs);
+
+        release.TrySetResult();
+        await holder.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task Run_job_redirects_with_a_fixed_safe_message_when_the_job_fails()
+    {
+        var controller = Create(runner: Runner(new DevToolsJob("outbox", () =>
+            Task.FromException(new InvalidOperationException("password=no-debe-salir")))));
+
+        var result = await controller.RunJob("outbox", CancellationToken.None);
+
+        Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(DevToolsController.RunFailedMessage, controller.TempData["FlashMessage"]);
+        Assert.Equal("Error", controller.TempData["FlashType"]);
+        // A provider error can carry a password and a job can touch a one-use token: neither reaches the page.
+        var message = Assert.IsType<string>(controller.TempData["FlashMessage"]);
+        Assert.DoesNotContain("no-debe-salir", message, StringComparison.Ordinal);
+        Assert.DoesNotContain(nameof(InvalidOperationException), message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Run_job_rethrows_cancellation_instead_of_reporting_it_as_a_job_failure()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var runs = new List<string>();
+        var controller = Create(runner: Runner(new DevToolsJob("outbox", () =>
+        {
+            runs.Add("outbox");
+            return Task.CompletedTask;
+        })));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => controller.RunJob("outbox", cancellation.Token));
+
+        // An aborted request is not a failed job: no failure message is flashed and nothing ran.
+        Assert.Null(controller.TempData["FlashMessage"]);
+        Assert.Empty(runs);
+    }
+
+    [Fact]
+    public void Run_job_is_a_post_action_that_validates_the_antiforgery_token()
+    {
+        var method = typeof(DevToolsController).GetMethod(nameof(DevToolsController.RunJob))!;
+
+        Assert.NotNull(method.GetCustomAttribute<HttpPostAttribute>());
+        Assert.NotNull(method.GetCustomAttribute<ValidateAntiForgeryTokenAttribute>());
+        // The global AutoValidate filter is what makes the token mandatory in the real host, so neither a GET nor a
+        // bare POST can ever reach a job.
+        var program = File.ReadAllText(Path.Combine(RepositoryRoot(), "WorkUp", "Program.cs"));
+        Assert.Contains("AutoValidateAntiforgeryTokenAttribute", program, StringComparison.Ordinal);
+        Assert.Contains("options.Filters.Add", program, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Index_exposes_the_stable_job_keys_of_the_runner_to_the_view()
+    {
+        var controller = Create(runner: Runner(
+            new DevToolsJob("reminders"),
+            new DevToolsJob("outbox")));
+
+        await controller.Index(null, CancellationToken.None);
+
+        var keys = Assert.IsAssignableFrom<IReadOnlyList<string>>(
+            controller.ViewData[DevToolsController.JobKeysViewDataKey]);
+        Assert.Equal(new[] { "reminders", "outbox" }, keys);
     }
 
     // --- Tenant scope comes from the owner claim only -----------------------------------------------------------
@@ -249,6 +495,14 @@ public sealed class DevToolsViewerControllerTests
             ParameterNames(nameof(DevToolsController.Detail)));
     }
 
+    [Fact]
+    public void Run_job_takes_only_the_job_key_so_the_business_still_comes_from_the_cookie()
+    {
+        // The only input is the stable job key; there is no business, email or business-id parameter a caller could
+        // use to run a job of another business.
+        Assert.Equal(["key", "ct"], ParameterNames(nameof(DevToolsController.RunJob)));
+    }
+
     // --- Status and type labels ---------------------------------------------------------------------------------
 
     [Theory]
@@ -345,10 +599,35 @@ public sealed class DevToolsViewerControllerTests
             Assert.DoesNotContain("DispatchKey", view, StringComparison.Ordinal);
             Assert.DoesNotContain("ClaimedAt", view, StringComparison.Ordinal);
 
-            // Manual intervention and retry are not built yet, so no page offers a button for them.
+            // Retry and manual intervention over a stored error are still not offered: the one write this page allows is
+            // running a registered job by its stable key, not retrying a failed notice or editing its error.
             Assert.DoesNotContain("Reintentar", view, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("Revisión manual", view, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    [Fact]
+    public void The_list_offers_a_post_form_for_every_registered_job_key()
+    {
+        var view = ReadOwnerView("DevTools", "Index.cshtml");
+
+        // The keys come from the registered runner through ViewData, so the page can only offer a job that exists.
+        Assert.Contains(DevToolsController.JobKeysViewDataKey, view, StringComparison.Ordinal);
+        Assert.Contains("asp-action=\"RunJob\"", view, StringComparison.Ordinal);
+        Assert.Contains("method=\"post\"", view, StringComparison.Ordinal);
+        Assert.Contains("name=\"key\"", view, StringComparison.Ordinal);
+        // Accessible labels, because the button text alone does not name which job it runs.
+        Assert.Contains("aria-label", view, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_list_explains_that_the_outbox_job_reaches_no_provider_in_retain_mode()
+    {
+        var view = ReadOwnerView("DevTools", "Index.cshtml");
+
+        // The gate opens only in Retain mode, so the page must tell the owner that running `outbox` sends nothing.
+        Assert.Contains("OutboxScheduledJob.JobKey", view, StringComparison.Ordinal);
+        Assert.Contains("retenid", view, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -468,13 +747,33 @@ public sealed class DevToolsViewerControllerTests
 
         var gate = Assert.Single(services, descriptor => descriptor.ServiceType == typeof(DevToolsGate));
         Assert.Equal(ServiceLifetime.Singleton, gate.Lifetime);
+
+        var execution = Assert.Single(services, descriptor => descriptor.ServiceType == typeof(ScheduledExecutionGate));
+        Assert.Equal(ServiceLifetime.Singleton, execution.Lifetime);
     }
 
     [Fact]
-    public void The_controller_constructor_closes_the_graph_over_the_gate_and_the_viewer()
+    public void The_execution_gate_is_a_singleton_shared_across_scopes()
     {
-        // The view model is the read projection itself, so the graph has exactly two collaborators and no service that
-        // could write, send or retry.
+        var services = BuildServices();
+
+        // The lease has to span the hosted tick's scope and every owner request scope, so both scopes must see the
+        // very same gate; a scoped registration would silently allow two overlapping executions.
+        using var provider = services.BuildServiceProvider();
+        using var tickScope = provider.CreateScope();
+        using var requestScope = provider.CreateScope();
+
+        Assert.Same(
+            tickScope.ServiceProvider.GetRequiredService<ScheduledExecutionGate>(),
+            requestScope.ServiceProvider.GetRequiredService<ScheduledExecutionGate>());
+    }
+
+    [Fact]
+    public void The_controller_constructor_takes_only_the_feature_gate_and_the_scoped_provider()
+    {
+        // The provider is a deliberate, narrow fail-closed exception: the viewer, the runner and the lease are resolved
+        // inside each action only after the gate accepts the request, so a closed gate activates none of them and a
+        // future failure while building the job graph cannot turn a 404 into a 500.
         var parameters = typeof(DevToolsController)
             .GetConstructors()
             .Single()
@@ -482,7 +781,7 @@ public sealed class DevToolsViewerControllerTests
             .Select(parameter => parameter.ParameterType)
             .ToArray();
 
-        Assert.Equal([typeof(DevToolsGate), typeof(INotificationViewerRepository)], parameters);
+        Assert.Equal([typeof(DevToolsGate), typeof(IServiceProvider)], parameters);
     }
 
     // --- Helpers ------------------------------------------------------------------------------------------------
@@ -532,6 +831,48 @@ public sealed class DevToolsViewerControllerTests
         // Registration only: no provider is built, so no key is generated and no database is touched.
         services.AddWorkUp(configuration, new FakeHostEnvironment { EnvironmentName = Environments.Development });
         return services;
+    }
+
+    /// <summary>
+    /// Test double of the scoped provider the controller defers to. It records every type the controller asks for and
+    /// throws on any type the test did not register, so "the closed gate activated nothing" is proven by construction
+    /// instead of by observing a side effect that a harmless stub could hide.
+    /// </summary>
+    private sealed class RecordingServiceProvider : IServiceProvider
+    {
+        private readonly Dictionary<Type, object> _services;
+
+        public RecordingServiceProvider(params (Type Service, object Implementation)[] services)
+        {
+            _services = services.ToDictionary(entry => entry.Service, entry => entry.Implementation);
+        }
+
+        public List<Type> Requested { get; } = [];
+
+        public object? GetService(Type serviceType)
+        {
+            Requested.Add(serviceType);
+            if (_services.TryGetValue(serviceType, out var service))
+                return service;
+
+            throw new InvalidOperationException(
+                $"The controller resolved {serviceType.Name} before the gate allowed it.");
+        }
+    }
+
+    private sealed class DevToolsJob(string key, Func<Task>? behavior = null) : IScheduledJob
+    {
+        public string Key { get; } = key;
+
+        public Task RunAsync(DateTime now, CancellationToken ct = default) =>
+            behavior is null ? Task.CompletedTask : behavior();
+    }
+
+    private sealed class DictionaryTempDataProvider : ITempDataProvider
+    {
+        public IDictionary<string, object> LoadTempData(HttpContext context) => new Dictionary<string, object>();
+
+        public void SaveTempData(HttpContext context, IDictionary<string, object> values) { }
     }
 
     private sealed class FakeHostEnvironment : IHostEnvironment

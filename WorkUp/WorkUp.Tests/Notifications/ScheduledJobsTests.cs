@@ -461,6 +461,40 @@ public sealed class ScheduledJobsTests
         Assert.True(run.Token.IsCancellationRequested);
     }
 
+    // ---- The hosted tick runs through the singleton execution lease (T26) ----
+
+    [Fact]
+    public async Task Hosted_tick_runs_through_the_singleton_execution_gate()
+    {
+        var state = new RecordingJobState();
+        var lane = new SpyExecutionGate();
+        await using var provider = BuildJobProvider(state, gate: lane);
+        var host = NewHost(provider);
+
+        await host.StartAsync(CancellationToken.None);
+        await host.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // The worker must route the tick through the lease, not call the runner directly, or a manual run could
+        // overlap an automatic one.
+        Assert.Equal(1, lane.TickCount);
+        Assert.Single(state.Runs);
+    }
+
+    [Fact]
+    public async Task The_execution_gate_is_a_singleton_shared_by_a_tick_scope_and_a_request_scope()
+    {
+        await using var provider = BuildProvider(DefaultSettings());
+
+        // The lease has to span scopes; a scoped registration would hold a private semaphore per scope and silently
+        // stop serializing the automatic tick against an owner request.
+        await using var tickScope = provider.CreateAsyncScope();
+        await using var requestScope = provider.CreateAsyncScope();
+
+        Assert.Same(
+            tickScope.ServiceProvider.GetRequiredService<ScheduledExecutionGate>(),
+            requestScope.ServiceProvider.GetRequiredService<ScheduledExecutionGate>());
+    }
+
     // ---- Composition root: fail fast, mode-conditional sender and the single hosted worker ----
 
     [Fact]
@@ -851,7 +885,8 @@ public sealed class ScheduledJobsTests
         RecordingJobState state,
         Func<JobRun, Task>? behavior = null,
         ILogger<ScheduledJobsHostedService>? logger = null,
-        string key = "outbox")
+        string key = "outbox",
+        ScheduledExecutionGate? gate = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -859,6 +894,9 @@ public sealed class ScheduledJobsTests
         services.AddScoped<IScheduledJob>(sp =>
             new RecordingScheduledJob(key, sp.GetRequiredService<RecordingJobState>(), behavior));
         services.AddScoped<ScheduledJobRunner>();
+        // T26: the hosted tick resolves the singleton lease from the tick scope, so this harness registers it exactly
+        // like the composition root does.
+        services.AddSingleton(gate ?? new ScheduledExecutionGate());
         // The runner reads the clock on every invocation; this harness only needs a stable instant.
         services.AddSingleton<IClock>(new FakeClock { Now = Start });
         if (logger is not null)
@@ -904,6 +942,21 @@ public sealed class ScheduledJobsTests
 
         protected override Task<bool> WaitForNextTickAsync(PeriodicTimer timer, CancellationToken ct) =>
             Task.FromResult(_remaining-- > 0);
+    }
+
+    /// <summary>
+    /// Testing seam: the worker's tick is recorded and then handed to the real lease, so the wiring is observed
+    /// deterministically instead of racing a real tick against a real manual run.
+    /// </summary>
+    private sealed class SpyExecutionGate : ScheduledExecutionGate
+    {
+        public int TickCount { get; private set; }
+
+        public override async Task RunTickAsync(ScheduledJobRunner runner, CancellationToken ct)
+        {
+            TickCount++;
+            await base.RunTickAsync(runner, ct);
+        }
     }
 
     private sealed class RecordingJobState

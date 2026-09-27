@@ -18,9 +18,16 @@ namespace WorkUp.Infrastructure.Jobs;
 /// provider error can contain a password and a notice can contain a single-use link.
 /// </para>
 /// <para>
-/// The worker deliberately has no job-enabled gate: in the default <c>Outbox</c> mode the outbox job short-circuits
-/// before touching SQL, so an existing HTTP smoke stays inert while <see cref="TickCompletedMessage"/> still proves
-/// that the immediate tick ran.
+/// Every tick runs through the singleton <see cref="ScheduledExecutionGate"/>: it takes the execution lease before
+/// <see cref="ScheduledJobRunner.RunAllAsync"/> and releases it when the tick finishes, so a tick and an owner-only
+/// manual run can never overlap and the manual run is answered Busy instead of queueing behind the tick. The lease is
+/// released on cancellation and failure alike, so a failed or cancelled tick never blocks the next one.
+/// </para>
+/// <para>
+/// The worker deliberately has no job-enabled gate. In the default <c>Outbox</c> mode the outbox job claims nothing and
+/// contacts no provider, but it is not SQL-free: the reminder, daily-summary, stock-review and membership-expiry jobs
+/// of T24/T25 each perform their own bounded scan every tick, so a running installation does read SQL even while
+/// notices are only retained. <see cref="TickCompletedMessage"/> still proves that the immediate tick ran.
 /// </para>
 /// </summary>
 public class ScheduledJobsHostedService(
@@ -77,8 +84,10 @@ public class ScheduledJobsHostedService(
         try
         {
             await using var scope = scopeFactory.CreateAsyncScope();
+            var gate = scope.ServiceProvider.GetRequiredService<ScheduledExecutionGate>();
             var runner = scope.ServiceProvider.GetRequiredService<ScheduledJobRunner>();
-            await runner.RunAllAsync(ct);
+            // The singleton lease serializes this tick with the manual run action; the runner and the jobs stay scoped.
+            await gate.RunTickAsync(runner, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
