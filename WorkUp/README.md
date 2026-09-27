@@ -11,7 +11,7 @@ dotnet run --project WorkUp/WorkUp --launch-profile https
 ```
 
 - La primera vez crea la base `WorkUp` y aplica los scripts de `WorkUp.Data/Sql`. Si tu SQL Server no es LocalDB, cambiá `ConnectionStrings:WorkUp` en `WorkUp/appsettings.json` (por ejemplo `Server=.\SQLEXPRESS;Database=WorkUp;Trusted_Connection=True;TrustServerCertificate=True`).
-- En desarrollo están activas las herramientas de prueba (`WorkUp:Features:DevTools`): los emails no se envían, quedan en la bandeja de salida.
+- En desarrollo los emails no se envían: quedan en la bandeja de salida. Para verlos y para simular el paso del tiempo están las herramientas de prueba de `/panel/DevTools`, que tienen su propia guardia (ver «Herramientas de prueba»).
 - Configurá `WorkUp:PublicBaseUrl` con la URL absoluta y confiable que se incluirá en los enlaces privados. Fuera de `Development` debe ser HTTPS y no puede apuntar a loopback; por ejemplo, definí `WorkUp__PublicBaseUrl=https://reservas.example.com` en el entorno del despliegue. En `Development` se permite `localhost` por HTTP o HTTPS. La aplicación valida esto al iniciar y nunca deriva el dominio del encabezado `Host` de la solicitud.
 - Pruebas: `dotnet test WorkUp/WorkUp.sln`.
 
@@ -65,6 +65,17 @@ finally {
 ```
 
 Las cuentas creadas son `marina.demo` y `lucia.demo`; la contraseña la define quien ejecuta el comando. Los negocios de Marina y Lucía, las trabajadoras/profesoras, teléfonos, CUIL, precios y horarios del plan son ficticios o sintéticos y solo para demo. Los emails terminan en `.invalid` para impedir el envío a direcciones reales. Si los identificadores demo ya existen con datos distintos o incompletos, la operación se detiene sin modificarlos; una repetición sobre los datos demo intactos no duplica filas.
+
+### Herramientas de prueba (T26)
+
+La sección **Herramientas de prueba** (`/panel/DevTools`) existe solo si se cumplen **las tres** condiciones al arrancar: entorno `Development`, `WorkUp:Features:DevTools=true` y modo de email que retiene los avisos (`WorkUp:Email:Mode=Outbox`). Si falta cualquiera, la sección responde 404 aunque se entre por URL directa: la guardia falla cerrada y no activa el visor, las tareas ni el reloj. Además exige dueña autenticada y solo muestra los avisos del negocio con el que se ingresó.
+
+- **Visor de avisos generados.** Lista los emails del negocio sin el cuerpo, porque un cuerpo puede traer el enlace privado de un turno o un token de un solo uso; el contenido completo se abre de a un aviso. Las dos páginas van con `no-store` y `Referrer-Policy: no-referrer`.
+- **Ejecutar tareas programadas.** Cada tarea registrada tiene su formulario POST con antiforgery y su clave estable; una ejecución manual no se solapa con otra ni con el ciclo automático. En modo `Outbox` la tarea `outbox` no envía nada: los avisos quedan retenidos y visibles.
+- **Reloj simulado.** Avanza por horas o por días y vuelve al tiempo real. Es **único para toda la instalación**: moverlo afecta a **ambos negocios de la demo a la vez**, y cada avance pide una confirmación explícita. El adelanto vive solo en memoria, así que **reiniciar el proceso devuelve el reloj al tiempo real**; mientras está adelantado, las tareas programadas pueden generar avisos `Pendientes`.
+- **Nunca SMTP real.** Con tiempo simulado no se envía a ningún proveedor: la guardia exige el modo `Outbox`, así que las herramientas solo están disponibles cuando los emails quedan retenidos. No configures `WorkUp:Email:Mode=Smtp` esperando usarlas.
+
+La suite predeterminada incluye pruebas SMTP con servidor loopback local, pero **no ejecuta** las integraciones SQL, HTTP ni de host sin sus variables opt-in: esas pruebas quedan **N/A** aunque xUnit las cuente aprobadas. Para las corridas reales usá bases y llaveros nuevos y exclusivos; retenelos como evidencia, sin reutilizarlos ni tocar la base compartida o el llavero del perfil.
 
 ## Estructura
 
