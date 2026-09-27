@@ -10,14 +10,17 @@
     // The repository is asked for one bounded page; a full page may have more rows behind it, so the next cursor is the
     // identity of the last row of this page and the keyset moves strictly backwards.
     var nextBeforeId = Model.Count == NotificationViewerBounds.MaxPageSize ? Model[^1].Id : (int?)null;
+    // Shared clock state (installation-wide), set by the controller after the gate accepted the request.
+    var clockState = ViewData[DevToolsController.ClockStateViewDataKey] as DevToolsClockState;
 }
 @*
     Visor de emails generados (T26, supuestos 10 y 11). La lista es solo lectura sobre los avisos del negocio con el que
     se ingresó. Nunca trae el cuerpo del aviso, porque un cuerpo encolado puede incluir el enlace privado de un turno o
     un token de recuperación de un solo uso; el cuerpo se ve de a un aviso, en el detalle. Tampoco se expone el error
-    guardado ni la reclamación del despachador. Lo único que escribe esta página es la ejecución manual de una tarea
-    registrada, con clave estable y bajo el lease singleton, nunca un reintento libre ni una intervención sobre el
-    error de un aviso. La paginación es un keyset acotado por la misma cota que aplica el repositorio.
+    guardado ni la reclamación del despachador. Lo único que escribe esta página son la ejecución manual de una tarea
+    registrada, con clave estable y bajo el lease singleton, y el avance o la vuelta del reloj simulado compartido, que
+    mueve a los dos negocios de la demo: nunca un reintento libre ni una intervención sobre el error de un aviso. La
+    paginación es un keyset acotado por la misma cota que aplica el repositorio.
 *@
 <div class="page-header">
     <div>
@@ -28,6 +31,64 @@
         </p>
     </div>
 </div>
+
+@*
+    Reloj simulado (T26). El reloj es único para toda la instalación de prueba: avanzarlo mueve a los dos negocios de la
+    demo al mismo tiempo y el adelanto vive solo en memoria. Por eso la advertencia es prominente y accesible, y cada
+    avance exige una confirmación explícita. Los formularios son POST con token antiforgery y llevan solo la cantidad y
+    la confirmación: el negocio y la sesión siguen viniendo de la cookie de la dueña y nunca de un campo del formulario.
+*@
+<section aria-labelledby="simulated-clock-heading">
+    <h2 id="simulated-clock-heading">Reloj simulado</h2>
+    <div class="notice-warning" role="note">
+        <p><strong>Atención: este reloj es único para toda la instalación de prueba.</strong></p>
+        <ul>
+            <li>Avanzarlo afecta a <strong>ambos negocios</strong> de la demo al mismo tiempo.</li>
+            <li>En modo Outbox los avisos <strong>no se envían nunca</strong>: quedan retenidos y visibles en esta página.</li>
+            <li>El adelanto vive solo en memoria: si reiniciás el proceso, el reloj vuelve al tiempo real.</li>
+            <li>Mientras el reloj está adelantado, las tareas programadas pueden generar avisos <strong>Pendientes</strong>.</li>
+        </ul>
+    </div>
+    @if (clockState is not null)
+    {
+        <p>
+            Estado actual:
+            <strong>@(clockState.IsSimulated ? "simulado" : "tiempo real")</strong>
+            · @Formatting.ShortDate(clockState.LocalNow) @Formatting.Time(clockState.LocalNow)
+        </p>
+    }
+    <div class="actions">
+        <form asp-area="Owner" asp-controller="DevTools" asp-action="AdvanceHours" method="post">
+            <div>
+                <label for="advance-hours">Horas a avanzar (1 a @SimulatedBusinessClock.MaxAdvanceHours)</label>
+                <input id="advance-hours" name="hours" type="number"
+                       min="@SimulatedBusinessClock.MinAdvanceHours" max="@SimulatedBusinessClock.MaxAdvanceHours"
+                       value="@SimulatedBusinessClock.MinAdvanceHours" required />
+            </div>
+            <div>
+                <input id="confirm-hours" name="confirmAllBusinesses" type="checkbox" value="true" required />
+                <label for="confirm-hours">Confirmo que el avance afecta a los dos negocios</label>
+            </div>
+            <button type="submit" class="btn">Avanzar horas</button>
+        </form>
+        <form asp-area="Owner" asp-controller="DevTools" asp-action="AdvanceDays" method="post">
+            <div>
+                <label for="advance-days">Días a avanzar (1 a @SimulatedBusinessClock.MaxAdvanceDays)</label>
+                <input id="advance-days" name="days" type="number"
+                       min="@SimulatedBusinessClock.MinAdvanceDays" max="@SimulatedBusinessClock.MaxAdvanceDays"
+                       value="@SimulatedBusinessClock.MinAdvanceDays" required />
+            </div>
+            <div>
+                <input id="confirm-days" name="confirmAllBusinesses" type="checkbox" value="true" required />
+                <label for="confirm-days">Confirmo que el avance afecta a los dos negocios</label>
+            </div>
+            <button type="submit" class="btn">Avanzar días</button>
+        </form>
+        <form asp-area="Owner" asp-controller="DevTools" asp-action="RestoreClock" method="post">
+            <button type="submit" class="btn">Volver al tiempo real</button>
+        </form>
+    </div>
+</section>
 
 @*
     Ejecución manual de tareas (T26): cada clave registrada tiene su propio formulario POST. El FormTagHelper agrega el

@@ -10,6 +10,7 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using WorkUp.Areas.Owner.Controllers;
+using WorkUp.BusinessLogic.Abstractions;
 using WorkUp.BusinessLogic.Notifications;
 using WorkUp.Data.Notifications;
 using WorkUp.Domain.Enums;
@@ -51,6 +52,10 @@ public sealed class DevToolsViewerControllerTests
 
     private readonly FakeNotificationViewerRepository _viewer = new();
 
+    // One shared, in-process clock per test: it is the same singleton behind IClock and ISimulatedClockControl, so a
+    // SPA request sees exactly the offset a previous one applied.
+    private readonly SimulatedBusinessClock _clock = new(new FakeClock { Now = Start });
+
     // --- Fixtures -----------------------------------------------------------------------------------------------
 
     private static DevToolsGate Gate(bool enabled)
@@ -69,7 +74,8 @@ public sealed class DevToolsViewerControllerTests
         bool gateOpen = true,
         ScheduledExecutionGate? execution = null,
         ScheduledJobRunner? runner = null,
-        RecordingServiceProvider? services = null)
+        RecordingServiceProvider? services = null,
+        SimulatedBusinessClock? clock = null)
     {
         var context = new DefaultHttpContext
         {
@@ -87,7 +93,9 @@ public sealed class DevToolsViewerControllerTests
         var provider = services ?? new RecordingServiceProvider(
             (typeof(INotificationViewerRepository), _viewer),
             (typeof(ScheduledJobRunner), runner ?? Runner(new DevToolsJob("outbox"))),
-            (typeof(ScheduledExecutionGate), execution ?? new ScheduledExecutionGate()));
+            (typeof(ScheduledExecutionGate), execution ?? new ScheduledExecutionGate()),
+            (typeof(IClock), clock ?? _clock),
+            (typeof(ISimulatedClockControl), clock ?? _clock));
 
         return new DevToolsController(Gate(gateOpen), provider)
         {
@@ -158,17 +166,22 @@ public sealed class DevToolsViewerControllerTests
     }
 
     [Fact]
-    public async Task Index_resolves_the_viewer_and_the_runner_but_never_the_lease()
+    public async Task Index_resolves_the_viewer_the_runner_and_the_clock_but_never_the_lease()
     {
         var services = new RecordingServiceProvider(
             (typeof(INotificationViewerRepository), _viewer),
-            (typeof(ScheduledJobRunner), Runner(new DevToolsJob("outbox"))));
+            (typeof(ScheduledJobRunner), Runner(new DevToolsJob("outbox"))),
+            (typeof(IClock), _clock),
+            (typeof(ISimulatedClockControl), _clock));
 
         await Create(services: services).Index(null, CancellationToken.None);
 
-        // The list needs the read adapter and the stable keys; it never runs a job, so it must leave the lease alone.
+        // The list needs the read adapter, the stable keys and the shared clock state; it never runs a job nor moves
+        // the clock, so it must leave the lease alone.
         Assert.Contains(typeof(INotificationViewerRepository), services.Requested);
         Assert.Contains(typeof(ScheduledJobRunner), services.Requested);
+        Assert.Contains(typeof(IClock), services.Requested);
+        Assert.Contains(typeof(ISimulatedClockControl), services.Requested);
         Assert.DoesNotContain(typeof(ScheduledExecutionGate), services.Requested);
     }
 
@@ -353,6 +366,276 @@ public sealed class DevToolsViewerControllerTests
         var keys = Assert.IsAssignableFrom<IReadOnlyList<string>>(
             controller.ViewData[DevToolsController.JobKeysViewDataKey]);
         Assert.Equal(new[] { "reminders", "outbox" }, keys);
+    }
+
+    // --- Simulated clock: fail-closed posts under the shared lease (T26) ----------------------------------------
+
+    [Theory]
+    [InlineData(nameof(DevToolsController.AdvanceHours))]
+    [InlineData(nameof(DevToolsController.AdvanceDays))]
+    [InlineData(nameof(DevToolsController.RestoreClock))]
+    public async Task Clock_post_answers_not_found_and_resolves_nothing_when_the_gate_is_closed(string action)
+    {
+        // An empty provider throws on any resolution, so a 404 with an untouched clock proves the gate ran first and
+        // no clock, no lease and no viewer was ever activated.
+        var services = new RecordingServiceProvider();
+        var controller = Create(gateOpen: false, services: services);
+
+        var result = action switch
+        {
+            nameof(DevToolsController.AdvanceHours) =>
+                await controller.AdvanceHours(3, confirmAllBusinesses: true, CancellationToken.None),
+            nameof(DevToolsController.AdvanceDays) =>
+                await controller.AdvanceDays(2, confirmAllBusinesses: true, CancellationToken.None),
+            _ => await controller.RestoreClock(CancellationToken.None)
+        };
+
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Empty(services.Requested);
+        Assert.False(_clock.IsSimulated);
+        Assert.Equal(Start, _clock.Now);
+    }
+
+    [Theory]
+    [InlineData(nameof(DevToolsController.AdvanceHours))]
+    [InlineData(nameof(DevToolsController.AdvanceDays))]
+    [InlineData(nameof(DevToolsController.RestoreClock))]
+    public void Clock_posts_are_post_actions_that_validate_the_antiforgery_token(string action)
+    {
+        var method = typeof(DevToolsController).GetMethod(action)!;
+
+        Assert.NotNull(method.GetCustomAttribute<HttpPostAttribute>());
+        Assert.NotNull(method.GetCustomAttribute<ValidateAntiForgeryTokenAttribute>());
+        // The owner cookie is inherited from OwnerControllerBase; no clock action opts a visitor out of it.
+        Assert.False(method.IsDefined(typeof(AllowAnonymousAttribute), inherit: true));
+    }
+
+    [Fact]
+    public void The_clock_actions_take_no_tenant_input()
+    {
+        // The only inputs are the amount, the shared-clock confirmation and the request token: there is no business,
+        // business-id or employee parameter a caller could use to widen the mutation, and the confirmation keeps one
+        // owner from silently moving both demo businesses.
+        Assert.Equal(
+            ["hours", "confirmAllBusinesses", "ct"],
+            ParameterNames(nameof(DevToolsController.AdvanceHours)));
+        Assert.Equal(
+            ["days", "confirmAllBusinesses", "ct"],
+            ParameterNames(nameof(DevToolsController.AdvanceDays)));
+        Assert.Equal(["ct"], ParameterNames(nameof(DevToolsController.RestoreClock)));
+    }
+
+    [Fact]
+    public async Task Advance_without_the_shared_clock_confirmation_changes_nothing_and_resolves_no_collaborator()
+    {
+        // An empty provider throws on any resolution: the unconfirmed advance is refused before the clock or the lease
+        // is even asked for.
+        var services = new RecordingServiceProvider();
+        var controller = Create(services: services);
+
+        var result = await controller.AdvanceHours(3, confirmAllBusinesses: false, CancellationToken.None);
+
+        var redirect = Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(nameof(DevToolsController.Index), redirect.ActionName);
+        Assert.Equal(DevToolsController.ClockConfirmationRequiredMessage, controller.TempData["FlashMessage"]);
+        Assert.Equal("Warning", controller.TempData["FlashType"]);
+        Assert.Empty(services.Requested);
+        Assert.False(_clock.IsSimulated);
+        Assert.Equal(Start, _clock.Now);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(SimulatedBusinessClock.MaxAdvanceHours + 1)]
+    [InlineData(int.MinValue)]
+    [InlineData(int.MaxValue)]
+    public async Task Advance_hours_rejects_an_out_of_range_amount_with_a_fixed_safe_flash(int hours)
+    {
+        var controller = Create();
+
+        var result = await controller.AdvanceHours(hours, confirmAllBusinesses: true, CancellationToken.None);
+
+        // A rejected bound is a Post/Redirect/Get with the fixed message, and the shared clock is exactly where it was.
+        var redirect = Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(nameof(DevToolsController.Index), redirect.ActionName);
+        Assert.Equal(SimulatedBusinessClock.AdvanceHoursMessage, controller.TempData["FlashMessage"]);
+        Assert.DoesNotContain(hours.ToString(), (string)controller.TempData["FlashMessage"]!, StringComparison.Ordinal);
+        Assert.False(_clock.IsSimulated);
+        Assert.Equal(Start, _clock.Now);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(SimulatedBusinessClock.MaxAdvanceDays + 1)]
+    [InlineData(int.MinValue)]
+    [InlineData(int.MaxValue)]
+    public async Task Advance_days_rejects_an_out_of_range_amount_with_a_fixed_safe_flash(int days)
+    {
+        var controller = Create();
+
+        var result = await controller.AdvanceDays(days, confirmAllBusinesses: true, CancellationToken.None);
+
+        var redirect = Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(nameof(DevToolsController.Index), redirect.ActionName);
+        Assert.Equal(SimulatedBusinessClock.AdvanceDaysMessage, controller.TempData["FlashMessage"]);
+        Assert.DoesNotContain(days.ToString(), (string)controller.TempData["FlashMessage"]!, StringComparison.Ordinal);
+        Assert.False(_clock.IsSimulated);
+        Assert.Equal(Start, _clock.Now);
+    }
+
+    [Fact]
+    public async Task Advance_hours_that_would_leave_the_date_range_flashes_the_fixed_message_and_changes_nothing()
+    {
+        var overflow = new SimulatedBusinessClock(new FakeClock { Now = DateTime.MaxValue });
+        var controller = Create(clock: overflow);
+
+        var result = await controller.AdvanceHours(1, confirmAllBusinesses: true, CancellationToken.None);
+
+        // The clock is never silently clamped to another day: the loud overflow becomes one fixed message and the
+        // simulation stays exactly at the representable instant it had.
+        Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(SimulatedBusinessClock.OverflowMessage, controller.TempData["FlashMessage"]);
+        Assert.Equal("Error", controller.TempData["FlashType"]);
+        Assert.False(overflow.IsSimulated);
+        Assert.Equal(9999, overflow.Now.Year);
+    }
+
+    [Fact]
+    public async Task A_rejected_advance_releases_the_lease_for_the_next_manual_run()
+    {
+        var execution = new ScheduledExecutionGate();
+        var runs = new List<string>();
+        var controller = Create(
+            execution: execution,
+            runner: Runner(new DevToolsJob("outbox", () =>
+            {
+                runs.Add("outbox");
+                return Task.CompletedTask;
+            })));
+
+        var rejected = await controller.AdvanceHours(0, confirmAllBusinesses: true, CancellationToken.None);
+        Assert.IsType<RedirectToActionResult>(rejected);
+
+        // The rejected bound threw synchronously inside the mutation: the shared lease must be free again immediately.
+        var run = await controller.RunJob("outbox", CancellationToken.None);
+
+        Assert.IsType<RedirectToActionResult>(run);
+        Assert.Equal(new[] { "outbox" }, runs);
+    }
+
+    [Fact]
+    public async Task Advance_hours_moves_the_shared_clock_and_flashes_a_fixed_completion()
+    {
+        var controller = Create();
+
+        var result = await controller.AdvanceHours(5, confirmAllBusinesses: true, CancellationToken.None);
+
+        var redirect = Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(nameof(DevToolsController.Index), redirect.ActionName);
+        Assert.Equal(DevToolsController.ClockHoursAdvancedMessage, controller.TempData["FlashMessage"]);
+        Assert.Equal("Success", controller.TempData["FlashType"]);
+        Assert.True(_clock.IsSimulated);
+        Assert.Equal(Start.AddHours(5), _clock.Now);
+    }
+
+    [Fact]
+    public async Task Advance_days_moves_the_shared_clock_and_flashes_a_fixed_completion()
+    {
+        var controller = Create();
+
+        var result = await controller.AdvanceDays(2, confirmAllBusinesses: true, CancellationToken.None);
+
+        Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(DevToolsController.ClockDaysAdvancedMessage, controller.TempData["FlashMessage"]);
+        Assert.True(_clock.IsSimulated);
+        Assert.Equal(Start.AddDays(2), _clock.Now);
+    }
+
+    [Fact]
+    public async Task Advance_reports_busy_with_a_fixed_flash_when_a_job_holds_the_lease_and_leaves_the_clock_alone()
+    {
+        var execution = new ScheduledExecutionGate();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holder = execution.TryRunOneAsync(
+            Runner(new DevToolsJob("outbox", () =>
+            {
+                started.TrySetResult();
+                return release.Task;
+            })),
+            "outbox",
+            CancellationToken.None);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var controller = Create(execution: execution);
+
+        var result = await controller.AdvanceHours(5, confirmAllBusinesses: true, CancellationToken.None);
+
+        Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(DevToolsController.ClockBusyMessage, controller.TempData["FlashMessage"]);
+        Assert.Equal("Warning", controller.TempData["FlashType"]);
+        Assert.False(_clock.IsSimulated);
+        Assert.Equal(Start, _clock.Now);
+
+        release.TrySetResult();
+        await holder.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task Restore_returns_to_the_real_time_and_is_idempotent()
+    {
+        _clock.AdvanceDays(3);
+
+        var controller = Create();
+        var first = await controller.RestoreClock(CancellationToken.None);
+
+        var redirect = Assert.IsType<RedirectToActionResult>(first);
+        Assert.Equal(nameof(DevToolsController.Index), redirect.ActionName);
+        Assert.Equal(DevToolsController.ClockRestoredMessage, controller.TempData["FlashMessage"]);
+        Assert.Equal("Success", controller.TempData["FlashType"]);
+        Assert.False(_clock.IsSimulated);
+        Assert.Equal(Start, _clock.Now);
+
+        // Restoring again is not a toggle: the real instant is the same and the second call still succeeds.
+        var again = Create();
+        var second = await again.RestoreClock(CancellationToken.None);
+        Assert.IsType<RedirectToActionResult>(second);
+        Assert.Equal(DevToolsController.ClockRestoredMessage, again.TempData["FlashMessage"]);
+        Assert.False(_clock.IsSimulated);
+        Assert.Equal(Start, _clock.Now);
+    }
+
+    [Fact]
+    public async Task Restore_flashes_a_fixed_message_when_the_clock_cannot_be_resolved()
+    {
+        var services = new RecordingServiceProvider((typeof(ScheduledExecutionGate), new ScheduledExecutionGate()));
+        var controller = Create(services: services);
+
+        var result = await controller.RestoreClock(CancellationToken.None);
+
+        // A resolution failure is a fixed, content-free message: neither the provider's text nor the exception type
+        // reaches the page.
+        Assert.IsType<RedirectToActionResult>(result);
+        Assert.Equal(DevToolsController.ClockRestoreFailedMessage, controller.TempData["FlashMessage"]);
+        Assert.Equal("Error", controller.TempData["FlashType"]);
+        var message = Assert.IsType<string>(controller.TempData["FlashMessage"]);
+        Assert.DoesNotContain("ISimulatedClockControl", message, StringComparison.Ordinal);
+        Assert.DoesNotContain(nameof(InvalidOperationException), message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Index_exposes_the_shared_clock_state_without_any_tenant_data()
+    {
+        _clock.AdvanceHours(2);
+        var controller = Create();
+
+        await controller.Index(null, CancellationToken.None);
+
+        var state = Assert.IsType<DevToolsClockState>(controller.ViewData[DevToolsController.ClockStateViewDataKey]);
+        Assert.True(state.IsSimulated);
+        Assert.Equal(Start.AddHours(2), state.LocalNow);
     }
 
     // --- Tenant scope comes from the owner claim only -----------------------------------------------------------
@@ -638,6 +921,67 @@ public sealed class DevToolsViewerControllerTests
         Assert.Contains("asp-area=\"Owner\"", view, StringComparison.Ordinal);
         Assert.DoesNotContain("http://", view, StringComparison.Ordinal);
         Assert.DoesNotContain("https://", view, StringComparison.Ordinal);
+    }
+
+    // --- Simulated clock view contract (T26) -------------------------------------------------------------------
+
+    [Fact]
+    public void The_index_warns_that_the_simulated_clock_is_global_in_memory_and_retained()
+    {
+        var view = ReadOwnerView("DevTools", "Index.cshtml");
+
+        // A prominent, accessible warning: the clock moves both demo businesses at once, the retained notices never
+        // leave, the offset is only in memory and the automatic ticks can enqueue pending notices while it runs ahead.
+        Assert.Contains("notice-warning", view, StringComparison.Ordinal);
+        Assert.Contains("role=\"note\"", view, StringComparison.Ordinal);
+        Assert.Contains("ambos negocios", view, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("memoria", view, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("reinici", view, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no se env", view, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Pendiente", view, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_index_renders_the_current_clock_state()
+    {
+        var view = ReadOwnerView("DevTools", "Index.cshtml");
+
+        // The page shows the current simulated local instant and whether it is simulated or the real time.
+        Assert.Contains(DevToolsController.ClockStateViewDataKey, view, StringComparison.Ordinal);
+        Assert.Contains("DevToolsClockState", view, StringComparison.Ordinal);
+        Assert.Contains("IsSimulated", view, StringComparison.Ordinal);
+        Assert.Contains("LocalNow", view, StringComparison.Ordinal);
+        Assert.Contains("Formatting", view, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_index_offers_the_three_clock_forms_with_bounds_and_confirmation()
+    {
+        var view = ReadOwnerView("DevTools", "Index.cshtml");
+
+        // Every clock form is a POST with the antiforgery token the FormTagHelper adds; the advances are bounded
+        // numbers and carry the explicit acknowledgement that both businesses move at once.
+        Assert.Contains("asp-action=\"AdvanceHours\"", view, StringComparison.Ordinal);
+        Assert.Contains("asp-action=\"AdvanceDays\"", view, StringComparison.Ordinal);
+        Assert.Contains("asp-action=\"RestoreClock\"", view, StringComparison.Ordinal);
+        Assert.Contains("method=\"post\"", view, StringComparison.Ordinal);
+        Assert.Contains("type=\"number\"", view, StringComparison.Ordinal);
+        Assert.Contains("min=\"@SimulatedBusinessClock.MinAdvanceHours\"", view, StringComparison.Ordinal);
+        Assert.Contains("max=\"@SimulatedBusinessClock.MaxAdvanceHours\"", view, StringComparison.Ordinal);
+        Assert.Contains("min=\"@SimulatedBusinessClock.MinAdvanceDays\"", view, StringComparison.Ordinal);
+        Assert.Contains("max=\"@SimulatedBusinessClock.MaxAdvanceDays\"", view, StringComparison.Ordinal);
+        Assert.Contains("name=\"confirmAllBusinesses\"", view, StringComparison.Ordinal);
+        Assert.Contains("type=\"checkbox\"", view, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_clock_forms_stay_inside_the_owner_area_and_expose_no_stored_error()
+    {
+        var view = ReadOwnerView("DevTools", "Index.cshtml");
+
+        Assert.Contains("asp-area=\"Owner\"", view, StringComparison.Ordinal);
+        Assert.DoesNotContain("Html.Raw", view, StringComparison.Ordinal);
+        Assert.DoesNotContain("BusinessId", view, StringComparison.Ordinal);
     }
 
     // --- Gate-based layout --------------------------------------------------------------------------------------
