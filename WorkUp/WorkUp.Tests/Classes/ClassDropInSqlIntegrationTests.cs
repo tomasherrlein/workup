@@ -523,6 +523,79 @@ public sealed class ClassDropInSqlIntegrationTests(ITestOutputHelper output)
         output.WriteLine("Cancellation assertions passed: the drop-in was marked Cancelado with CancelledAt from the clock and CancelledBy=Owner, the second attempt was rejected with the original facts intact, the released place let the same client book again, the fixed, foreign and missing bookings were indistinguishable and untouched, and a suspended or started class was refused without writing.");
     }
 
+    [Fact]
+    public async Task Booking_respects_the_configured_reminder_lead_read_from_the_locked_session()
+    {
+        var target = await ResolveTargetAsync("_Lead");
+        if (target is null)
+            return;
+
+        var ids = await SeedLeadAsync(target.ConnectionString, FixedNow);
+
+        await using var session = new DbSession(target.ConnectionString);
+        var repository = new SqlClassDropInRepository(session);
+
+        // The locked/session read carries the anticipation the business configured, not the schema default: A
+        // configured 12 h and B 48 h, so these two rows are what prove the join on Businesses reaches the field the
+        // booking decision consumes. Reading it here also pins that the service gets it without a second read.
+        var lockedA = await repository.LockSessionAsync(ids.BusinessA, ids.OutsideSession);
+        Assert.NotNull(lockedA);
+        Assert.Equal(12, lockedA.ReminderLeadHours);
+        var lockedB = await repository.LockSessionAsync(ids.BusinessB, ids.InsideSession);
+        Assert.NotNull(lockedB);
+        Assert.Equal(48, lockedB.ReminderLeadHours);
+
+        var clock = new FakeClock { Now = FixedNow };
+        var service = new ClassDropInService(repository, session, clock);
+
+        // Business A with a 12 h lead: a class 13 h away is outside its window, so the booking queues no immediate
+        // email — the scheduled reminder owns it. A service pinned to the schema default of 24 h would queue one
+        // here, and the zero count below is what catches that.
+        var outside = await service.BookForClientAsync(ids.BusinessA, ids.OutsideSession, ids.ClientA);
+        Assert.True(outside.Succeeded, outside.Error?.Code);
+        Assert.False(outside.Value.ImmediateEmailQueued);
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Bookings WHERE AppointmentId = @appointmentId AND ClientId = @clientId",
+            ("@appointmentId", ids.OutsideSession), ("@clientId", ids.ClientA)));
+        Assert.Equal(0, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId", ("@businessId", ids.BusinessA)));
+
+        // The same 12 h lead on the boundary: a class exactly 12 h away is already inside the inclusive window, so
+        // the immediate email is queued for that booking and — as the count shows — for nothing else.
+        var boundaryA = await service.BookForClientAsync(ids.BusinessA, ids.BoundarySessionA, ids.ClientA);
+        Assert.True(boundaryA.Succeeded, boundaryA.Error?.Code);
+        Assert.True(boundaryA.Value.ImmediateEmailQueued);
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId", ("@businessId", ids.BusinessA)));
+        var queuedA = await ReadNotificationAsync(target.ConnectionString, $"reminder:booking:{boundaryA.Value.BookingId}");
+        Assert.Equal(NotificationType.DropInReminder, queuedA.Type);
+        Assert.Equal(ids.ClientAEmail, queuedA.Recipient);
+
+        // Business B with a 48 h lead: a class 47 h away is inside its window, so the booking queues the immediate
+        // email — a service pinned to 24 h would queue none, and this direction catches that too.
+        var inside = await service.BookForClientAsync(ids.BusinessB, ids.InsideSession, ids.ClientB);
+        Assert.True(inside.Succeeded, inside.Error?.Code);
+        Assert.True(inside.Value.ImmediateEmailQueued);
+        Assert.Equal(1, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId", ("@businessId", ids.BusinessB)));
+        var queuedB = await ReadNotificationAsync(target.ConnectionString, $"reminder:booking:{inside.Value.BookingId}");
+        Assert.Equal(NotificationType.DropInReminder, queuedB.Type);
+        Assert.Equal(ids.ClientBEmail, queuedB.Recipient);
+
+        // Its 48 h boundary is inside as well: exactly one more email for the second booking, never a stray one for
+        // the first.
+        var boundaryB = await service.BookForClientAsync(ids.BusinessB, ids.BoundarySessionB, ids.ClientB);
+        Assert.True(boundaryB.Succeeded, boundaryB.Error?.Code);
+        Assert.True(boundaryB.Value.ImmediateEmailQueued);
+        Assert.Equal(2, await CountAsync(target.ConnectionString,
+            "SELECT COUNT(*) FROM Notifications WHERE BusinessId = @businessId", ("@businessId", ids.BusinessB)));
+        var queuedAgain = await ReadNotificationAsync(target.ConnectionString, $"reminder:booking:{boundaryB.Value.BookingId}");
+        Assert.Equal(NotificationType.DropInReminder, queuedAgain.Type);
+        Assert.Equal(ids.ClientBEmail, queuedAgain.Recipient);
+
+        output.WriteLine("Lead assertions passed: the locked session read carried 12 h for business A and 48 h for business B from their Businesses rows, and the immediate drop-in email was queued only inside each configured window — none at 13 h for the 12 h lead, one at 47 h and on both equality boundaries — with no extra email for the outside booking.");
+    }
+
     /// <summary>
     /// Resolves this test's opt-in target. <c>null</c> means the variable is absent: the test returns N/A without
     /// opening any connection or touching any server.
@@ -926,12 +999,60 @@ public sealed class ClassDropInSqlIntegrationTests(ITestOutputHelper output)
             suspendedSession, suspendedDropIn, startedSession, startedDropIn, foreignDropIn);
     }
 
+    private static async Task<LeadIds> SeedLeadAsync(string connectionString, DateTime now)
+    {
+        await using var connection = new SqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
+        // The anticipation is a business setting, not a session one: A configures 12 h and B 48 h, both away from
+        // the schema default of 24 h, so a read that fell back to the default cannot pass the boundary assertions.
+        var businessA = await InsertBusinessAsync(connection, transaction, "Synthetic T14 Lead Business", "synthetic-t14-lead", now, reminderLeadHours: 12);
+        var businessB = await InsertBusinessAsync(connection, transaction, "Synthetic T14 Lead Other", "synthetic-t14-lead-other", now, reminderLeadHours: 48);
+        var serviceA = await InsertServiceAsync(connection, transaction, businessA, "Synthetic T14 Lead Class", 60, 8);
+        var serviceB = await InsertServiceAsync(connection, transaction, businessB, "Synthetic T14 Lead Other Class", 60, 8);
+        var workerA = await InsertWorkerAsync(connection, transaction, businessA, "Lead", "Teacher", "20212121211");
+        var workerB = await InsertWorkerAsync(connection, transaction, businessB, "Other", "Teacher", "20212121212");
+        const string clientAEmail = "t14.lead.client@example.invalid";
+        const string clientBEmail = "t14.lead.other@example.invalid";
+        var clientA = await InsertClientAsync(connection, transaction, businessA, "Luisa", "Lead", clientAEmail, now);
+        var clientB = await InsertClientAsync(connection, transaction, businessB, "Bruno", "Lead", clientBEmail, now);
+
+        // A 12 h lead: a class 13 h away (outside the window) and one exactly 12 h away (on the inclusive boundary).
+        // Both instants derive from the same clock the test hands the service, so the two sides of the boundary
+        // differ by the configured lead and nothing else.
+        var outsideStart = now.AddHours(13);
+        var outsideSession = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, outsideStart.DayOfWeek, TimeOnly.FromDateTime(outsideStart)),
+            serviceA, workerA, outsideStart, 60, 8, AppointmentStatus.Scheduled, now);
+        var boundaryStartA = now.AddHours(12);
+        var boundarySessionA = await InsertClassSessionAsync(connection, transaction, businessA,
+            await InsertGridClassAsync(connection, transaction, businessA, serviceA, workerA, boundaryStartA.DayOfWeek, TimeOnly.FromDateTime(boundaryStartA)),
+            serviceA, workerA, boundaryStartA, 60, 8, AppointmentStatus.Scheduled, now);
+
+        // A 48 h lead: a class 47 h away (inside the window) and one exactly 48 h away (on the inclusive boundary).
+        var insideStart = now.AddHours(47);
+        var insideSession = await InsertClassSessionAsync(connection, transaction, businessB,
+            await InsertGridClassAsync(connection, transaction, businessB, serviceB, workerB, insideStart.DayOfWeek, TimeOnly.FromDateTime(insideStart)),
+            serviceB, workerB, insideStart, 60, 8, AppointmentStatus.Scheduled, now);
+        var boundaryStartB = now.AddHours(48);
+        var boundarySessionB = await InsertClassSessionAsync(connection, transaction, businessB,
+            await InsertGridClassAsync(connection, transaction, businessB, serviceB, workerB, boundaryStartB.DayOfWeek, TimeOnly.FromDateTime(boundaryStartB)),
+            serviceB, workerB, boundaryStartB, 60, 8, AppointmentStatus.Scheduled, now);
+
+        await transaction.CommitAsync();
+
+        return new LeadIds(businessA, businessB, outsideSession, boundarySessionA, insideSession, boundarySessionB,
+            clientA, clientB, clientAEmail, clientBEmail);
+    }
+
     private static Task<int> InsertBusinessAsync(
-        SqlConnection connection, SqlTransaction transaction, string name, string slug, DateTime now) =>
+        SqlConnection connection, SqlTransaction transaction, string name, string slug, DateTime now,
+        int reminderLeadHours = 24) =>
         InsertIdAsync(connection, transaction,
-            "INSERT INTO Businesses (Name, Slug, ContactPhone, NotificationEmail, CreatedAt) OUTPUT INSERTED.Id VALUES (@name, @slug, @phone, @email, @createdAt)",
+            "INSERT INTO Businesses (Name, Slug, ContactPhone, NotificationEmail, ReminderLeadHours, CreatedAt) OUTPUT INSERTED.Id VALUES (@name, @slug, @phone, @email, @lead, @createdAt)",
             ("@name", name), ("@slug", slug), ("@phone", "0000000000"),
-            ("@email", $"{slug}@example.invalid"), ("@createdAt", now));
+            ("@email", $"{slug}@example.invalid"), ("@lead", reminderLeadHours), ("@createdAt", now));
 
     private static Task<int> InsertServiceAsync(
         SqlConnection connection, SqlTransaction transaction, int businessId, string name, int durationMinutes,
@@ -1168,6 +1289,18 @@ public sealed class ClassDropInSqlIntegrationTests(ITestOutputHelper output)
         int StartedSession,
         int StartedDropIn,
         int ForeignDropIn);
+
+    private sealed record LeadIds(
+        int BusinessA,
+        int BusinessB,
+        int OutsideSession,
+        int BoundarySessionA,
+        int InsideSession,
+        int BoundarySessionB,
+        int ClientA,
+        int ClientB,
+        string ClientAEmail,
+        string ClientBEmail);
 
     private sealed record BookingSnapshot(
         int BusinessId,
