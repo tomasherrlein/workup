@@ -53,13 +53,15 @@ public class ClassDropInServiceTests
         int serviceId = 7,
         int workerId = 3,
         AppointmentKind kind = AppointmentKind.ClassSession,
-        IReadOnlyList<ClassSessionBooking>? bookings = null)
+        IReadOnlyList<ClassSessionBooking>? bookings = null,
+        int reminderLeadHours = 24)
     {
         var appointmentId = _nextAppointmentId++;
         _repository.Sessions.Add(new FakeClassDropInSession(
             businessId,
             new ClassSessionRow(
-                appointmentId, serviceId, workerId, startsAt, maxCapacity, kind, status, bookings ?? [])));
+                appointmentId, serviceId, workerId, startsAt, maxCapacity, kind, status, bookings ?? [],
+                ReminderLeadHours: reminderLeadHours)));
         return appointmentId;
     }
 
@@ -638,16 +640,18 @@ public class ClassDropInServiceTests
         Assert.Equal(0, _unitOfWork.RolledBackCount);
     }
 
-    // RF-17 step 4 and D-22: a class booked with less than 24 hours of notice has no future reminder to send, so the
-    // immediate email is the reminder itself. The shared dedup key is what stops the scheduled reminder (T24) from
-    // sending a second email for the same booking. The outbox columns are not nullable, so the service composes the
-    // full notice and the data layer only stores it.
+    // RF-17 step 4 and D-22: a class booked inside the configured anticipation has no future reminder to send, so the
+    // immediate email is the reminder itself. The window is inclusive at its boundary: a booking made exactly on the
+    // lead instant is already inside it, which is what makes the scheduled reminder (T24) its strict complement — the
+    // boundary belongs to the immediate email and to nothing else. The shared dedup key is what stops the scheduled
+    // reminder from sending a second email for the same booking. The outbox columns are not nullable, so the service
+    // composes the full notice and the data layer only stores it.
 
     [Theory]
     [InlineData(23, 59, true)]
-    [InlineData(24, 0, false)]
+    [InlineData(24, 0, true)]
     [InlineData(25, 0, false)]
-    public async Task Book_queues_the_immediate_email_only_within_the_24_hour_window(
+    public async Task Book_queues_the_immediate_email_only_within_the_default_24_hour_lead(
         int hours, int minutes, bool expected)
     {
         var startsAt = _clock.Now.AddHours(hours).AddMinutes(minutes);
@@ -671,6 +675,43 @@ public class ClassDropInServiceTests
         Assert.Equal("ana@example.com", notification.Recipient);
         Assert.False(string.IsNullOrWhiteSpace(notification.Subject));
         Assert.False(string.IsNullOrWhiteSpace(notification.BodyHtml));
+        Assert.Equal($"reminder:booking:{result.Value.BookingId}", notification.DedupKey);
+        Assert.Equal(_clock.Now, notification.CreatedAt);
+        Assert.Equal(1, _unitOfWork.CommitCount);
+    }
+
+    // RF-17 and D-22: the anticipation is the one the business configured, not a constant of the service. The window
+    // is inclusive at its boundary, so the booking made exactly on the lead instant queues the immediate email and the
+    // scheduled reminder (T24) is its strict complement: the two windows are disjoint and cover the class. Both are
+    // checked with a shorter and a longer lead than the schema default, so a service that kept its own 24 h constant
+    // cannot pass either group.
+    [Theory]
+    [InlineData(12, 11, true)]
+    [InlineData(12, 12, true)]
+    [InlineData(12, 13, false)]
+    [InlineData(48, 47, true)]
+    [InlineData(48, 48, true)]
+    [InlineData(48, 49, false)]
+    public async Task Book_uses_the_configured_reminder_lead_with_its_boundary_inside_the_window(
+        int reminderLeadHours, int hoursOfNotice, bool expected)
+    {
+        var appointmentId = AddSessionAt(
+            _clock.Now.AddHours(hoursOfNotice), reminderLeadHours: reminderLeadHours);
+
+        var result = await _service.BookPublicAsync(1, Request(appointmentId));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(expected, result.Value.ImmediateEmailQueued);
+
+        if (!expected)
+        {
+            Assert.Empty(_repository.Notifications);
+            Assert.Equal(0, _repository.EnqueueCallCount);
+            return;
+        }
+
+        var notification = Assert.Single(_repository.Notifications);
+        Assert.Equal(NotificationType.DropInReminder, notification.Type);
         Assert.Equal($"reminder:booking:{result.Value.BookingId}", notification.DedupKey);
         Assert.Equal(_clock.Now, notification.CreatedAt);
         Assert.Equal(1, _unitOfWork.CommitCount);

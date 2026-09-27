@@ -38,6 +38,11 @@ public sealed class FakeClassDropInBooking(int businessId, DropInCancellationSta
 /// filters by calendar day instead of building the half-open <c>StartsAt &lt; (toInclusive + 1 day) 00:00</c> bound,
 /// so a test that passes here proves the service contract, never that bound.
 /// </para>
+/// <para>
+/// A session row is returned exactly as it was registered, <c>ReminderLeadHours</c> included: the anticipation
+/// belongs to the business and the test is what states it, so the fake has no join to emulate. The real read fills
+/// the same field by joining <c>Businesses</c>, and only an opt-in SQL fixture can prove that join.
+/// </para>
 /// </summary>
 public sealed class FakeClassDropInRepository : IClassDropInRepository
 {

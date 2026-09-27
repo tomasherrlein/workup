@@ -18,19 +18,19 @@ namespace WorkUp.BusinessLogic.Classes;
 /// holds a booking of the session before looking at the occupancy, writes the drop-in through the guarded insert, and
 /// commits as a single unit, so the last place goes to exactly one client.
 /// <para>
-/// The immediate email is only queued when the class starts in less than 24 hours (D-22, RF-17 step 4): with more
-/// notice the scheduled reminder owns that email, and with less notice the immediate email is the reminder itself,
-/// sharing its dedup key so neither is sent twice. Both paths queue it, because both resolve a stored recipient: the
-/// validated email of the public form and the email on file of the client the owner picked. The service composes the
-/// whole notice, because the outbox columns are not nullable.
+/// The immediate email is only queued when the class starts inside the anticipation the business configured (D-22,
+/// RF-17 step 4), boundary included: with more notice the scheduled reminder owns that email, and inside the window
+/// the immediate email is the reminder itself, sharing its dedup key so neither is sent twice. That inclusive boundary
+/// is what leaves the scheduled reminder a strict complement — every booking falls on exactly one side of it — instead
+/// of a gap or an overlap at the instant. The anticipation travels on the locked session row, so the decision is taken
+/// without a second read. Both paths queue the email, because both resolve a stored recipient: the validated email of
+/// the public form and the email on file of the client the owner picked. The service composes the whole notice,
+/// because the outbox columns are not nullable.
 /// </para>
 /// </summary>
 public sealed class ClassDropInService(
     IClassDropInRepository repository, IUnitOfWork unitOfWork, IClock clock)
 {
-    /// <summary>Anticipation of the scheduled reminder (RF-17): booked with less notice, there is no future reminder.</summary>
-    private const int ReminderLeadHours = 24;
-
     private const int MaxNameLength = 60;
     private const int MaxEmailLength = 254;
 
@@ -249,10 +249,10 @@ public sealed class ClassDropInService(
     }
 
     /// <summary>
-    /// The core of both booking paths. It reads the clock exactly once: the bookability check, the 24-hour window
-    /// and every created timestamp derive from that single value, so a clock that advances mid-call cannot split
-    /// them. The transaction owns the commit, and returning before it disposes the transaction and rolls back, so a
-    /// rejected booking never leaves a partial write.
+    /// The core of both booking paths. It reads the clock exactly once: the bookability check, the window of the
+    /// configured anticipation and every created timestamp derive from that single value, so a clock that advances
+    /// mid-call cannot split them. The transaction owns the commit, and returning before it disposes the transaction
+    /// and rolls back, so a rejected booking never leaves a partial write.
     /// </summary>
     private async Task<Result<DropInBookingOutcome>> BookAsync(
         int businessId,
@@ -355,9 +355,12 @@ public sealed class ClassDropInService(
         }
 
         // Both paths carry a stored recipient: the validated email of the public form or the email on file of the
-        // client the owner picked. The immediate email is queued only within the window, because with more notice the
-        // scheduled reminder (T24) owns it, and the shared dedup key stops a second send for the same booking.
-        var withinReminderWindow = session.StartsAt - now < TimeSpan.FromHours(ReminderLeadHours);
+        // client the owner picked. The immediate email is queued only within the anticipation the business
+        // configured — read from the locked session row, never a constant of this service — because with more notice
+        // the scheduled reminder (T24) owns it, and the shared dedup key stops a second send for the same booking.
+        // The boundary is inclusive on purpose: the booking made exactly on the lead instant is already inside the
+        // window, so the scheduled reminder starts strictly outside it and the two are complements.
+        var withinReminderWindow = session.StartsAt - now <= TimeSpan.FromHours(session.ReminderLeadHours);
         var immediateEmailQueued = withinReminderWindow;
         if (immediateEmailQueued)
         {

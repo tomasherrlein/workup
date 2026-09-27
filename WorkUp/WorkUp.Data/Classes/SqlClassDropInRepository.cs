@@ -26,11 +26,16 @@ public sealed class SqlClassDropInRepository(DbSession session)
     /// Dated class sessions of the business whose start falls inside the half-open instant range
     /// <c>[@rangeStart, @dayAfterRangeEnd)</c>, optionally narrowed to one service. No status or occupancy filter:
     /// the bookable window and the capacity rule are the caller's business rules, and the read only supplies the
-    /// facts. Ordered by start so the caller can reorder without a second sort key.
+    /// facts. Ordered by start so the caller can reorder without a second sort key. The join to <c>Businesses</c>
+    /// supplies <c>ReminderLeadHours</c>, the anticipation the business configured (RF-17): the row carries it so a
+    /// caller that has to decide between the immediate email and the scheduled reminder never needs a second read.
+    /// The <c>LEFT</c>-free inner join is safe because the business of a session is a required foreign key.
     /// </summary>
     private const string ListSessionsSql = """
-        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.EndsAt, a.MaxCapacity, a.Kind, a.Status
+        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.EndsAt, a.MaxCapacity, a.Kind, a.Status,
+               biz.ReminderLeadHours
           FROM Appointments AS a
+          JOIN Businesses AS biz ON biz.Id = a.BusinessId
          WHERE a.BusinessId = @businessId
            AND a.Kind = @classSession
            AND a.StartsAt >= @rangeStart
@@ -65,11 +70,15 @@ public sealed class SqlClassDropInRepository(DbSession session)
     /// Locks the session row inside the caller's transaction. <c>UPDLOCK, ROWLOCK</c> over the primary key is what
     /// serializes two bookings that compete for the last place: the loser waits here, and by the time it reads the
     /// occupancy below, the winner's booking is committed and visible. The tenant and the kind are part of the
-    /// predicate, so a foreign or individual appointment is simply not found.
+    /// predicate, so a foreign or individual appointment is simply not found. The join to <c>Businesses</c> supplies
+    /// <c>ReminderLeadHours</c>, the anticipation the business configured (RF-17); only the appointment row carries
+    /// the hint, so the business row is read, not write-locked, and concurrent bookings share it compatibly.
     /// </summary>
     private const string LockSessionSql = """
-        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.EndsAt, a.MaxCapacity, a.Kind, a.Status
+        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.EndsAt, a.MaxCapacity, a.Kind, a.Status,
+               biz.ReminderLeadHours
           FROM Appointments AS a WITH (UPDLOCK, ROWLOCK)
+          JOIN Businesses AS biz ON biz.Id = a.BusinessId
          WHERE a.Id = @appointmentId
            AND a.BusinessId = @businessId
            AND a.Kind = @classSession
@@ -88,11 +97,15 @@ public sealed class SqlClassDropInRepository(DbSession session)
     /// <summary>
     /// Upcoming class sessions of the business: <c>Kind = ClassSession</c> with a start strictly after the caller's
     /// instant, suspended ones included because suspending a class cancels nobody and the owner still needs to see
-    /// who is booked in it. Ordered by start, like the offer listing.
+    /// who is booked in it. Ordered by start, like the offer listing. The join to <c>Businesses</c> fills
+    /// <c>ReminderLeadHours</c>, the configured anticipation, so every session row the port returns carries the same
+    /// fact whatever read produced it.
     /// </summary>
     private const string ListUpcomingRosterSessionsSql = """
-        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.EndsAt, a.MaxCapacity, a.Kind, a.Status
+        SELECT a.Id AS AppointmentId, a.ServiceId, a.WorkerId, a.StartsAt, a.EndsAt, a.MaxCapacity, a.Kind, a.Status,
+               biz.ReminderLeadHours
           FROM Appointments AS a
+          JOIN Businesses AS biz ON biz.Id = a.BusinessId
          WHERE a.BusinessId = @businessId
            AND a.Kind = @classSession
            AND a.StartsAt > @fromExclusive
@@ -358,7 +371,8 @@ public sealed class SqlClassDropInRepository(DbSession session)
                 row.Kind,
                 row.Status,
                 bookingsByAppointment.TryGetValue(row.AppointmentId, out var attached) ? attached : [],
-                row.EndsAt))
+                row.EndsAt,
+                row.ReminderLeadHours))
             .ToArray();
     }
 
@@ -396,7 +410,8 @@ public sealed class SqlClassDropInRepository(DbSession session)
             locked.Kind,
             locked.Status,
             bookings.Select(booking => booking.Booking).ToArray(),
-            locked.EndsAt);
+            locked.EndsAt,
+            locked.ReminderLeadHours);
     }
 
     public async Task<IReadOnlyList<ClassSessionRow>> ListUpcomingRosterAsync(
@@ -432,7 +447,8 @@ public sealed class SqlClassDropInRepository(DbSession session)
                 row.Kind,
                 row.Status,
                 dropInsByAppointment.TryGetValue(row.AppointmentId, out var attached) ? attached : [],
-                row.EndsAt))
+                row.EndsAt,
+                row.ReminderLeadHours))
             .ToArray();
     }
 
@@ -699,7 +715,8 @@ public sealed class SqlClassDropInRepository(DbSession session)
         reader.Get<DateTime>("EndsAt"),
         reader.Get<int>("MaxCapacity"),
         reader.GetEnum<AppointmentKind>("Kind"),
-        reader.GetEnum<AppointmentStatus>("Status"));
+        reader.GetEnum<AppointmentStatus>("Status"),
+        reader.Get<int>("ReminderLeadHours"));
 
     /// <summary>
     /// One booking reduced to what the contract keeps: which booking it is, who holds it, the modality, the client's
@@ -742,7 +759,8 @@ public sealed class SqlClassDropInRepository(DbSession session)
         DateTime EndsAt,
         int MaxCapacity,
         AppointmentKind Kind,
-        AppointmentStatus Status);
+        AppointmentStatus Status,
+        int ReminderLeadHours);
 
     private sealed record DatedBooking(int AppointmentId, ClassSessionBooking Booking);
 }

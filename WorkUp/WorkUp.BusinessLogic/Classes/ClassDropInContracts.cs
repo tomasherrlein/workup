@@ -32,6 +32,14 @@ public sealed record ClassSessionBooking(
 /// hand — a test fixture, for instance — does not have to carry it; every storage read fills it, and a caller that
 /// needs the window must treat the default as "no window" rather than as an open one.
 /// </para>
+/// <para>
+/// <see cref="ReminderLeadHours"/> is the anticipation the business configured for its reminders (RF-17), the
+/// boundary that decides whether the booking itself queues an immediate email or the scheduled reminder owns it
+/// (D-22). It belongs to the business, not to the session, but it is carried by this row because the booking decision
+/// happens while the session row is locked and must not need a second read to learn it. The default is the schema's
+/// own default (24 h) so a row built by hand — a test fixture, for instance — keeps the documented behaviour; every
+/// storage read fills it from the business the session belongs to, never from this default.
+/// </para>
 /// </summary>
 public sealed record ClassSessionRow(
     int AppointmentId,
@@ -42,7 +50,8 @@ public sealed record ClassSessionRow(
     AppointmentKind Kind,
     AppointmentStatus Status,
     IReadOnlyList<ClassSessionBooking> Bookings,
-    DateTime EndsAt = default)
+    DateTime EndsAt = default,
+    int ReminderLeadHours = 24)
 {
     public DateOnly Date => DateOnly.FromDateTime(StartsAt);
 
