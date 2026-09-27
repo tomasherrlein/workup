@@ -31,6 +31,7 @@ using WorkUp.Infrastructure.Jobs;
 using WorkUp.Infrastructure.Notifications;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace WorkUp.Infrastructure;
 
@@ -75,7 +76,20 @@ public static class ServiceRegistration
         services.AddSingleton(new DatabaseMigrator(connectionString));
         services.AddScoped(_ => new DbSession(connectionString));
         services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<DbSession>());
-        services.AddSingleton<IClock>(new BusinessClock(TimeZoneInfo.FindSystemTimeZoneById(options.TimeZone)));
+        // The real business clock is the single source of real time, and the simulated clock of the T26 test tools
+        // wraps it. Both are singletons: the installation shares one simulated instant across both demo businesses,
+        // the offset lives only in memory (a restart is the safe reset, there is no SQL or SystemSettings row), and
+        // resolving IClock or the control interface always returns the same instance. The gate is registered from the
+        // already parsed email mode and the boot options; it defines no routes yet and keeps SMTP behaviour untouched.
+        var businessClock = new BusinessClock(TimeZoneInfo.FindSystemTimeZoneById(options.TimeZone));
+        services.AddSingleton(businessClock);
+        services.AddSingleton(sp => new SimulatedBusinessClock(sp.GetRequiredService<BusinessClock>()));
+        services.AddSingleton<IClock>(sp => sp.GetRequiredService<SimulatedBusinessClock>());
+        services.AddSingleton<ISimulatedClockControl>(sp => sp.GetRequiredService<SimulatedBusinessClock>());
+        services.AddSingleton(sp => new DevToolsGate(
+            environment,
+            sp.GetRequiredService<IOptions<WorkUpOptions>>(),
+            emailMode));
         services.AddSingleton<IPasswordHasher, IdentityPasswordHasher>();
         services.AddScoped(sp => new DemoDataSeeder(
             connectionString,
