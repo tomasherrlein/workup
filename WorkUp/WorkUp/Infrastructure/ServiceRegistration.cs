@@ -9,6 +9,7 @@ using WorkUp.BusinessLogic.Payments;
 using WorkUp.BusinessLogic.Reports;
 using WorkUp.BusinessLogic.Staff;
 using WorkUp.BusinessLogic.Expenses;
+using WorkUp.BusinessLogic.Notifications;
 using WorkUp.BusinessLogic.Supplies;
 using WorkUp.BusinessLogic.Scheduling;
 using WorkUp.Data;
@@ -23,8 +24,11 @@ using WorkUp.Data.Payments;
 using WorkUp.Data.Reports;
 using WorkUp.Data.Staff;
 using WorkUp.Data.Expenses;
+using WorkUp.Data.Notifications;
 using WorkUp.Data.Supplies;
 using WorkUp.Data.Scheduling;
+using WorkUp.Infrastructure.Jobs;
+using WorkUp.Infrastructure.Notifications;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Hosting;
 
@@ -53,6 +57,15 @@ public static class ServiceRegistration
         var section = configuration.GetSection("WorkUp");
         var options = section.Get<WorkUpOptions>() ?? new WorkUpOptions();
         PublicAppointmentUrlRules.ValidateBaseUrl(options.PublicBaseUrl, environment.IsDevelopment());
+
+        // Fail fast on the scheduled-email configuration, before the host migrates the database and before the
+        // scheduler can claim a notice, so a typo stops the startup instead of the queue. In Outbox mode the SMTP
+        // block is deliberately never validated: the default configuration has an empty host and retaining notices
+        // must stay valid.
+        var email = options.Email ?? new EmailOptions();
+        var emailMode = OutboxModeParser.Parse(email.Mode);
+        if (emailMode == OutboxMode.Deliver)
+            SmtpEmailSender.ValidateSettings(email);
 
         var connectionString = configuration.GetConnectionString("WorkUp")
             ?? throw new InvalidOperationException("Missing connection string \"WorkUp\" in appsettings.json.");
@@ -200,6 +213,25 @@ public static class ServiceRegistration
         // binding paths. The repository and the service are scoped so they share the request DbSession.
         services.AddScoped<IClientInvitationAcceptanceRepository, SqlClientInvitationAcceptanceRepository>();
         services.AddScoped<ClientInvitationAcceptanceService>();
+
+        // Scheduled jobs and outbox dispatch (T23). The repository, the dispatcher, the outbox job and the runner are
+        // scoped so every tick gets a fresh scope with its own DbSession; the sender is chosen once by the validated
+        // mode, and the hosted worker is registered exactly once. There is intentionally no job-enabled gate: the
+        // default Outbox tick short-circuits before SQL and leaves an existing HTTP smoke inert.
+        services.AddScoped<IOutboxRepository, SqlOutboxRepository>();
+        services.AddScoped(sp => new OutboxDispatchService(
+            sp.GetRequiredService<IOutboxRepository>(),
+            sp.GetRequiredService<IEmailSender>(),
+            sp.GetRequiredService<IUnitOfWork>(),
+            sp.GetRequiredService<IClock>(),
+            emailMode));
+        if (emailMode == OutboxMode.Deliver)
+            services.AddScoped<IEmailSender, SmtpEmailSender>();
+        else
+            services.AddScoped<IEmailSender, RetainEmailSender>();
+        services.AddScoped<IScheduledJob, OutboxScheduledJob>();
+        services.AddScoped<ScheduledJobRunner>();
+        services.AddHostedService<ScheduledJobsHostedService>();
 
         return services;
     }
