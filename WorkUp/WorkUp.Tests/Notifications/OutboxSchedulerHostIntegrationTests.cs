@@ -6,6 +6,9 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using WorkUp.BusinessLogic.Notifications;
 using WorkUp.Data;
 using WorkUp.Domain.Enums;
@@ -266,21 +269,77 @@ public sealed class OutboxSchedulerHostIntegrationTests(ITestOutputHelper output
     /// <summary>
     /// Compares the rendered pages with the committed copy helpers. The bodies are HTML-decoded first, because Razor
     /// encodes non-basic-latin characters, and only the exact sentence of the configured mode may appear.
+    /// <para>
+    /// The generated-email viewer banner is offered by the fail-closed <see cref="DevToolsGate"/>, which needs three
+    /// conditions at once: the <c>Development</c> environment, the <c>Features.DevTools</c> flag and the retaining
+    /// (<c>Outbox</c>) email mode. Both T23 scenarios run in Development with the flag on, so the banner is decided by
+    /// the mode alone: Retain renders the banner with the retaining sentence, and a Development host in Smtp renders no
+    /// banner at all, so neither DevTools sentence may appear. The public recovery and resend pages are outside the
+    /// gate and keep their mode-correct sentence in both modes. The gate is a pure function of those three inputs and
+    /// is pinned without SQL by the unit theory below, so this conditional is not left to a real-host run alone.
+    /// </para>
     /// </summary>
     private static void AssertModeCopy(ScenarioOutcome outcome, OutboxMode mode)
     {
         var other = mode == OutboxMode.Retain ? OutboxMode.Deliver : OutboxMode.Retain;
 
         var home = WebUtility.HtmlDecode(outcome.HomeHtml);
-        Assert.Contains("devtools-banner", home, StringComparison.Ordinal);
-        Assert.Contains(EmailDeliveryCopy.DevToolsBanner(mode), home, StringComparison.Ordinal);
-        Assert.DoesNotContain(EmailDeliveryCopy.DevToolsBanner(other), home, StringComparison.Ordinal);
+        if (mode == OutboxMode.Retain)
+        {
+            // Development, flag on and retaining mode: the gate is open, so the banner and only the retaining
+            // sentence of the two committed copy variants are rendered.
+            Assert.Contains("devtools-banner", home, StringComparison.Ordinal);
+            Assert.Contains(EmailDeliveryCopy.DevToolsBanner(mode), home, StringComparison.Ordinal);
+            Assert.DoesNotContain(EmailDeliveryCopy.DevToolsBanner(other), home, StringComparison.Ordinal);
+        }
+        else
+        {
+            // Development and flag on, but a real SMTP installation: the gate is closed, so there is no banner and
+            // neither committed DevTools sentence may appear on the public page.
+            Assert.DoesNotContain("devtools-banner", home, StringComparison.Ordinal);
+            Assert.DoesNotContain(EmailDeliveryCopy.DevToolsBanner(mode), home, StringComparison.Ordinal);
+            Assert.DoesNotContain(EmailDeliveryCopy.DevToolsBanner(other), home, StringComparison.Ordinal);
+        }
 
         var recover = WebUtility.HtmlDecode(outcome.RecoverHtml);
         Assert.Contains(EmailDeliveryCopy.RecoverPrompt(mode, BusinessName), recover, StringComparison.Ordinal);
 
         var resend = WebUtility.HtmlDecode(outcome.ResendHtml);
         Assert.Contains(EmailDeliveryCopy.ResendPrompt(mode, BusinessName), resend, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Ungated unit pin of the exact condition <see cref="AssertModeCopy"/> relies on: with Development and the
+    /// <c>Features.DevTools</c> flag on, the banner shows only when the validated email mode retains notices. It needs
+    /// no SQL, no host and no keyring, so the mode-driven banner expectation is proven in the default suite instead of
+    /// depending on a human running the opt-in host fixtures.
+    /// </summary>
+    [Theory]
+    [InlineData("Outbox", true)]
+    [InlineData("Smtp", false)]
+    public void Development_with_the_feature_flag_on_renders_the_banner_only_in_the_retaining_mode(
+        string configuredMode, bool bannerExpected)
+    {
+        var options = Options.Create(new WorkUpOptions { Features = new FeatureOptions { DevTools = true } });
+
+        var gate = new DevToolsGate(
+            new StubHostEnvironment { EnvironmentName = Environments.Development },
+            options,
+            OutboxModeParser.Parse(configuredMode));
+
+        Assert.Equal(bannerExpected, gate.IsEnabled);
+    }
+
+    /// <summary>Minimal host environment for the ungated gate pin; it reads nothing and owns no resource.</summary>
+    private sealed class StubHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Development;
+
+        public string ApplicationName { get; set; } = "WorkUp.Tests";
+
+        public string ContentRootPath { get; set; } = Path.GetTempPath();
+
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
     }
 
     // --- HTTP helpers -------------------------------------------------------------------------------------------

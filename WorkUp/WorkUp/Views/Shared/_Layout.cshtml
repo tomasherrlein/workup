@@ -1,4 +1,5 @@
 @inject Microsoft.Extensions.Options.IOptions<WorkUpOptions> Options
+@inject WorkUp.Infrastructure.DevToolsGate DevToolsGate
 @{
     // The email mode is resolved once per request with the same fail-fast parser as the startup, so the banner never
     // claims a send that the configured mode does not perform.
@@ -18,7 +19,11 @@
 </head>
 <body>
     <a class="skip-link" href="#main">Saltar al contenido</a>
-    @if (Options.Value.Features.DevTools)
+    @*
+        The test-version banner is offered only through the fail-closed gate, exactly like the owner link: a production
+        host or an SMTP installation never renders it, even with the raw feature flag on.
+    *@
+    @if (DevToolsGate.IsEnabled)
     {
         <div class="devtools-banner on-frame">@EmailDeliveryCopy.DevToolsBanner(emailMode)</div>
     }

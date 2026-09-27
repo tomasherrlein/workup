@@ -927,3 +927,24 @@ dialog.sheet::backdrop { background: rgba(21, 28, 27, 0.4); }
 .owner-walk-in-form { margin-top: var(--space-md); }
 .owner-walk-in-form .field { max-width: 28rem; }
 .owner-walk-in-form .actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
+
+/* ---------- Generated-email viewer (T26) ---------- */
+
+/*
+  The notice body is a queued email's HTML source shown as escaped plain text. It can carry a single-use private link
+  or a reset token with no spaces at all, so it must wrap inside the page instead of forcing a horizontal scroll on a
+  phone: pre-wrap keeps the author's line breaks and overflow-wrap breaks any long unbreakable token. The surface uses
+  theme tokens only, so the technical text keeps the same readable contrast as the rest of the panel.
+*/
+.notice-body {
+  margin: 0 0 var(--space-md);
+  padding: var(--space-md);
+  max-width: 100%;
+  background: var(--pine-mist);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-control);
+  color: var(--counter-ink);
+  font-size: var(--text-label);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

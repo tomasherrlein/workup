@@ -1,4 +1,4 @@
-@inject Microsoft.Extensions.Options.IOptions<WorkUpOptions> Options
+@inject WorkUp.Infrastructure.DevToolsGate DevToolsGate
 @{
     ViewData["Title"] = "Inicio";
 }
@@ -24,7 +24,12 @@
     </li>
 </ul>
 
-@if (Options.Value.Features.DevTools)
+@*
+    The demo-business section is test tooling, so it is offered only through the fail-closed gate and never through the
+    raw feature flag. The viewer itself is never linked from a public page: its entry point is the owner panel, which
+    requires the owner cookie on top of the gate.
+*@
+@if (DevToolsGate.IsEnabled)
 {
     <section class="section" aria-labelledby="demo-title">
         <div class="section-header"><h2 id="demo-title">Negocios de demostración</h2></div>

@@ -1,0 +1,56 @@
+@using WorkUp.Areas.Owner.Controllers
+@using WorkUp.BusinessLogic.Notifications
+@model NotificationViewerDetail
+@{
+    ViewData["Title"] = "Aviso generado";
+}
+@*
+    Detalle de un aviso generado (T26, supuestos 10 y 11). Solo lectura y solo del negocio con el que se ingresó: el
+    repositorio responde null para un aviso ajeno o inexistente y el controlador lo convierte en el mismo 404. El
+    cuerpo se muestra como texto plano escapado dentro de un <pre>: nunca se interpreta como HTML, nunca se arma un
+    marco embebido ni un enlace a partir de su contenido y nunca se coloca en un atributo o en una URL, porque puede incluir
+    el enlace privado de un turno o un token de un solo uso. La página avisa de eso y no expone el error guardado ni la
+    reclamación del despachador.
+*@
+<div class="page-header">
+    <div>
+        <h1>@Model.Subject</h1>
+        <p>
+            @DevToolsController.TypeLabel(Model.Type) · @DevToolsController.StatusLabel(Model.Status) ·
+            @Formatting.ShortDate(Model.CreatedAt) @Formatting.Time(Model.CreatedAt)
+        </p>
+    </div>
+</div>
+
+<ul class="rows" aria-label="Datos del aviso">
+    <li class="row row-flat">
+        <div class="row-main">
+            <div class="row-title">
+                <strong>Destinatario</strong>
+                <span>@Model.Recipient</span>
+            </div>
+            <div class="row-sub">
+                Intentos: @Model.Attempts
+                @if (Model.SentAt is not null)
+                {
+                    <text> · Enviado: @Formatting.ShortDate(Model.SentAt.Value) @Formatting.Time(Model.SentAt.Value)</text>
+                }
+            </div>
+        </div>
+    </li>
+</ul>
+
+<div class="section">
+    <div class="section-header">
+        <h2>Contenido del aviso</h2>
+    </div>
+    <p class="notice notice-warning" role="note">
+        Advertencia: este contenido puede incluir enlaces privados o tokens de un solo uso, como el enlace de un turno
+        o el de recuperación de contraseña. No lo compartas ni lo pegues fuera de este panel.
+    </p>
+    <pre class="notice-body">@Model.BodyHtml</pre>
+</div>
+
+<div class="actions">
+    <a class="btn" asp-area="Owner" asp-controller="DevTools" asp-action="Index">Volver a los avisos</a>
+</div>

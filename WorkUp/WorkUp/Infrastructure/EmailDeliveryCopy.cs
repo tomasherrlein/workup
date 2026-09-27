@@ -24,12 +24,15 @@ public static class EmailDeliveryCopy
     public static OutboxMode ResolveMode(string? configuredMode) => OutboxModeParser.Parse(configuredMode);
 
     /// <summary>
-    /// Test-version banner. It no longer promises the T26 viewer page, which is not built yet, and it states what the
-    /// mode actually does with a queued notice.
+    /// Test-version banner. Now that the generated-email viewer is built, the retaining mode points the owner to it
+    /// instead of leaving the queued notices unreachable; it still states what the mode actually does with a queued
+    /// notice. The subject is explicit because the same sentence is rendered on the public home page too: only the
+    /// signed-in owner can open Herramientas de prueba, so the copy never promises a visitor a page she cannot reach.
     /// </summary>
     public static string DevToolsBanner(OutboxMode mode) => mode == OutboxMode.Deliver
         ? "Versión de prueba: los emails se encolan para su envío automático; no podemos garantizar que lleguen a la casilla."
-        : "Versión de prueba: el envío automático de emails no está activo; los emails quedan retenidos sin enviarse.";
+        : "Versión de prueba: el envío automático de emails no está activo; los emails quedan retenidos sin enviarse y " +
+          "la dueña puede verlos en Herramientas de prueba.";
 
     /// <summary>Success notice of the individual booking confirmation.</summary>
     public static string BookingConfirmationNotice(OutboxMode mode) => mode == OutboxMode.Deliver

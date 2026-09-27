@@ -273,6 +273,13 @@ public static class ServiceRegistration
         services.AddScoped<ScheduledJobRunner>();
         services.AddHostedService<ScheduledJobsHostedService>();
 
+        // Generated-email viewer of the test tools (T26, plan assumptions 10 and 11). Read-only adapter over the same
+        // Notifications table the dispatcher writes, scoped so it shares the request DbSession. It is registered
+        // unconditionally because the access decision is not its own: the owner-only controller consults the
+        // singleton DevToolsGate above (Development + Features.DevTools + Outbox mode) and answers 404 before this
+        // repository is ever resolved.
+        services.AddScoped<INotificationViewerRepository, SqlNotificationViewerRepository>();
+
         return services;
     }
 
