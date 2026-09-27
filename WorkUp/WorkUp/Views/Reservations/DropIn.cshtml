@@ -1,13 +1,15 @@
 @using WorkUp.ViewModels.Reservations
 @model PublicDropInConfirmationViewModel
+@inject Microsoft.Extensions.Options.IOptions<WorkUpOptions> Options
 @{
     ViewData["Title"] = "Reserva recibida";
+    var emailMode = EmailDeliveryCopy.ResolveMode(Options.Value.Email?.Mode);
 }
 <section class="public-booking" aria-labelledby="drop-in-confirmation-title">
     <h1 id="drop-in-confirmation-title">Recibimos tu reserva</h1>
     <div class="notice notice-success" role="status">
         @Icons.Svg("check")
-        <p>Tu lugar en la clase quedó reservado. Vas a recibir un email con los detalles.</p>
+        <p>@EmailDeliveryCopy.DropInConfirmationNotice(emailMode)</p>
     </div>
 
     <dl class="details public-booking-summary">

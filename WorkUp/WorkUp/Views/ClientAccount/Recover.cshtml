@@ -1,11 +1,15 @@
 @model WorkUp.ViewModels.ClientAccounts.ClientRecoverPasswordViewModel
+@inject Microsoft.Extensions.Options.IOptions<WorkUpOptions> Options
 @{
     ViewData["Title"] = "Recuperar mi contraseña";
     var slug = ViewContext.RouteData.Values["slug"] as string ?? "";
+    // The sentence stays conditional (RF-27) and only the mode decides what it says about the link.
+    var prompt = EmailDeliveryCopy.RecoverPrompt(
+        EmailDeliveryCopy.ResolveMode(Options.Value.Email?.Mode), ViewData["BusinessName"] as string);
 }
 <section class="public-booking" aria-labelledby="account-recover-title">
     <h1 id="account-recover-title">Recuperar mi contraseña</h1>
-    <p>Escribí tu email y, si tenés una cuenta en @ViewData["BusinessName"], te enviamos un enlace para elegir una contraseña nueva.</p>
+    <p>@prompt</p>
 
     <form method="post" action="/r/@slug/cuenta/recuperar" class="form">
         @Html.AntiForgeryToken()

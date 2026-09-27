@@ -1,11 +1,15 @@
 @model WorkUp.ViewModels.ClientAccounts.ClientResendVerificationViewModel
+@inject Microsoft.Extensions.Options.IOptions<WorkUpOptions> Options
 @{
     ViewData["Title"] = "Pedir un enlace nuevo";
     var slug = ViewContext.RouteData.Values["slug"] as string ?? "";
+    // The sentence stays conditional (RF-27) and only the mode decides what it says about the link.
+    var prompt = EmailDeliveryCopy.ResendPrompt(
+        EmailDeliveryCopy.ResolveMode(Options.Value.Email?.Mode), ViewData["BusinessName"] as string);
 }
 <section class="public-booking" aria-labelledby="account-resend-title">
     <h1 id="account-resend-title">Pedir un enlace nuevo</h1>
-    <p>Si tu cuenta todavía no está confirmada en @ViewData["BusinessName"], te enviamos otro enlace de confirmación.</p>
+    <p>@prompt</p>
 
     <form method="post" action="/r/@slug/cuenta/reenviar" class="form">
         @Html.AntiForgeryToken()

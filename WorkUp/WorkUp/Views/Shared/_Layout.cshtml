@@ -1,4 +1,9 @@
 @inject Microsoft.Extensions.Options.IOptions<WorkUpOptions> Options
+@{
+    // The email mode is resolved once per request with the same fail-fast parser as the startup, so the banner never
+    // claims a send that the configured mode does not perform.
+    var emailMode = EmailDeliveryCopy.ResolveMode(Options.Value.Email?.Mode);
+}
 <!DOCTYPE html>
 <html lang="es-AR">
 <head>
@@ -15,7 +20,7 @@
     <a class="skip-link" href="#main">Saltar al contenido</a>
     @if (Options.Value.Features.DevTools)
     {
-        <div class="devtools-banner on-frame">Versión de prueba: los emails no se envían, se ven en Herramientas de prueba.</div>
+        <div class="devtools-banner on-frame">@EmailDeliveryCopy.DevToolsBanner(emailMode)</div>
     }
     @RenderBody()
     <div id="live-region" class="visually-hidden" aria-live="polite"></div>
