@@ -65,7 +65,7 @@ public sealed class EnrollmentControllerTests
         return clientId;
     }
 
-    private Task<int> SeedTariff(int weeklyFrequency, decimal price, int businessId = BusinessId) =>
+    private Task<MembershipPriceInsertResult> SeedTariff(int weeklyFrequency, decimal price, int businessId = BusinessId) =>
         _prices.InsertAsync(new MembershipPrice
         {
             BusinessId = businessId,

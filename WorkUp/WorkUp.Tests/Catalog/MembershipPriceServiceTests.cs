@@ -1,4 +1,5 @@
 using WorkUp.BusinessLogic.Catalog;
+using WorkUp.Domain.Entities;
 using WorkUp.Tests.Fakes;
 
 namespace WorkUp.Tests.Catalog;
@@ -108,5 +109,65 @@ public class MembershipPriceServiceTests
 
         Assert.False(result.Succeeded);
         Assert.Equal("membership_price_not_found", result.Error!.Code);
+    }
+
+    // T27 (set-price idempotente): (BusinessId, WeeklyFrequency) is unique, so two simultaneous sets of the same
+    // frequency can both pass the sequential read and only one insert wins UQ_MembershipPrices_Frequency. The loser must
+    // not turn that lost race into a 500 or a false success: it re-reads the winner's row and applies its own price.
+
+    [Fact]
+    public async Task A_lost_frequency_race_applies_the_requested_price_to_the_winner_row_instead_of_failing()
+    {
+        // A competing set committed frequency 2 at 15000 before this request's read.
+        await _repository.InsertAsync(new MembershipPrice { BusinessId = 1, WeeklyFrequency = 2, Price = 15000m });
+        _repository.LoseFrequencyRaceOnInsert = true;
+
+        var result = await _service.SetPriceAsync(1, 2, 18000m);
+
+        Assert.True(result.Succeeded, result.Error?.Code);
+        Assert.Equal(18000m, result.Value.Price);
+        var stored = await _repository.GetByFrequencyAsync(1, 2);
+        Assert.NotNull(stored);
+        Assert.Equal(18000m, stored!.Price);
+        Assert.Single(_repository.All);
+    }
+
+    [Fact]
+    public async Task A_lost_frequency_race_with_a_missing_re_read_fails_safely_instead_of_reporting_success()
+    {
+        // The lost insert reports AlreadyPresent but no row is stored for the frequency: the re-read is missing, so the
+        // set cannot invent the requested price and must report a failure instead of a success with no row.
+        _repository.LoseFrequencyRaceOnInsert = true;
+
+        var result = await _service.SetPriceAsync(1, 2, 18000m);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("membership_price_conflict", result.Error!.Code);
+        Assert.Empty(_repository.All);
+    }
+
+    [Fact]
+    public async Task An_unexpected_storage_failure_while_setting_a_price_propagates_instead_of_being_swallowed()
+    {
+        var failure = new InvalidOperationException("storage unavailable");
+        _repository.InsertException = failure;
+
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => _service.SetPriceAsync(1, 2, 18000m));
+
+        Assert.Same(failure, thrown);
+    }
+
+    [Fact]
+    public async Task A_lost_frequency_race_with_the_same_requested_price_stays_idempotent_with_one_row()
+    {
+        await _repository.InsertAsync(new MembershipPrice { BusinessId = 1, WeeklyFrequency = 2, Price = 15000m });
+        _repository.LoseFrequencyRaceOnInsert = true;
+
+        var result = await _service.SetPriceAsync(1, 2, 15000m);
+
+        Assert.True(result.Succeeded, result.Error?.Code);
+        Assert.Equal(15000m, result.Value.Price);
+        Assert.Single(_repository.All);
+        Assert.Equal(15000m, _repository.All[0].Price);
     }
 }

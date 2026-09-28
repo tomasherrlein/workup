@@ -29,8 +29,25 @@ public sealed class MembershipPriceService(IMembershipPriceRepository prices)
         }
 
         var created = new MembershipPrice { BusinessId = businessId, WeeklyFrequency = weeklyFrequency, Price = price };
-        created.Id = await prices.InsertAsync(created, ct);
-        return Result<MembershipPrice>.Success(created);
+        var inserted = await prices.InsertAsync(created, ct);
+        if (inserted.IsInserted)
+        {
+            created.Id = inserted.MembershipPriceId;
+            return Result<MembershipPrice>.Success(created);
+        }
+
+        // Lost the check-then-insert window: a competing set committed UQ_MembershipPrices_Frequency first, so the set
+        // is idempotent — re-read that tenant's frequency and apply the requested price to the winner's row instead of
+        // duplicating it or surfacing the unique-key violation as a 500.
+        var winner = await prices.GetByFrequencyAsync(businessId, weeklyFrequency, ct);
+        if (winner is null)
+            return Result<MembershipPrice>.Failure(
+                "membership_price_conflict",
+                "No pudimos guardar el precio del abono. Volvé a intentarlo.");
+
+        winner.Price = price;
+        await prices.UpdateAsync(winner, ct);
+        return Result<MembershipPrice>.Success(winner);
     }
 
     public async Task<Result> RemoveAsync(int businessId, int weeklyFrequency, CancellationToken ct = default)
