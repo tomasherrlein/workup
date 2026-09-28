@@ -8,11 +8,35 @@ public sealed class FakeWorkerRepository : IWorkerRepository
     private readonly List<Worker> _workers = [];
     private readonly Dictionary<int, List<WorkerSchedule>> _schedules = new();
     private readonly Dictionary<int, List<WorkerBreak>> _breaks = new();
+    private readonly List<(int BusinessId, int WorkerId, bool IsActive)> _gridClasses = [];
     private int _nextId = 1;
     private int _nextScheduleId = 1;
     private int _nextBreakId = 1;
 
     public IReadOnlyList<Worker> All => _workers.Select(Attach).ToList();
+
+    /// <summary>
+    /// Test setup only: registers a grid class row in the given business referencing this worker, to exercise the
+    /// archive guard without depending on the Classes module (T04).
+    /// </summary>
+    public void SeedGridClass(int businessId, int workerId, bool isActive = true) =>
+        _gridClasses.Add((businessId, workerId, isActive));
+
+    /// <summary>Test setup only: flips the stored row's <c>IsActive</c>, standing in for a competing archive or reactivation that committed first.</summary>
+    public void SetActive(int workerId, bool isActive)
+    {
+        var index = _workers.FindIndex(w => w.Id == workerId);
+        if (index < 0)
+            throw new InvalidOperationException($"Worker {workerId} was not inserted.");
+        _workers[index].IsActive = isActive;
+    }
+
+    /// <summary>
+    /// Deterministic model of the T27 race window: while set, it runs inside <see cref="LockForGridClassWriteAsync"/>,
+    /// standing in for the competing writer that committed just before this transaction acquired the row lock. The
+    /// validation that follows the lock must therefore see that writer's committed state.
+    /// </summary>
+    public Action<int>? OnLockForGridClassWrite { get; set; }
 
     /// <summary>
     /// Deterministic model of losing the check-then-insert window: while set, the CUIL precheck reports the CUIL free
@@ -51,6 +75,20 @@ public sealed class FakeWorkerRepository : IWorkerRepository
     public Task<bool> CuilExistsAsync(int businessId, string cuil, int? excludingId = null, CancellationToken ct = default) =>
         Task.FromResult(!LoseCuilRaceOnInsert && !LoseCuilRaceOnUpdate
             && _workers.Any(w => w.BusinessId == businessId && w.Cuil == cuil && w.Id != excludingId));
+
+    public Task<bool> HasActiveGridClassAsync(int businessId, int id, CancellationToken ct = default) =>
+        Task.FromResult(_gridClasses.Any(g => g.BusinessId == businessId && g.WorkerId == id && g.IsActive));
+
+    /// <summary>
+    /// No-op row lock for the in-memory model: there is no SQL to serialize. It exists so the fake stays consistent
+    /// with <see cref="IWorkerRepository"/>, and it fires <see cref="OnLockForGridClassWrite"/> so a test can model
+    /// deterministically the competing writer that committed inside the lock window.
+    /// </summary>
+    public Task LockForGridClassWriteAsync(int businessId, int id, CancellationToken ct = default)
+    {
+        OnLockForGridClassWrite?.Invoke(id);
+        return Task.CompletedTask;
+    }
 
     public Task<WorkerInsertResult> InsertAsync(Worker worker, CancellationToken ct = default)
     {

@@ -192,7 +192,7 @@ public sealed class OwnerWalkInControllerTests
         var controller = new DayController(new OwnerDayService(new FakeOwnerDayRepository(), clock),
             new OwnerDayActionsService(new FakeOwnerDayActionsRepository(), new FakeUnitOfWork(), clock), clock,
             new OwnerWalkInService(repo, new FakeUnitOfWork(), clock), new BusinessSettingsService(business),
-            new CatalogService(catalog), new StaffService(staff, new FakeUnitOfWork()),
+            new CatalogService(catalog, new FakeUnitOfWork()), new StaffService(staff, new FakeUnitOfWork()),
             new ClientsService(clients, new FakeClientNoteRepository(), clock))
         {
             ControllerContext = new ControllerContext { HttpContext = context },

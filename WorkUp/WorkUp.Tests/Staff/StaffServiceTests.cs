@@ -1,4 +1,5 @@
 using WorkUp.BusinessLogic.Staff;
+using WorkUp.Domain.Entities;
 using WorkUp.Tests.Fakes;
 
 namespace WorkUp.Tests.Staff;
@@ -379,6 +380,136 @@ public class StaffServiceTests
 
         Assert.False(result.Succeeded);
         Assert.Equal("worker_not_found", result.Error!.Code);
+    }
+
+    // T27 (hueco de T04, RF-03/RF-04): archiving a worker that an active grid class still uses would leave that
+    // class without an active teacher, so the archive is rejected and the stored row keeps IsActive unchanged.
+    [Fact]
+    public async Task Cannot_archive_a_worker_that_an_active_grid_class_still_uses()
+    {
+        var created = await _service.CreateAsync(1, ValidRequest());
+        _repository.SeedGridClass(1, created.Value.Id);
+
+        var result = await _service.SetActiveAsync(1, created.Value.Id, isActive: false);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("worker_has_active_grid_class", result.Error!.Code);
+        Assert.Equal(
+            "Esta trabajadora está en una clase activa de la grilla: para archivarla, primero archivá esa clase.",
+            result.Error.Message);
+        var list = await _service.ListAsync(1);
+        Assert.True(Assert.Single(list).IsActive);
+    }
+
+    [Fact]
+    public async Task An_archived_grid_class_does_not_block_archiving_the_worker()
+    {
+        var created = await _service.CreateAsync(1, ValidRequest());
+        _repository.SeedGridClass(1, created.Value.Id, isActive: false);
+
+        var result = await _service.SetActiveAsync(1, created.Value.Id, isActive: false);
+
+        Assert.True(result.Succeeded);
+        var list = await _service.ListAsync(1);
+        Assert.False(Assert.Single(list).IsActive);
+    }
+
+    [Fact]
+    public async Task A_grid_class_of_another_business_does_not_block_archiving_the_worker()
+    {
+        var created = await _service.CreateAsync(1, ValidRequest());
+        _repository.SeedGridClass(2, created.Value.Id);
+
+        var result = await _service.SetActiveAsync(1, created.Value.Id, isActive: false);
+
+        Assert.True(result.Succeeded);
+        var list = await _service.ListAsync(1);
+        Assert.False(Assert.Single(list).IsActive);
+    }
+
+    [Fact]
+    public async Task Reactivating_a_worker_that_an_active_grid_class_uses_stays_allowed()
+    {
+        var created = await _service.CreateAsync(1, ValidRequest());
+        await _service.SetActiveAsync(1, created.Value.Id, isActive: false);
+        _repository.SeedGridClass(1, created.Value.Id);
+
+        var result = await _service.SetActiveAsync(1, created.Value.Id, isActive: true);
+
+        Assert.True(result.Succeeded);
+        var list = await _service.ListAsync(1);
+        Assert.True(Assert.Single(list).IsActive);
+    }
+
+    // T27 (cierre del hueco de T04): the guard alone is not a race boundary. The archive takes the worker row lock
+    // before the guard and the write, so a competing grid-class create that committed just before the lock is seen by
+    // the guard, and a rejection rolls back without ever touching IsActive.
+    [Fact]
+    public async Task Archiving_sees_a_grid_class_created_by_a_competing_writer_inside_the_lock_window()
+    {
+        var workerId = await SeedWorkerAsync();
+        _repository.OnLockForGridClassWrite = _ => _repository.SeedGridClass(1, workerId);
+
+        var result = await _service.SetActiveAsync(1, workerId, isActive: false);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("worker_has_active_grid_class", result.Error!.Code);
+        Assert.Equal(1, _unitOfWork.BeginCount);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+        Assert.True(Assert.Single(await _service.ListAsync(1)).IsActive);
+    }
+
+    [Fact]
+    public async Task Archiving_an_unused_worker_locks_the_row_then_writes_in_one_transaction()
+    {
+        var workerId = await SeedWorkerAsync();
+        var locked = false;
+        _repository.OnLockForGridClassWrite = _ => locked = true;
+
+        var result = await _service.SetActiveAsync(1, workerId, isActive: false);
+
+        Assert.True(result.Succeeded);
+        Assert.True(locked, "the archive took the row lock before the guard and the write");
+        Assert.Equal(1, _unitOfWork.BeginCount);
+        Assert.Equal(1, _unitOfWork.CommitCount);
+        Assert.Equal(0, _unitOfWork.RolledBackCount);
+        Assert.False(Assert.Single(await _service.ListAsync(1)).IsActive);
+    }
+
+    // Triangulation: an active teacher cannot break a class, so reactivation stays free of the archive lock and of its
+    // transaction. Only the archive branch pays for the serialization it needs.
+    [Fact]
+    public async Task Reactivating_a_worker_does_not_take_the_archive_lock_or_open_a_transaction()
+    {
+        var workerId = await SeedWorkerAsync();
+        await _service.SetActiveAsync(1, workerId, isActive: false);
+        var beginsBefore = _unitOfWork.BeginCount;
+        var lockCount = 0;
+        _repository.OnLockForGridClassWrite = _ => lockCount++;
+
+        var result = await _service.SetActiveAsync(1, workerId, isActive: true);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(0, lockCount);
+        Assert.Equal(beginsBefore, _unitOfWork.BeginCount);
+        Assert.True(Assert.Single(await _service.ListAsync(1)).IsActive);
+    }
+
+    /// <summary>Seeds the stored row directly, so the transaction counters of the archive tests start at zero.</summary>
+    private async Task<int> SeedWorkerAsync()
+    {
+        var inserted = await _repository.InsertAsync(new Worker
+        {
+            BusinessId = 1,
+            FirstName = "Marina",
+            LastName = "Gómez",
+            Phone = "1122334455",
+            Cuil = "20-30405060-7",
+            IsActive = true
+        });
+        Assert.True(inserted.IsInserted);
+        return inserted.WorkerId;
     }
 
     [Fact]

@@ -430,6 +430,12 @@ public sealed class StaffUniqueRaceSqlIntegrationTests(ITestOutputHelper output)
         public Task<bool> CuilExistsAsync(int businessId, string cuil, int? excludingId = null, CancellationToken ct = default) =>
             Task.FromResult(false);
 
+        public Task<bool> HasActiveGridClassAsync(int businessId, int id, CancellationToken ct = default) =>
+            inner.HasActiveGridClassAsync(businessId, id, ct);
+
+        public Task LockForGridClassWriteAsync(int businessId, int id, CancellationToken ct = default) =>
+            inner.LockForGridClassWriteAsync(businessId, id, ct);
+
         public Task<WorkerInsertResult> InsertAsync(Worker worker, CancellationToken ct = default) =>
             inner.InsertAsync(worker, ct);
 

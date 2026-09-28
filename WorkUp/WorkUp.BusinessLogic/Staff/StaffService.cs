@@ -21,6 +21,8 @@ public sealed record UpdateWorkerRequest(string FirstName, string LastName, stri
 /// <summary>
 /// Trabajadoras: worker profile plus its weekly schedule and breaks (RF-03). A worker is archived, never deleted, so
 /// its history is kept and it stops being offered for new bookings (T04, T08). Workers never sign in (D-06).
+/// T27: a worker still used by an active grid class cannot be archived, because that would leave the class without
+/// an active teacher; the class has to be archived first.
 /// </summary>
 public sealed class StaffService(IWorkerRepository workers, IUnitOfWork unitOfWork)
 {
@@ -131,12 +133,48 @@ public sealed class StaffService(IWorkerRepository workers, IUnitOfWork unitOfWo
 
     public async Task<Result> SetActiveAsync(int businessId, int id, bool isActive, CancellationToken ct = default)
     {
+        // T27: an active teacher cannot break a class, so reactivation stays free and opens no transaction.
+        if (isActive)
+            return await ReactivateAsync(businessId, id, ct);
+
+        return await ArchiveAsync(businessId, id, ct);
+    }
+
+    private async Task<Result> ReactivateAsync(int businessId, int id, CancellationToken ct)
+    {
         var worker = await workers.GetByIdAsync(businessId, id, ct);
         if (worker is null)
             return Result.Failure("worker_not_found", "No encontramos esa trabajadora.");
 
-        worker.IsActive = isActive;
+        worker.IsActive = true;
         await workers.UpdateAsync(worker, ct);
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// T27: an active grid class must keep an active teacher, so archiving the teacher it depends on is rejected and
+    /// the owner archives the class first. The archive takes the worker row lock inside one transaction before the
+    /// guard and the write: a grid-class create or reactivation that committed just before the lock is seen by the
+    /// guard, and one that arrives after this commit finds the archived teacher and is rejected. A rejection leaves
+    /// <c>IsActive</c> untouched and rolls the transaction back.
+    /// </summary>
+    private async Task<Result> ArchiveAsync(int businessId, int id, CancellationToken ct)
+    {
+        await using var tx = await unitOfWork.BeginAsync(ct: ct);
+        await workers.LockForGridClassWriteAsync(businessId, id, ct);
+
+        var worker = await workers.GetByIdAsync(businessId, id, ct);
+        if (worker is null)
+            return Result.Failure("worker_not_found", "No encontramos esa trabajadora.");
+
+        if (await workers.HasActiveGridClassAsync(businessId, id, ct))
+            return Result.Failure(
+                "worker_has_active_grid_class",
+                "Esta trabajadora está en una clase activa de la grilla: para archivarla, primero archivá esa clase.");
+
+        worker.IsActive = false;
+        await workers.UpdateAsync(worker, ct);
+        await tx.CommitAsync(ct);
         return Result.Success();
     }
 

@@ -20,14 +20,24 @@ public sealed record UpdateGridClassRequest(int ServiceId, int WorkerId, DayOfWe
 /// referencing sessions already generated from it. Changing its weekday, start time or class type - or archiving it
 /// - is blocked while a student holds a fixed-class assignment valid today or later, because that would silently
 /// move a paying student's slot without going through the guided change (T17); only the teacher can be swapped in
-/// that case, and only to one who is actually available.
+/// that case, and only to one who is actually available. Reactivating it (T27) re-checks that its class type and
+/// teacher are still active, so a class that cannot be used never comes back to life silently.
 /// </summary>
 public sealed class ClassesService(
     IGridClassRepository gridClasses,
     IServiceRepository services,
     IWorkerRepository workers,
+    IUnitOfWork unitOfWork,
     IClock clock)
 {
+    /// <summary>The class type of a grid class must be an active class-type service (RF-04); shared with reactivation (T27).</summary>
+    private static readonly BusinessError InvalidService =
+        new("grid_class_invalid_service", "Elegí un tipo de clase activo con cupo mayor a 1.", "ServiceId");
+
+    /// <summary>The teacher of a grid class must be active (RF-04); shared with reactivation (T27).</summary>
+    private static readonly BusinessError InvalidWorker =
+        new("grid_class_invalid_worker", "Elegí una profesora activa.", "WorkerId");
+
     public Task<List<GridClass>> ListAsync(int businessId, CancellationToken ct = default) =>
         gridClasses.ListByBusinessAsync(businessId, ct);
 
@@ -48,6 +58,9 @@ public sealed class ClassesService(
 
     public async Task<Result<GridClass>> CreateAsync(int businessId, CreateGridClassRequest request, CancellationToken ct = default)
     {
+        await using var tx = await unitOfWork.BeginAsync(ct: ct);
+        await LockGridClassResourcesAsync(businessId, request.ServiceId, request.WorkerId, ct);
+
         var error = await ValidateAsync(businessId, request.ServiceId, request.WorkerId, request.DayOfWeek, request.StartTime, excludingId: null, ct);
         if (error is not null)
             return Result<GridClass>.Failure(error);
@@ -62,11 +75,15 @@ public sealed class ClassesService(
             IsActive = true
         };
         gridClass.Id = await gridClasses.InsertAsync(gridClass, ct);
+        await tx.CommitAsync(ct);
         return Result<GridClass>.Success(gridClass);
     }
 
     public async Task<Result> UpdateAsync(int businessId, int id, UpdateGridClassRequest request, CancellationToken ct = default)
     {
+        await using var tx = await unitOfWork.BeginAsync(ct: ct);
+        await LockGridClassResourcesAsync(businessId, request.ServiceId, request.WorkerId, ct);
+
         var existing = await gridClasses.GetByIdAsync(businessId, id, ct);
         if (existing is null)
             return Result.Failure("grid_class_not_found", "No encontramos esa clase.");
@@ -89,34 +106,87 @@ public sealed class ClassesService(
         existing.DayOfWeek = request.DayOfWeek;
         existing.StartTime = request.StartTime;
         await gridClasses.UpdateAsync(existing, ct);
+        await tx.CommitAsync(ct);
         return Result.Success();
     }
 
     public async Task<Result> SetActiveAsync(int businessId, int id, bool isActive, CancellationToken ct = default)
     {
+        // T27: archiving a class removes the dependency and cannot break the invariant, so it takes no resource lock
+        // and opens no transaction; reactivating it can, so it does.
+        if (!isActive)
+            return await ArchiveAsync(businessId, id, ct);
+
+        return await ReactivateAsync(businessId, id, ct);
+    }
+
+    private async Task<Result> ArchiveAsync(int businessId, int id, CancellationToken ct)
+    {
         var existing = await gridClasses.GetByIdAsync(businessId, id, ct);
         if (existing is null)
             return Result.Failure("grid_class_not_found", "No encontramos esa clase.");
 
-        if (!isActive && await gridClasses.HasActiveFixedAssignmentAsync(businessId, id, clock.Today, ct))
+        if (await gridClasses.HasActiveFixedAssignmentAsync(businessId, id, clock.Today, ct))
             return Result.Failure(
                 "grid_class_locked_by_fixed_students",
                 "Esta clase tiene alumnas con horario fijo vigente: para archivarla primero cambiá su horario fijo.");
 
-        existing.IsActive = isActive;
+        existing.IsActive = false;
         await gridClasses.UpdateAsync(existing, ct);
         return Result.Success();
+    }
+
+    /// <summary>
+    /// T27: reactivating a class can break the invariant, so it takes the class type's row lock and then the
+    /// teacher's - the same deterministic order every grid-class writer uses - and re-checks that both are still
+    /// active inside one transaction. Only those two resources are checked: the schedule and overlap rules of
+    /// <see cref="ValidateAsync"/> are about the shape of a new or edited class, not about whether an existing one may
+    /// come back. A rejection returns before the write, leaving <c>IsActive</c> untouched.
+    /// </summary>
+    private async Task<Result> ReactivateAsync(int businessId, int id, CancellationToken ct)
+    {
+        await using var tx = await unitOfWork.BeginAsync(ct: ct);
+
+        var existing = await gridClasses.GetByIdAsync(businessId, id, ct);
+        if (existing is null)
+            return Result.Failure("grid_class_not_found", "No encontramos esa clase.");
+
+        await LockGridClassResourcesAsync(businessId, existing.ServiceId, existing.WorkerId, ct);
+
+        var service = await services.GetByIdAsync(businessId, existing.ServiceId, ct);
+        if (service is null || !service.IsActive || service.MaxCapacity <= 1)
+            return Result.Failure(InvalidService);
+
+        var worker = await workers.GetByIdAsync(businessId, existing.WorkerId, ct);
+        if (worker is null || !worker.IsActive)
+            return Result.Failure(InvalidWorker);
+
+        existing.IsActive = true;
+        await gridClasses.UpdateAsync(existing, ct);
+        await tx.CommitAsync(ct);
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// Locks the class type and then the teacher, always in that fixed order, so every grid-class writer acquires the
+    /// pair identically and no cycle can form between two of them. The archive paths take a single resource each, so
+    /// they cannot close a cycle either.
+    /// </summary>
+    private async Task LockGridClassResourcesAsync(int businessId, int serviceId, int workerId, CancellationToken ct)
+    {
+        await services.LockForGridClassWriteAsync(businessId, serviceId, ct);
+        await workers.LockForGridClassWriteAsync(businessId, workerId, ct);
     }
 
     private async Task<BusinessError?> ValidateAsync(int businessId, int serviceId, int workerId, DayOfWeek day, TimeOnly startTime, int? excludingId, CancellationToken ct)
     {
         var service = await services.GetByIdAsync(businessId, serviceId, ct);
         if (service is null || !service.IsActive || service.MaxCapacity <= 1)
-            return new BusinessError("grid_class_invalid_service", "Elegí un tipo de clase activo con cupo mayor a 1.", "ServiceId");
+            return InvalidService;
 
         var worker = await workers.GetByIdAsync(businessId, workerId, ct);
         if (worker is null || !worker.IsActive)
-            return new BusinessError("grid_class_invalid_worker", "Elegí una profesora activa.", "WorkerId");
+            return InvalidWorker;
 
         var end = startTime.AddMinutes(service.DurationMinutes, out var wrappedDays);
         if (wrappedDays != 0 || !WeeklyScheduleRules.IsAvailable(worker.Schedules, worker.Breaks, day, startTime, end))

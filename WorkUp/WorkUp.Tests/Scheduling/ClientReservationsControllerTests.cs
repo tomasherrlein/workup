@@ -715,7 +715,7 @@ public sealed class ClientReservationsControllerTests
                 PublicRepository, new FakeUnitOfWork(), new TestLinkTokenProtector(),
                 new TestAppointmentUrlBuilder(), Clock);
             var dropInService = new ClassDropInService(DropIns, new FakeUnitOfWork(), Clock);
-            var catalogService = new CatalogService(Services);
+            var catalogService = new CatalogService(Services, new FakeUnitOfWork());
             var staffService = new StaffService(Workers, new FakeUnitOfWork());
 
             var routeData = new RouteData();

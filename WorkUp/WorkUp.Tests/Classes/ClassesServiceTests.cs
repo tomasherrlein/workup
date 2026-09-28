@@ -16,11 +16,12 @@ public class ClassesServiceTests
     private readonly FakeServiceRepository _services = new();
     private readonly FakeWorkerRepository _workers = new();
     private readonly FakeClock _clock = new();
+    private readonly FakeUnitOfWork _unitOfWork = new();
     private readonly ClassesService _service;
 
     public ClassesServiceTests()
     {
-        _service = new ClassesService(_gridClasses, _services, _workers, _clock);
+        _service = new ClassesService(_gridClasses, _services, _workers, _unitOfWork, _clock);
     }
 
     private async Task<int> SeedService(int businessId = 1, int durationMinutes = 60, int maxCapacity = 12, bool isActive = true)
@@ -326,6 +327,200 @@ public class ClassesServiceTests
         Assert.True(result.Succeeded);
         var list = await _service.ListAsync(1);
         Assert.True(list.Single().IsActive);
+    }
+
+    // T27 (hueco de T04, RF-04): an active grid class must always point at an active class type and an active
+    // teacher. Reactivation re-checks both with the existing creation error codes, so a class nobody can use cannot
+    // come back to life silently, and a rejection never flips IsActive.
+    [Fact]
+    public async Task Cannot_reactivate_an_archived_grid_class_whose_service_is_archived()
+    {
+        var serviceId = await SeedService();
+        var workerId = await SeedWorker(1, DayOfWeek.Tuesday, 17, 21);
+        var created = await _service.CreateAsync(1, Request(serviceId, workerId, DayOfWeek.Tuesday, 18));
+        await _service.SetActiveAsync(1, created.Value.Id, isActive: false);
+        await ArchiveService(serviceId);
+
+        var result = await _service.SetActiveAsync(1, created.Value.Id, isActive: true);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("grid_class_invalid_service", result.Error!.Code);
+        var stored = await _service.GetAsync(1, created.Value.Id);
+        Assert.False(stored!.IsActive);
+    }
+
+    [Fact]
+    public async Task Cannot_reactivate_an_archived_grid_class_whose_worker_is_archived()
+    {
+        var serviceId = await SeedService();
+        var workerId = await SeedWorker(1, DayOfWeek.Tuesday, 17, 21);
+        var created = await _service.CreateAsync(1, Request(serviceId, workerId, DayOfWeek.Tuesday, 18));
+        await _service.SetActiveAsync(1, created.Value.Id, isActive: false);
+        await ArchiveWorker(workerId);
+
+        var result = await _service.SetActiveAsync(1, created.Value.Id, isActive: true);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("grid_class_invalid_worker", result.Error!.Code);
+        var stored = await _service.GetAsync(1, created.Value.Id);
+        Assert.False(stored!.IsActive);
+    }
+
+    // Triangulation: the guard judges the activation request, not the previous stored state, so an already active
+    // class whose class type was archived out of band cannot be "confirmed" as active either.
+    [Fact]
+    public async Task Reactivating_an_already_active_grid_class_whose_service_is_archived_is_rejected_and_changes_nothing()
+    {
+        var serviceId = await SeedService();
+        var workerId = await SeedWorker(1, DayOfWeek.Tuesday, 17, 21);
+        var created = await _service.CreateAsync(1, Request(serviceId, workerId, DayOfWeek.Tuesday, 18));
+        await ArchiveService(serviceId);
+
+        var result = await _service.SetActiveAsync(1, created.Value.Id, isActive: true);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("grid_class_invalid_service", result.Error!.Code);
+        var stored = await _service.GetAsync(1, created.Value.Id);
+        Assert.True(stored!.IsActive);
+    }
+
+    [Fact]
+    public async Task Reactivates_an_archived_grid_class_once_its_service_and_worker_are_active_again()
+    {
+        var serviceId = await SeedService();
+        var workerId = await SeedWorker(1, DayOfWeek.Tuesday, 17, 21);
+        var created = await _service.CreateAsync(1, Request(serviceId, workerId, DayOfWeek.Tuesday, 18));
+        await _service.SetActiveAsync(1, created.Value.Id, isActive: false);
+        await ArchiveService(serviceId);
+        await ArchiveWorker(workerId);
+        await RestoreService(serviceId);
+        await RestoreWorker(workerId);
+
+        var result = await _service.SetActiveAsync(1, created.Value.Id, isActive: true);
+
+        Assert.True(result.Succeeded);
+        var stored = await _service.GetAsync(1, created.Value.Id);
+        Assert.True(stored!.IsActive);
+    }
+
+    // T27 (cierre del hueco de T04): creating, editing and reactivating a grid class take the class type's row lock
+    // and then the teacher's, always in that order, and validate inside the same transaction before the write. A
+    // competing archive that committed inside either lock window is therefore seen by the validation.
+    [Fact]
+    public async Task Creating_locks_the_class_type_then_the_teacher_before_validating()
+    {
+        var serviceId = await SeedService();
+        var workerId = await SeedWorker(1, DayOfWeek.Tuesday, 17, 21);
+        var order = new List<string>();
+        _services.OnLockForGridClassWrite = _ => order.Add("service");
+        _workers.OnLockForGridClassWrite = _ => order.Add("worker");
+
+        var result = await _service.CreateAsync(1, Request(serviceId, workerId, DayOfWeek.Tuesday, 18));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(["service", "worker"], order);
+        Assert.Equal(1, _unitOfWork.BeginCount);
+        Assert.Equal(1, _unitOfWork.CommitCount);
+    }
+
+    [Fact]
+    public async Task Creating_sees_a_teacher_archived_by_a_competing_writer_inside_the_lock_window()
+    {
+        var serviceId = await SeedService();
+        var workerId = await SeedWorker(1, DayOfWeek.Tuesday, 17, 21);
+        _workers.OnLockForGridClassWrite = id => _workers.SetActive(id, isActive: false);
+
+        var result = await _service.CreateAsync(1, Request(serviceId, workerId, DayOfWeek.Tuesday, 18));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("grid_class_invalid_worker", result.Error!.Code);
+        Assert.Equal(1, _unitOfWork.BeginCount);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+        Assert.Empty(await _service.ListAsync(1));
+    }
+
+    [Fact]
+    public async Task Reactivating_sees_a_class_type_archived_by_a_competing_writer_inside_the_lock_window()
+    {
+        var serviceId = await SeedService();
+        var workerId = await SeedWorker(1, DayOfWeek.Tuesday, 17, 21);
+        var created = await _service.CreateAsync(1, Request(serviceId, workerId, DayOfWeek.Tuesday, 18));
+        await _service.SetActiveAsync(1, created.Value.Id, isActive: false);
+        var beginsBefore = _unitOfWork.BeginCount;
+        var commitsBefore = _unitOfWork.CommitCount;
+        _services.OnLockForGridClassWrite = id => _services.SetActive(id, isActive: false);
+
+        var result = await _service.SetActiveAsync(1, created.Value.Id, isActive: true);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("grid_class_invalid_service", result.Error!.Code);
+        Assert.Equal(beginsBefore + 1, _unitOfWork.BeginCount);
+        Assert.Equal(commitsBefore, _unitOfWork.CommitCount);
+        Assert.False((await _service.GetAsync(1, created.Value.Id))!.IsActive);
+    }
+
+    [Fact]
+    public async Task Updating_locks_the_new_class_type_then_the_new_teacher_in_the_same_order()
+    {
+        var serviceAId = await SeedService(durationMinutes: 60);
+        var serviceBId = await SeedService(durationMinutes: 60);
+        var workerAId = await SeedWorker(1, DayOfWeek.Tuesday, 17, 21);
+        var workerBId = await SeedWorker(1, DayOfWeek.Tuesday, 17, 21, cuil: "27123456784");
+        var created = await _service.CreateAsync(1, Request(serviceAId, workerAId, DayOfWeek.Tuesday, 18));
+        var order = new List<string>();
+        _services.OnLockForGridClassWrite = id => order.Add($"service:{id}");
+        _workers.OnLockForGridClassWrite = id => order.Add($"worker:{id}");
+
+        var result = await _service.UpdateAsync(
+            1, created.Value.Id, new UpdateGridClassRequest(serviceBId, workerBId, DayOfWeek.Tuesday, new TimeOnly(18, 0)));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal([$"service:{serviceBId}", $"worker:{workerBId}"], order);
+    }
+
+    // Triangulation: archiving a class removes the dependency, so it needs no resource lock and opens no transaction;
+    // only the writers that can break the invariant pay for the serialization.
+    [Fact]
+    public async Task Archiving_a_grid_class_takes_no_resource_lock_and_opens_no_transaction()
+    {
+        var serviceId = await SeedService();
+        var workerId = await SeedWorker(1, DayOfWeek.Tuesday, 17, 21);
+        var created = await _service.CreateAsync(1, Request(serviceId, workerId, DayOfWeek.Tuesday, 18));
+        var beginsBefore = _unitOfWork.BeginCount;
+        var lockCount = 0;
+        _services.OnLockForGridClassWrite = _ => lockCount++;
+        _workers.OnLockForGridClassWrite = _ => lockCount++;
+
+        var result = await _service.SetActiveAsync(1, created.Value.Id, isActive: false);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(0, lockCount);
+        Assert.Equal(beginsBefore, _unitOfWork.BeginCount);
+    }
+
+    /// <summary>Setup only: flips a stored service's <c>IsActive</c> outside this service, as the Tarifario archive would.</summary>
+    private Task ArchiveService(int serviceId) => SetServiceActive(serviceId, isActive: false);
+
+    private Task RestoreService(int serviceId) => SetServiceActive(serviceId, isActive: true);
+
+    private async Task SetServiceActive(int serviceId, bool isActive)
+    {
+        var service = (await _services.GetByIdAsync(1, serviceId))!;
+        service.IsActive = isActive;
+        await _services.UpdateAsync(service);
+    }
+
+    /// <summary>Setup only: flips a stored worker's <c>IsActive</c> outside this service, as the Trabajadoras archive would.</summary>
+    private Task ArchiveWorker(int workerId) => SetWorkerActive(workerId, isActive: false);
+
+    private Task RestoreWorker(int workerId) => SetWorkerActive(workerId, isActive: true);
+
+    private async Task SetWorkerActive(int workerId, bool isActive)
+    {
+        var worker = (await _workers.GetByIdAsync(1, workerId))!;
+        worker.IsActive = isActive;
+        await _workers.UpdateAsync(worker);
     }
 
     [Fact]

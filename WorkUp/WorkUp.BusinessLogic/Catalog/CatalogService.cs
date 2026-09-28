@@ -1,3 +1,4 @@
+using WorkUp.BusinessLogic.Abstractions;
 using WorkUp.BusinessLogic.Common;
 using WorkUp.Domain.Entities;
 
@@ -10,8 +11,10 @@ public sealed record UpdateServiceRequest(string Name, decimal Price, int Durati
 /// <summary>
 /// Tarifario: services and class types (RF-02). Max capacity 1 is an individual turn; greater than 1 is a class.
 /// A service is archived, never deleted, so its history is kept and it stops being offered for new bookings.
+/// T27: a service still used by an active grid class cannot be archived, because that would leave the class without
+/// a valid class type; the class has to be archived first.
 /// </summary>
-public sealed class CatalogService(IServiceRepository services)
+public sealed class CatalogService(IServiceRepository services, IUnitOfWork unitOfWork)
 {
     public Task<List<Service>> ListAsync(int businessId, CancellationToken ct = default) =>
         services.ListByBusinessAsync(businessId, ct);
@@ -96,12 +99,48 @@ public sealed class CatalogService(IServiceRepository services)
 
     public async Task<Result> SetActiveAsync(int businessId, int id, bool isActive, CancellationToken ct = default)
     {
+        // T27: an active class type cannot break a class, so reactivation stays free and opens no transaction.
+        if (isActive)
+            return await ReactivateAsync(businessId, id, ct);
+
+        return await ArchiveAsync(businessId, id, ct);
+    }
+
+    private async Task<Result> ReactivateAsync(int businessId, int id, CancellationToken ct)
+    {
         var service = await services.GetByIdAsync(businessId, id, ct);
         if (service is null)
             return Result.Failure("service_not_found", "No encontramos ese servicio.");
 
-        service.IsActive = isActive;
+        service.IsActive = true;
         await services.UpdateAsync(service, ct);
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// T27: an active grid class must keep an active class type, so archiving the type it depends on is rejected and
+    /// the owner archives the class first. The archive takes the service row lock inside one transaction before the
+    /// guard and the write: a grid-class create or reactivation that committed just before the lock is seen by the
+    /// guard, and one that arrives after this commit finds the archived service and is rejected. A rejection leaves
+    /// <c>IsActive</c> untouched and rolls the transaction back.
+    /// </summary>
+    private async Task<Result> ArchiveAsync(int businessId, int id, CancellationToken ct)
+    {
+        await using var tx = await unitOfWork.BeginAsync(ct: ct);
+        await services.LockForGridClassWriteAsync(businessId, id, ct);
+
+        var service = await services.GetByIdAsync(businessId, id, ct);
+        if (service is null)
+            return Result.Failure("service_not_found", "No encontramos ese servicio.");
+
+        if (await services.HasActiveGridClassAsync(businessId, id, ct))
+            return Result.Failure(
+                "service_has_active_grid_class",
+                "Este servicio lo usa una clase activa de la grilla: para archivarlo, primero archivá esa clase.");
+
+        service.IsActive = false;
+        await services.UpdateAsync(service, ct);
+        await tx.CommitAsync(ct);
         return Result.Success();
     }
 }

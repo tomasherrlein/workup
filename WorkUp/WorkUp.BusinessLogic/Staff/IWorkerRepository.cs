@@ -78,4 +78,29 @@ public interface IWorkerRepository
 
     /// <summary>Replaces every break of the worker with the given list.</summary>
     Task ReplaceBreaksAsync(int workerId, List<WorkerBreak> breaks, CancellationToken ct = default);
+
+    /// <summary>
+    /// Whether an active grid class of this business still references the worker (RF-04, T27). Archiving a worker
+    /// that an active class still uses would leave that class without an active teacher, so the archive is rejected
+    /// with <c>worker_has_active_grid_class</c> and the stored row keeps its <c>IsActive</c>.
+    /// <para>
+    /// This read is only half of the T27 guard: on its own it is not a race boundary, because a grid class created
+    /// between the check and the archive commit could still land with an archived teacher. The callers pair it with
+    /// <see cref="LockForGridClassWriteAsync"/> inside one transaction, so the check and the write no longer straddle
+    /// a concurrent grid-class write.
+    /// </para>
+    /// </summary>
+    Task<bool> HasActiveGridClassAsync(int businessId, int id, CancellationToken ct = default);
+
+    /// <summary>
+    /// Takes the tenant-bound update lock on the worker row and holds it until the current transaction ends (T27).
+    /// Both writers that can break the invariant take it: a grid-class create, update or reactivation - always
+    /// after the class type's own lock, so the order is the same everywhere - before validating the teacher and
+    /// writing, and the archive of the worker before its <see cref="HasActiveGridClassAsync"/> guard and its
+    /// <c>IsActive</c> update. Two such writers therefore serialize on this row.
+    /// <para>
+    /// Must be called inside a transaction: outside one the lock is released with the statement and protects nothing.
+    /// </para>
+    /// </summary>
+    Task LockForGridClassWriteAsync(int businessId, int id, CancellationToken ct = default);
 }

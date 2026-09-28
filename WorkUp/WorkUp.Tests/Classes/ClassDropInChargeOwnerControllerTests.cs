@@ -496,8 +496,8 @@ public sealed class ClassDropInChargeOwnerControllerTests
                 "test"))
         };
         var controller = new ClassesController(
-            new ClassesService(gridClasses, services, workers, clock),
-            new CatalogService(services),
+            new ClassesService(gridClasses, services, workers, unitOfWork, clock),
+            new CatalogService(services, unitOfWork),
             new StaffService(workers, unitOfWork),
             new WeekGenerationService(weeks, unitOfWork, clock),
             clock,

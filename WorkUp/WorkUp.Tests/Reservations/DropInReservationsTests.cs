@@ -257,7 +257,7 @@ public sealed class DropInReservationsTests
                 bookingService,
                 dropInService,
                 businesses,
-                new CatalogService(serviceRepository),
+                new CatalogService(serviceRepository, unitOfWork),
                 new StaffService(workerRepository, unitOfWork),
                 clock)
             {

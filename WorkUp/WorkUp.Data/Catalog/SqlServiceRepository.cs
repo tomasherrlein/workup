@@ -78,6 +78,32 @@ public sealed class SqlServiceRepository(DbSession session) : SqlRepositoryBase(
             p => p.AddValue("@businessId", businessId),
             ct) > 0;
 
+    // T27: the guard reads the active grid classes of this business only. BusinessId is part of the predicate even
+    // though Id is a global identity, because GridClasses only constrains ServiceId by foreign key: a row whose
+    // BusinessId belongs to another tenant must never block this tenant's archive.
+    public async Task<bool> HasActiveGridClassAsync(int businessId, int id, CancellationToken ct = default) =>
+        await ScalarAsync<int>(
+            """
+            SELECT CASE WHEN EXISTS (
+                     SELECT 1 FROM GridClasses
+                      WHERE BusinessId = @businessId AND ServiceId = @id AND IsActive = 1
+                   ) THEN 1 ELSE 0 END
+            """,
+            p => p.AddValue("@businessId", businessId).AddValue("@id", id),
+            ct) > 0;
+
+    // T27: the update lock is what turns the guard above into a race boundary. UPDLOCK is held until the transaction
+    // ends, so a grid-class write and the archive of the service serialize on this row: whichever gets here first
+    // commits before the other reads, and the loser sees the committed state instead of the stale one. ROWLOCK keeps
+    // the lock on the row. BusinessId is part of the predicate even though Id is a global identity, so a row of
+    // another tenant is never locked (nor blocked) by this tenant's write; a missing row simply locks nothing and the
+    // caller's own read reports the not-found outcome.
+    public async Task LockForGridClassWriteAsync(int businessId, int id, CancellationToken ct = default) =>
+        await ScalarAsync<int?>(
+            "SELECT Id FROM Services WITH (UPDLOCK, ROWLOCK) WHERE BusinessId = @businessId AND Id = @id",
+            p => p.AddValue("@businessId", businessId).AddValue("@id", id),
+            ct);
+
     private static Service Map(SqlDataReader reader) => new()
     {
         Id = reader.Get<int>("Id"),

@@ -690,8 +690,8 @@ public sealed class EnrollmentControllerTests
             new EnrollmentService(_repository, _prices, _unitOfWork, _clock),
             _clock,
             _repository,
-            new ClassesService(_gridClasses, _services, _workers, _clock),
-            new CatalogService(_services),
+            new ClassesService(_gridClasses, _services, _workers, _unitOfWork, _clock),
+            new CatalogService(_services, _unitOfWork),
             new StaffService(_workers, _unitOfWork),
             new ClientsService(_clients, new FakeClientNoteRepository(), _clock),
             _prices)
