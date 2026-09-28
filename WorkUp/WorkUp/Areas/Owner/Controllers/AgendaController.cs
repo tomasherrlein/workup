@@ -84,7 +84,10 @@ public sealed class AgendaController(
         }
 
         if (!ModelState.IsValid)
+        {
+            LiftHiddenSelectorErrors();
             return await BuildRescheduleFormWithOptionsAsync(booking, input, ct);
+        }
 
         var startsAt = input.Date!.Value.ToDateTime(input.StartTime!.Value);
         var attempt = await rescheduleService.RescheduleIndividualAsync(
@@ -138,7 +141,10 @@ public sealed class AgendaController(
     {
         SetPrivateResponseHeaders();
         if (!ModelState.IsValid)
+        {
+            LiftHiddenSelectorErrors();
             return await BuildBookingFormAsync(input, ct);
+        }
 
         var attempt = await bookingActionsService.BookIndividualAsync(BusinessId, new BookIndividualAppointmentRequest(
             input.ServiceId!.Value,
@@ -190,6 +196,36 @@ public sealed class AgendaController(
 
     private const string RescheduleErrorMessage =
         "No se pudo reprogramar el turno. El horario puede haberse ocupado o el turno ya no admite cambios. Revisá los datos e intentá de nuevo.";
+
+    /// <summary>
+    /// Hidden selectors of the owner forms, paired with the Spanish message the summary shows when their own error
+    /// would otherwise stay invisible. NewBooking.cshtml renders Input.ServiceId, Input.WorkerId and Input.Date as
+    /// hidden inputs with no <c>asp-validation-for</c> span, and Reschedule.cshtml does the same with Input.Date;
+    /// both summaries are <c>ModelOnly</c>, which renders only the entries keyed by <see cref="string.Empty"/>.
+    /// A binder or validator failure on one of them therefore answered HTTP 200 with a rebuilt form, no write and no
+    /// message at all (T27 D1). Input.StartTime is deliberately absent: it is a visible select with its own span, so
+    /// its message is already on screen and must not be duplicated.
+    /// </summary>
+    private static readonly (string Field, string Message)[] HiddenSelectorFields =
+    [
+        ("Input.ServiceId", "Elegí un servicio."),
+        ("Input.WorkerId", "Elegí una trabajadora."),
+        ("Input.Date", "Elegí un día.")
+    ];
+
+    /// <summary>
+    /// Copies the error of a hidden selector into a model-level entry so the <c>ModelOnly</c> summary renders and
+    /// announces it. Only these keys are lifted, so a message that already has a visible span is never mirrored into
+    /// the summary and the summary carries no tenant, booking or client identity. The field entry itself is kept for
+    /// the binder and for any future span. The lifted text is a fixed Spanish message, never the framework's own
+    /// binder text, which is not localised.
+    /// </summary>
+    private void LiftHiddenSelectorErrors()
+    {
+        foreach (var (field, message) in HiddenSelectorFields)
+            if (ModelState.TryGetValue(field, out var entry) && entry.Errors.Count > 0)
+                ModelState.AddModelError(string.Empty, message);
+    }
 
     /// <summary>
     /// Business-rule codes safe to show verbatim: they describe an invalid choice on the owner's own booking, not

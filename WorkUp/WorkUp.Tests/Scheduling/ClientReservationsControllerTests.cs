@@ -396,6 +396,56 @@ public sealed class ClientReservationsControllerTests
         Assert.Empty(fixture.PublicRepository.Bookings);
     }
 
+    // --- T27 D1: an error on the hidden day must still reach the ModelOnly summary -------------------------------
+
+    [Fact]
+    public async Task The_individual_booking_of_an_omitted_hidden_day_reports_a_model_level_error_and_writes_nothing()
+    {
+        var fixture = await Fixture.CreateAsync();
+        fixture.AddCatalogService(fixture.IndividualServiceId, "Corte", maxCapacity: 1);
+        fixture.AddCatalogWorker(fixture.WorkerId, "Ana Pérez");
+        var controller = fixture.CreateController();
+        var input = new ClientIndividualReservationInput
+        {
+            ServiceId = fixture.IndividualServiceId, WorkerId = fixture.WorkerId, Date = null, StartTime = SlotTime
+        };
+
+        var view = Assert.IsType<ViewResult>(await controller.BookTurno(input, CancellationToken.None));
+
+        Assert.Equal("Individual", view.ViewName);
+        // Individual.cshtml renders the hidden Input.Date without a span and a ModelOnly summary, so the field message
+        // the controller adds is invisible unless a model-level companion carries the same text into the summary.
+        Assert.True(
+            view.ViewData.ModelState.ContainsKey(string.Empty),
+            "El resumen ModelOnly necesita una entrada con clave string.Empty para mostrar el error del día oculto.");
+        Assert.Contains(view.ViewData.ModelState[string.Empty]!.Errors, error => error.ErrorMessage == "Elegí un día.");
+        // Both entries coexist: the field key stays for the binder and any future span.
+        Assert.Contains(view.ViewData.ModelState["Input.Date"]!.Errors, error => error.ErrorMessage == "Elegí un día.");
+        Assert.Empty(fixture.PublicRepository.Bookings);
+        Assert.Empty(fixture.PublicRepository.Appointments);
+    }
+
+    [Fact]
+    public async Task The_individual_booking_of_an_omitted_time_keeps_its_visible_field_error_only()
+    {
+        var fixture = await Fixture.CreateAsync();
+        fixture.AddCatalogService(fixture.IndividualServiceId, "Corte", maxCapacity: 1);
+        fixture.AddCatalogWorker(fixture.WorkerId, "Ana Pérez");
+        var controller = fixture.CreateController();
+        var input = new ClientIndividualReservationInput
+        {
+            ServiceId = fixture.IndividualServiceId, WorkerId = fixture.WorkerId, Date = SlotDate, StartTime = null
+        };
+
+        var view = Assert.IsType<ViewResult>(await controller.BookTurno(input, CancellationToken.None));
+
+        // The time has its own asp-validation-for span, so nothing is mirrored into the summary.
+        Assert.Contains(view.ViewData.ModelState["Input.StartTime"]!.Errors,
+            error => error.ErrorMessage == "Elegí un horario.");
+        Assert.False(view.ViewData.ModelState.ContainsKey(string.Empty));
+        Assert.Empty(fixture.PublicRepository.Bookings);
+    }
+
     // --- The drop-in class list ----------------------------------------------------------------------------------
 
     [Fact]

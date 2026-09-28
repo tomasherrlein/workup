@@ -896,6 +896,56 @@ public sealed class ClientAppointmentsControllerTests
         Assert.Empty(reschedule.Notifications);
     }
 
+    // --- T27 D1: an error on the hidden day must still reach the ModelOnly summary -------------------------------
+
+    [Fact]
+    public async Task Reschedule_post_of_an_omitted_hidden_day_reports_a_model_level_error_and_writes_nothing()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, ReschedulableRow(BookingId, RescheduleOriginalStart));
+        var reschedule = ReschedulableRepository(BusinessId, ClientId, BookingId);
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository, reschedule: reschedule);
+
+        var view = Assert.IsType<ViewResult>(await controller.Reschedule(
+            BookingId,
+            new ClientRescheduleInput { Date = null, StartTime = TimeOnly.FromDateTime(RescheduleNewStart) },
+            CancellationToken.None));
+
+        Assert.Equal("Reschedule", view.ViewName);
+        // Reschedule.cshtml renders the hidden Input.Date without a span and a ModelOnly summary, so the field message
+        // is invisible unless a model-level companion carries the same text into the summary.
+        Assert.True(
+            view.ViewData.ModelState.ContainsKey(string.Empty),
+            "El resumen ModelOnly necesita una entrada con clave string.Empty para mostrar el error del día oculto.");
+        Assert.Contains(view.ViewData.ModelState[string.Empty]!.Errors, error => error.ErrorMessage == "Elegí un día.");
+        Assert.Contains(view.ViewData.ModelState["Input.Date"]!.Errors, error => error.ErrorMessage == "Elegí un día.");
+        // An incomplete choice never reaches the save: the own turn and the outbox stay untouched.
+        Assert.DoesNotContain("apply-reschedule", reschedule.Calls);
+        Assert.Equal(RescheduleOriginalStart, reschedule.Booking!.StartsAt);
+        Assert.Empty(reschedule.Notifications);
+    }
+
+    [Fact]
+    public async Task Reschedule_post_of_an_omitted_time_keeps_its_visible_field_error_only()
+    {
+        var repository = new RecordingClientPanelRepository();
+        repository.Add(BusinessId, ClientId, ReschedulableRow(BookingId, RescheduleOriginalStart));
+        var reschedule = ReschedulableRepository(BusinessId, ClientId, BookingId);
+        var controller = CreateController(Slug, ClientPrincipal(BusinessId, ClientId, Slug), repository, reschedule: reschedule);
+
+        var view = Assert.IsType<ViewResult>(await controller.Reschedule(
+            BookingId,
+            new ClientRescheduleInput { Date = DateOnly.FromDateTime(RescheduleNewStart), StartTime = null },
+            CancellationToken.None));
+
+        // The time has its own asp-validation-for span, so nothing is mirrored into the summary.
+        Assert.Contains(view.ViewData.ModelState["Input.StartTime"]!.Errors,
+            error => error.ErrorMessage == "Elegí un horario.");
+        Assert.False(view.ViewData.ModelState.ContainsKey(string.Empty));
+        Assert.DoesNotContain("apply-reschedule", reschedule.Calls);
+        Assert.Equal(RescheduleOriginalStart, reschedule.Booking!.StartsAt);
+    }
+
     [Fact]
     public void The_reschedule_get_takes_only_the_booking_and_the_optional_day()
     {

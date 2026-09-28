@@ -112,6 +112,7 @@ public sealed class ClientAppointmentsController(
                 ModelState.AddModelError("Input.Date", "Elegí un día.");
             if (input.StartTime is null)
                 ModelState.AddModelError("Input.StartTime", "Elegí un horario.");
+            LiftHiddenSelectorErrors();
             return await RerenderRescheduleAsync(bookingId, input, ct);
         }
 
@@ -194,6 +195,31 @@ public sealed class ClientAppointmentsController(
     private const string RescheduleErrorMessage =
         "No se pudo reprogramar el turno. El horario puede haberse ocupado o el turno ya no admite cambios. " +
         "Revisá los datos e intentá de nuevo.";
+
+    /// <summary>
+    /// Hidden selectors of this form, paired with the Spanish message the summary shows when their own error would
+    /// otherwise stay invisible. Reschedule.cshtml renders Input.Date as a hidden input and gives a span only to
+    /// Input.StartTime, while the summary is <c>ModelOnly</c>: it renders only the entries keyed by
+    /// <see cref="string.Empty"/>. An omitted day therefore answered HTTP 200 with the rebuilt form, no write and no
+    /// message at all (T27 D1).
+    /// </summary>
+    private static readonly (string Field, string Message)[] HiddenSelectorFields =
+    [
+        ("Input.Date", "Elegí un día.")
+    ];
+
+    /// <summary>
+    /// Copies the error of a hidden selector into a model-level entry so the <c>ModelOnly</c> summary renders and
+    /// announces it. Only the hidden key is lifted, so the visible Input.StartTime span keeps its own message and
+    /// nothing is mirrored field by field into the summary. The field entry is preserved for the binder and the
+    /// message is a fixed Spanish string, never the framework's own non-localised binder text.
+    /// </summary>
+    private void LiftHiddenSelectorErrors()
+    {
+        foreach (var (field, message) in HiddenSelectorFields)
+            if (ModelState.TryGetValue(field, out var entry) && entry.Errors.Count > 0)
+                ModelState.AddModelError(string.Empty, message);
+    }
 
     /// <summary>
     /// Business-rule codes safe to show verbatim: they describe an invalid choice on the session's own reservation,

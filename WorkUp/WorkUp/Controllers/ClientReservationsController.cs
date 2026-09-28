@@ -60,6 +60,32 @@ public sealed class ClientReservationsController(
     /// <summary>Stable code of a chosen start that was taken between the read and the save.</summary>
     private const string SlotUnavailableCode = "slot_unavailable";
 
+    /// <summary>
+    /// Hidden selectors of this form, paired with the Spanish message the summary shows when their own error would
+    /// otherwise stay invisible. Individual.cshtml renders Input.ServiceId, Input.WorkerId and Input.Date as hidden
+    /// inputs and gives a span only to Input.StartTime, while the summary is <c>ModelOnly</c>: it renders only the
+    /// entries keyed by <see cref="string.Empty"/>. An error on the day therefore answered HTTP 200 with the rebuilt
+    /// form and no message at all (T27 D1). The hidden service and worker are non-nullable ids, so an omitted one
+    /// never reaches ModelState and is deliberately not listed here.
+    /// </summary>
+    private static readonly (string Field, string Message)[] HiddenSelectorFields =
+    [
+        ("Input.Date", "Elegí un día.")
+    ];
+
+    /// <summary>
+    /// Copies the error of a hidden selector into a model-level entry so the <c>ModelOnly</c> summary renders and
+    /// announces it. Only the hidden key is lifted, so the visible Input.StartTime span keeps its own message and
+    /// nothing is mirrored field by field into the summary. The field entry is preserved for the binder and the
+    /// message is a fixed Spanish string, never the framework's own non-localised binder text.
+    /// </summary>
+    private void LiftHiddenSelectorErrors()
+    {
+        foreach (var (field, message) in HiddenSelectorFields)
+            if (ModelState.TryGetValue(field, out var entry) && entry.Errors.Count > 0)
+                ModelState.AddModelError(string.Empty, message);
+    }
+
     // --- Individual turn ----------------------------------------------------------------------------------------
 
     /// <summary>
@@ -113,6 +139,7 @@ public sealed class ClientReservationsController(
                 ModelState.AddModelError("Input.Date", "Elegí un día.");
             if (input.StartTime is null)
                 ModelState.AddModelError("Input.StartTime", "Elegí un horario.");
+            LiftHiddenSelectorErrors();
             return await RerenderIndividualAsync(catalog, input, ct);
         }
 
