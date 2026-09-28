@@ -217,8 +217,8 @@ public sealed class DropInReservationsTests
         public static async Task<Fixture> CreateAsync()
         {
             var businesses = new FakeBusinessRepository();
-            var businessId = await businesses.InsertAsync(new Business { Name = "Estudio", Slug = "estudio" });
-            var otherBusinessId = await businesses.InsertAsync(new Business { Name = "Otro", Slug = "otro" });
+            var businessId = (await businesses.InsertAsync(new Business { Name = "Estudio", Slug = "estudio" })).BusinessId;
+            var otherBusinessId = (await businesses.InsertAsync(new Business { Name = "Otro", Slug = "otro" })).BusinessId;
 
             var serviceRepository = new FakeServiceRepository();
             var serviceId = await serviceRepository.InsertAsync(new Service

@@ -74,6 +74,38 @@ public class BusinessSettingsServiceTests
         Assert.Equal("slug_taken", result.Error!.Code);
     }
 
+    // The edit can pass the sequential slug precheck and still lose the update to a competing edit. It is reported as
+    // the same slug_taken field error the precheck produces, never as an unhandled exception, and storage is not
+    // changed; the SQL fixture proves the row keeps its previous slug.
+    [Fact]
+    public async Task Fails_when_the_new_slug_is_lost_to_a_concurrent_edit()
+    {
+        await SeedBusinessAsync("peluqueria-de-marina");
+        var other = new Business { Name = "Estudio de Lucía", Slug = "estudio-lucia", ContactPhone = "222", CreatedAt = DateTime.UtcNow };
+        await _businesses.InsertAsync(other);
+        _businesses.LoseSlugRaceOnUpdate = true;
+
+        var result = await _service.UpdateAsync(_businessId, ValidRequest("estudio-lucia"));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("slug_taken", result.Error!.Code);
+        Assert.Equal(nameof(UpdateBusinessSettingsRequest.Slug), result.Error.Field);
+    }
+
+    // Only the known unique-slug collision is a business outcome. Any other storage failure must keep propagating
+    // instead of being disguised as slug_taken.
+    [Fact]
+    public async Task Propagates_an_unexpected_storage_failure_instead_of_reporting_a_slug_conflict()
+    {
+        await SeedBusinessAsync();
+        _businesses.UpdateFailure = new InvalidOperationException("connection reset");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _service.UpdateAsync(_businessId, ValidRequest("peluqueria-de-marina")));
+
+        Assert.Equal("connection reset", exception.Message);
+    }
+
     [Fact]
     public async Task Fails_when_the_new_slug_has_an_invalid_format()
     {

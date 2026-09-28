@@ -10,6 +10,13 @@ public sealed class FakeOwnerAccountRepository : IOwnerAccountRepository
 
     public IReadOnlyList<OwnerAccount> All => _accounts;
 
+    /// <summary>
+    /// Deterministic model of losing the check-then-insert window: while set, the username precheck reports the
+    /// username free and the insert meets the unique key because a competing registration committed after the check,
+    /// so it reports <see cref="OwnerAccountInsertResult.UsernameTaken"/> and writes nothing.
+    /// </summary>
+    public bool LoseUsernameRaceOnInsert { get; set; }
+
     public Task<OwnerAccount?> GetByUsernameAsync(string username, CancellationToken ct = default) =>
         Task.FromResult(_accounts.SingleOrDefault(a => a.Username == username));
 
@@ -19,10 +26,13 @@ public sealed class FakeOwnerAccountRepository : IOwnerAccountRepository
     public Task<bool> UsernameExistsAsync(string username, CancellationToken ct = default) =>
         Task.FromResult(_accounts.Any(a => a.Username == username));
 
-    public Task<int> InsertAsync(OwnerAccount account, CancellationToken ct = default)
+    public Task<OwnerAccountInsertResult> InsertAsync(OwnerAccount account, CancellationToken ct = default)
     {
+        if (LoseUsernameRaceOnInsert)
+            return Task.FromResult(OwnerAccountInsertResult.UsernameTaken());
+
         account.Id = _nextId++;
         _accounts.Add(account);
-        return Task.FromResult(account.Id);
+        return Task.FromResult(OwnerAccountInsertResult.Inserted(account.Id));
     }
 }

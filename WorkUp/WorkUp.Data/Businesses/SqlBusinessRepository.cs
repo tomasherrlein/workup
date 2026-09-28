@@ -25,47 +25,80 @@ public sealed class SqlBusinessRepository(DbSession session) : SqlRepositoryBase
             p => p.AddValue("@slug", slug).AddValue("@excludingId", excludingId),
             ct) > 0;
 
-    public Task<int> InsertAsync(Business business, CancellationToken ct = default) =>
-        InsertAsync(
-            """
-            INSERT INTO Businesses (Name, Slug, ContactPhone, NotificationEmail, AllowsWalkIns, ReminderLeadHours,
-                                     DailySummaryTime, StockReviewEveryDays, CreatedAt)
-            OUTPUT INSERTED.Id
-            VALUES (@name, @slug, @contactPhone, @notificationEmail, @allowsWalkIns, @reminderLeadHours,
-                    @dailySummaryTime, @stockReviewEveryDays, @createdAt)
-            """,
-            p => p
-                .AddValue("@name", business.Name)
-                .AddValue("@slug", business.Slug)
-                .AddValue("@contactPhone", business.ContactPhone)
-                .AddValue("@notificationEmail", business.NotificationEmail)
-                .AddValue("@allowsWalkIns", business.AllowsWalkIns)
-                .AddValue("@reminderLeadHours", business.ReminderLeadHours)
-                .AddValue("@dailySummaryTime", business.DailySummaryTime)
-                .AddValue("@stockReviewEveryDays", business.StockReviewEveryDays)
-                .AddValue("@createdAt", business.CreatedAt),
-            ct);
+    public async Task<BusinessInsertResult> InsertAsync(Business business, CancellationToken ct = default)
+    {
+        try
+        {
+            var id = await InsertAsync(
+                """
+                INSERT INTO Businesses (Name, Slug, ContactPhone, NotificationEmail, AllowsWalkIns, ReminderLeadHours,
+                                         DailySummaryTime, StockReviewEveryDays, CreatedAt)
+                OUTPUT INSERTED.Id
+                VALUES (@name, @slug, @contactPhone, @notificationEmail, @allowsWalkIns, @reminderLeadHours,
+                        @dailySummaryTime, @stockReviewEveryDays, @createdAt)
+                """,
+                p => p
+                    .AddValue("@name", business.Name)
+                    .AddValue("@slug", business.Slug)
+                    .AddValue("@contactPhone", business.ContactPhone)
+                    .AddValue("@notificationEmail", business.NotificationEmail)
+                    .AddValue("@allowsWalkIns", business.AllowsWalkIns)
+                    .AddValue("@reminderLeadHours", business.ReminderLeadHours)
+                    .AddValue("@dailySummaryTime", business.DailySummaryTime)
+                    .AddValue("@stockReviewEveryDays", business.StockReviewEveryDays)
+                    .AddValue("@createdAt", business.CreatedAt),
+                ct);
+            return BusinessInsertResult.Inserted(id);
+        }
+        catch (SqlException exception) when (IsSlugDuplicate(exception))
+        {
+            // The unique slug is the last race guard: losing the check-then-insert window is an expected business
+            // outcome, never an unhandled 500.
+            return BusinessInsertResult.SlugTaken();
+        }
+    }
 
-    public Task UpdateAsync(Business business, CancellationToken ct = default) =>
-        ExecuteAsync(
-            """
-            UPDATE Businesses
-               SET Name = @name, Slug = @slug, ContactPhone = @contactPhone, NotificationEmail = @notificationEmail,
-                   AllowsWalkIns = @allowsWalkIns, ReminderLeadHours = @reminderLeadHours,
-                   DailySummaryTime = @dailySummaryTime, StockReviewEveryDays = @stockReviewEveryDays
-             WHERE Id = @id
-            """,
-            p => p
-                .AddValue("@id", business.Id)
-                .AddValue("@name", business.Name)
-                .AddValue("@slug", business.Slug)
-                .AddValue("@contactPhone", business.ContactPhone)
-                .AddValue("@notificationEmail", business.NotificationEmail)
-                .AddValue("@allowsWalkIns", business.AllowsWalkIns)
-                .AddValue("@reminderLeadHours", business.ReminderLeadHours)
-                .AddValue("@dailySummaryTime", business.DailySummaryTime)
-                .AddValue("@stockReviewEveryDays", business.StockReviewEveryDays),
-            ct);
+    public async Task<BusinessUpdateResult> UpdateAsync(Business business, CancellationToken ct = default)
+    {
+        try
+        {
+            await ExecuteAsync(
+                """
+                UPDATE Businesses
+                   SET Name = @name, Slug = @slug, ContactPhone = @contactPhone, NotificationEmail = @notificationEmail,
+                       AllowsWalkIns = @allowsWalkIns, ReminderLeadHours = @reminderLeadHours,
+                       DailySummaryTime = @dailySummaryTime, StockReviewEveryDays = @stockReviewEveryDays
+                 WHERE Id = @id
+                """,
+                p => p
+                    .AddValue("@id", business.Id)
+                    .AddValue("@name", business.Name)
+                    .AddValue("@slug", business.Slug)
+                    .AddValue("@contactPhone", business.ContactPhone)
+                    .AddValue("@notificationEmail", business.NotificationEmail)
+                    .AddValue("@allowsWalkIns", business.AllowsWalkIns)
+                    .AddValue("@reminderLeadHours", business.ReminderLeadHours)
+                    .AddValue("@dailySummaryTime", business.DailySummaryTime)
+                    .AddValue("@stockReviewEveryDays", business.StockReviewEveryDays),
+                ct);
+            return BusinessUpdateResult.Updated();
+        }
+        catch (SqlException exception) when (IsSlugDuplicate(exception))
+        {
+            // The single statement is atomic: a rejected rename leaves the stored row unchanged.
+            return BusinessUpdateResult.SlugTaken();
+        }
+    }
+
+    /// <summary>
+    /// Only <c>UQ_Businesses_Slug</c> is a benign lost race. Any other unique violation — or any other
+    /// <see cref="SqlException"/> — propagates instead of being swallowed as a slug conflict.
+    /// </summary>
+    private static bool IsSlugDuplicate(SqlException exception) =>
+        exception.Errors
+            .Cast<SqlError>()
+            .Any(error => error.Number is 2601 or 2627
+                && error.Message.Contains("UQ_Businesses_Slug", StringComparison.Ordinal));
 
     private static Business Map(SqlDataReader reader) => new()
     {

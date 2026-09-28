@@ -105,7 +105,7 @@ public sealed class AgendaControllerBookingTests
     private static async Task<Fixture> CreateFixtureAsync()
     {
         var businesses = new FakeBusinessRepository();
-        var businessId = await businesses.InsertAsync(new Business { Name = "Salón", Slug = "salon" });
+        var businessId = (await businesses.InsertAsync(new Business { Name = "Salón", Slug = "salon" })).BusinessId;
         var browseRepository = new FakeOwnerBookingBrowseRepository();
         browseRepository.Services.Add(new Service
         {

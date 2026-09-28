@@ -58,7 +58,12 @@ public sealed class BusinessSettingsService(IBusinessRepository businesses)
         business.DailySummaryTime = request.DailySummaryTime;
         business.StockReviewEveryDays = request.StockReviewEveryDays;
 
-        await businesses.UpdateAsync(business, ct);
+        // The sequential precheck can be lost to a competing edit that commits in between; the repository reports that
+        // lost race as an outcome and leaves the stored row unchanged, so it maps to the same field error as the precheck.
+        var updated = await businesses.UpdateAsync(business, ct);
+        if (!updated.IsUpdated)
+            return Result<Business>.Failure("slug_taken", "Ese slug ya está en uso. Elegí otro.", nameof(request.Slug));
+
         return Result<Business>.Success(business);
     }
 }

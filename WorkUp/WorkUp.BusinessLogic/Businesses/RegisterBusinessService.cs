@@ -66,7 +66,14 @@ public sealed class RegisterBusinessService(
         };
 
         await using var tx = await unitOfWork.BeginAsync(ct: ct);
-        business.Id = await businesses.InsertAsync(business, ct);
+
+        // The sequential precheck can be lost to a competing registration that commits in between; the repository
+        // reports that lost race as an outcome. Returning here disposes the unit of work without committing, so no
+        // business row survives the failure.
+        var insertedBusiness = await businesses.InsertAsync(business, ct);
+        if (!insertedBusiness.IsInserted)
+            return Result<OwnerSession>.Failure("slug_taken", "Ese slug ya está en uso. Elegí otro.", nameof(request.Slug));
+        business.Id = insertedBusiness.BusinessId;
 
         var owner = new OwnerAccount
         {
@@ -75,7 +82,14 @@ public sealed class RegisterBusinessService(
             PasswordHash = passwordHasher.Hash(request.Password),
             CreatedAt = now
         };
-        owner.Id = await ownerAccounts.InsertAsync(owner, ct);
+
+        // The same lost window on the username. The early return rolls the transaction back, so the business inserted
+        // moments earlier is never committed without its owner.
+        var insertedOwner = await ownerAccounts.InsertAsync(owner, ct);
+        if (!insertedOwner.IsInserted)
+            return Result<OwnerSession>.Failure("username_taken", "Ese usuario ya está en uso. Elegí otro.", nameof(request.Username));
+        owner.Id = insertedOwner.OwnerAccountId;
+
         await tx.CommitAsync(ct);
 
         return Result<OwnerSession>.Success(new OwnerSession(business.Id, business.Name, business.Slug, owner.Id, owner.Username));

@@ -133,4 +133,38 @@ public class RegisterBusinessServiceTests
         Assert.Empty(_ownerAccounts.All);
         Assert.Equal(0, _unitOfWork.CommitCount);
     }
+
+    // A registration can pass the sequential slug precheck and still lose the insert to a competing request that
+    // committed in between. That lost race is an expected outcome with a user-facing message, never a 500.
+    [Fact]
+    public async Task Fails_when_the_slug_is_lost_to_a_concurrent_registration()
+    {
+        _businesses.LoseSlugRaceOnInsert = true;
+
+        var result = await _service.RegisterAsync(ValidRequest());
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("slug_taken", result.Error!.Code);
+        Assert.Equal(nameof(RegisterBusinessRequest.Slug), result.Error.Field);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
+    // A registration can pass the sequential username precheck and still lose the owner insert. The unit of work must
+    // then be rolled back, so the business inserted moments earlier is not committed as an orphan without an owner;
+    // the SQL fixture proves the row is absent from storage.
+    [Fact]
+    public async Task Fails_when_the_username_is_lost_to_a_concurrent_registration_and_rolls_the_business_back()
+    {
+        _ownerAccounts.LoseUsernameRaceOnInsert = true;
+
+        var result = await _service.RegisterAsync(ValidRequest());
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("username_taken", result.Error!.Code);
+        Assert.Equal(nameof(RegisterBusinessRequest.Username), result.Error.Field);
+        Assert.Empty(_ownerAccounts.All);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
 }

@@ -149,7 +149,7 @@ public sealed class OwnerBookingActionsTests
     public async Task Owner_booking_form_uses_public_tenant_scoped_active_projections_after_matching_the_owner_business()
     {
         var businesses = new FakeBusinessRepository();
-        var businessId = await businesses.InsertAsync(new Business { Name = "Salón", Slug = "salon" });
+        var businessId = (await businesses.InsertAsync(new Business { Name = "Salón", Slug = "salon" })).BusinessId;
         var browseRepository = new FakeOwnerBookingBrowseRepository();
         browseRepository.Services.Add(new Service
         {
@@ -192,7 +192,7 @@ public sealed class OwnerBookingActionsTests
     public async Task Owner_booking_form_rejects_a_slug_that_resolves_to_another_business_before_worker_lookup()
     {
         var businesses = new FakeBusinessRepository();
-        var ownerBusinessId = await businesses.InsertAsync(new Business { Name = "Dueña", Slug = "duena" });
+        var ownerBusinessId = (await businesses.InsertAsync(new Business { Name = "Dueña", Slug = "duena" })).BusinessId;
         await businesses.InsertAsync(new Business { Name = "Otro", Slug = "otro" });
         var browseRepository = new FakeOwnerBookingBrowseRepository();
         var publicRepository = new FakeBookingRepository();
@@ -277,7 +277,7 @@ public sealed class OwnerBookingActionsTests
     private static async Task<(OwnerBookingActionsService Service, int BusinessId)> CreateFormFixtureAsync(DayOfWeek? workingDay)
     {
         var businesses = new FakeBusinessRepository();
-        var businessId = await businesses.InsertAsync(new Business { Name = "Salón", Slug = "salon" });
+        var businessId = (await businesses.InsertAsync(new Business { Name = "Salón", Slug = "salon" })).BusinessId;
         var browseRepository = new FakeOwnerBookingBrowseRepository();
         browseRepository.Services.Add(new Service
         {

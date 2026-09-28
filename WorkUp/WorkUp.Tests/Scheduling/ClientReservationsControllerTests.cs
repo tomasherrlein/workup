@@ -640,8 +640,8 @@ public sealed class ClientReservationsControllerTests
         {
             var fixture = new Fixture();
             fixture.BusinessSlugs = new RecordingBusinessRepository(fixture.Businesses);
-            fixture.BusinessId = await fixture.Businesses.InsertAsync(
-                new Business { Name = "Peluquería Marina", Slug = Slug });
+            fixture.BusinessId = (await fixture.Businesses.InsertAsync(
+                new Business { Name = "Peluquería Marina", Slug = Slug })).BusinessId;
             fixture.IndividualServiceId = await fixture.Services.InsertAsync(new Service
             {
                 BusinessId = fixture.BusinessId, Name = "Corte", Price = 5000m, DurationMinutes = 30,
@@ -766,10 +766,10 @@ public sealed class ClientReservationsControllerTests
         public Task<bool> SlugExistsAsync(string slug, int? excludingId = null, CancellationToken ct = default) =>
             inner.SlugExistsAsync(slug, excludingId, ct);
 
-        public Task<int> InsertAsync(Business business, CancellationToken ct = default) =>
+        public Task<BusinessInsertResult> InsertAsync(Business business, CancellationToken ct = default) =>
             inner.InsertAsync(business, ct);
 
-        public Task UpdateAsync(Business business, CancellationToken ct = default) =>
+        public Task<BusinessUpdateResult> UpdateAsync(Business business, CancellationToken ct = default) =>
             inner.UpdateAsync(business, ct);
     }
 
