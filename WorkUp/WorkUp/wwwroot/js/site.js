@@ -14,6 +14,22 @@
   const openers = document.querySelectorAll("[data-nav-open]");
   let lastOpener = null;
 
+  // The sheet is a modal only while it is really on screen. The desktop media query hides the sheet (and its openers)
+  // from 1024px up and shows the rail instead, so a viewport that grows with the sheet open keeps normal tabbing
+  // instead of locking the keyboard inside a panel nobody can see.
+  const sheetIsModal = () =>
+    !!sheet && !sheet.hidden && window.getComputedStyle(sheet).display !== "none";
+
+  // The controls a keyboard can actually reach, in document order: a disabled control or one that is not rendered is
+  // skipped, exactly as the sequential focus navigation of the browser does.
+  const sheetFocusables = () => {
+    if (!sheet) return [];
+    return Array.from(sheet.querySelectorAll("a, button")).filter((element) =>
+      !element.hasAttribute("disabled")
+      && !element.hidden
+      && window.getComputedStyle(element).display !== "none");
+  };
+
   const closeSheet = () => {
     if (!sheet || sheet.hidden) return;
     sheet.hidden = true;
@@ -27,7 +43,7 @@
       lastOpener = button;
       sheet.hidden = false;
       openers.forEach((b) => b.setAttribute("aria-expanded", "true"));
-      const first = sheet.querySelector("a, button");
+      const [first] = sheetFocusables();
       if (first) first.focus();
     });
   });
@@ -39,7 +55,34 @@
   }
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeSheet();
+    if (event.key === "Escape") {
+      closeSheet();
+      return;
+    }
+    // aria-modal="true" declares the rest of the page inert, but the browser still walks out of the panel with Tab, so
+    // the wrap lives here: forward from the last reachable control, backward from the first one, and back into the
+    // panel if the focus ever sits on the page behind it.
+    if (event.key !== "Tab" || !sheetIsModal()) return;
+    const focusables = sheetFocusables();
+    if (focusables.length === 0) {
+      // Nothing to focus inside: cancelling the Tab is what keeps the background from taking the focus at all.
+      event.preventDefault();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const inside = focusables.indexOf(event.target);
+    if (event.shiftKey) {
+      if (inside <= 0) {
+        event.preventDefault();
+        last.focus();
+      }
+      return;
+    }
+    if (inside === -1 || event.target === last) {
+      event.preventDefault();
+      first.focus();
+    }
   });
 
   // <button data-dialog-open="id"> opens <dialog id="id" class="sheet">; [data-dialog-close] closes it.
