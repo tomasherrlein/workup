@@ -34,6 +34,7 @@ public sealed class ClientInvitationPublicControllerTests
     private const string InvitedEmail = "nueva@example.com";
     private const string Token = "token-invitacion";
     private const string Password = "clave-segura";
+    private const string PasswordRequired = "Ingresá tu contraseña.";
     private static readonly DateTime Now = new(2026, 3, 20, 10, 0, 0);
 
     private readonly FakeBusinessRepository _businesses = new();
@@ -337,6 +338,67 @@ public sealed class ClientInvitationPublicControllerTests
         Assert.Empty(_authentication.SignInSchemes);
     }
 
+    // --- Spanish password validation without a duplicate (RF-26, T27 D3) ---------------------------------------
+
+    [Theory]
+    [InlineData(ClientInvitationModes.NewAccount)]
+    [InlineData(ClientInvitationModes.ExistingAccount)]
+    public async Task Post_invitation_empty_password_reports_the_binder_message_once_for_either_mode(string mode)
+    {
+        SeedFichaWithInvitation();
+        // The MVC binder records the DataAnnotations message of the required Password before the action runs. The
+        // form judgement must not append a second copy under the same key: the span and the summary would show the
+        // same rule twice (the English implicit-required message plus this one before T27 D3).
+        _controller.ModelState.AddModelError(nameof(ClientInvitationViewModel.Password), PasswordRequired);
+        var form = new ClientInvitationViewModel { Token = Token, Mode = mode, Password = "" };
+
+        var result = await _controller.Invitation(Slug, form, CancellationToken.None);
+
+        Assert.Equal("Invitation", Assert.IsType<ViewResult>(result).ViewName);
+        Assert.Equal(new[] { PasswordRequired }, ErrorMessages(result, nameof(ClientInvitationViewModel.Password)));
+        // The rejection spends nothing: the link stays live and no account is written.
+        Assert.True(Assert.Single(_repository.Invitations).IsUsable(Now));
+        Assert.Equal(0, _acceptanceUnitOfWork.BeginCount);
+        Assert.Empty(_repository.Accounts);
+    }
+
+    [Theory]
+    [InlineData(ClientInvitationModes.NewAccount)]
+    [InlineData(ClientInvitationModes.ExistingAccount)]
+    public async Task Post_invitation_empty_password_without_a_binder_entry_still_reports_the_spanish_message(
+        string mode)
+    {
+        // A direct controller call never had a binder, so the empty password is the form judgement's own: it must
+        // keep reporting exactly one Spanish message for either mode.
+        SeedFichaWithInvitation();
+        var form = new ClientInvitationViewModel { Token = Token, Mode = mode, Password = "" };
+
+        var result = await _controller.Invitation(Slug, form, CancellationToken.None);
+
+        Assert.Equal(new[] { PasswordRequired }, ErrorMessages(result, nameof(ClientInvitationViewModel.Password)));
+        Assert.True(Assert.Single(_repository.Invitations).IsUsable(Now));
+        Assert.Equal(0, _acceptanceUnitOfWork.BeginCount);
+    }
+
+    [Fact]
+    public async Task Post_invitation_keeps_judging_the_confirmation_while_the_password_keeps_its_binder_error()
+    {
+        SeedFichaWithInvitation();
+        _controller.ModelState.AddModelError(nameof(ClientInvitationViewModel.Password), PasswordRequired);
+        var form = NewAccountForm();
+        form.ConfirmPassword = "otra-clave-segura";
+
+        var result = await _controller.Invitation(Slug, form, CancellationToken.None);
+
+        // Only the empty-password branch defers to the binder: the new-account mismatch is still judged on its own key.
+        Assert.Equal(new[] { PasswordRequired }, ErrorMessages(result, nameof(ClientInvitationViewModel.Password)));
+        Assert.Contains(
+            "Las contraseñas no coinciden.",
+            ErrorMessages(result, nameof(ClientInvitationViewModel.ConfirmPassword)));
+        Assert.True(Assert.Single(_repository.Invitations).IsUsable(Now));
+        Assert.Equal(0, _acceptanceUnitOfWork.BeginCount);
+    }
+
     // --- Public surface ----------------------------------------------------------------------------------------
 
     [Fact]
@@ -520,6 +582,11 @@ public sealed class ClientInvitationPublicControllerTests
         Mode = ClientInvitationModes.ExistingAccount,
         Password = Password
     };
+
+    private static IReadOnlyList<string> ErrorMessages(IActionResult result, string field) =>
+        Assert.IsType<ViewResult>(result).ViewData.ModelState[field]!.Errors
+            .Select(error => error.ErrorMessage)
+            .ToArray();
 
     private static IReadOnlyList<string> Messages(IActionResult result) =>
         Assert.IsType<ViewResult>(result).ViewData.ModelState[string.Empty]!.Errors

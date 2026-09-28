@@ -34,7 +34,13 @@ public sealed class ClientInvitationViewModel
     /// <summary>Chosen acceptance mode; validated against <see cref="ClientInvitationModes"/> before it is used.</summary>
     public string Mode { get; set; } = ClientInvitationModes.NewAccount;
 
-    /// <summary>Password of the new account or of the pre-existing pending account, according to the chosen mode.</summary>
+    /// <summary>
+    /// Password of the new account or of the pre-existing pending account, according to the chosen mode. The field is
+    /// required in both modes and carries the Spanish message so the MVC binder records the same copy the form
+    /// judgement adds: without it the implicit-required binder answered an empty value in English and the judgement
+    /// added the Spanish one under the same key, showing the rule twice.
+    /// </summary>
+    [Required(ErrorMessage = "Ingresá tu contraseña.")]
     [DataType(DataType.Password)]
     public string Password { get; set; } = "";
 

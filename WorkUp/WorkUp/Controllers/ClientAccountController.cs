@@ -468,7 +468,9 @@ public sealed class ClientAccountController(
     /// <summary>
     /// Judges the invitation form before the link is read. The mode is a whitelist, the password is always required,
     /// and the repetition is compared only in the new-account mode, because a pre-existing account proves its own
-    /// password without a confirmation field and without the new-password minimum.
+    /// password without a confirmation field and without the new-password minimum. A field the binder already rejected
+    /// keeps the binder's message: the empty password is still refused either way, but the same rule is never added
+    /// twice.
     /// </summary>
     private void ValidateInvitationForm(ClientInvitationViewModel model)
     {
@@ -476,7 +478,17 @@ public sealed class ClientAccountController(
             ModelState.AddModelError(nameof(model.Mode), "Elegí cómo querés continuar.");
 
         if (string.IsNullOrEmpty(model.Password))
-            ModelState.AddModelError(nameof(model.Password), "Ingresá tu contraseña.");
+        {
+            // The DataAnnotations of the model make the MVC binder record the required message before the action runs.
+            // Adding the Spanish copy on top of it would show the rule twice in the field and in the alert summary, so
+            // the judgement only fills the gap when no entry carries a message yet. This is not a gate: an empty
+            // password is rejected either way, and a direct call without a binder still gets the Spanish message.
+            if (!ModelState.TryGetValue(nameof(model.Password), out var passwordEntry)
+                || passwordEntry.Errors.Count == 0)
+            {
+                ModelState.AddModelError(nameof(model.Password), "Ingresá tu contraseña.");
+            }
+        }
         else if (model.Mode == ClientInvitationModes.NewAccount)
         {
             if (model.Password.Length < ClientInvitationAcceptanceService.MinimumPasswordLength)
