@@ -474,7 +474,7 @@ public sealed class ClassDropInOwnerControllerTests
             Phone = "1145667788",
             CreatedAt = new DateTime(2026, 1, 1, 9, 0, 0)
         };
-        return await clients.InsertAsync(client);
+        return (await clients.InsertAsync(client)).ClientId;
     }
 
     private static int SeedSession(

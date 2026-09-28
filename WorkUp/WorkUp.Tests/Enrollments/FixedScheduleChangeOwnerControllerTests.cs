@@ -55,8 +55,8 @@ public sealed class FixedScheduleChangeOwnerControllerTests
 
     // --- Fixtures -----------------------------------------------------------------------------------------------
 
-    private Task<int> SeedClient(string firstName, string lastName, int businessId = BusinessId) =>
-        _clients.InsertAsync(new Client
+    private async Task<int> SeedClient(string firstName, string lastName, int businessId = BusinessId) =>
+        (await _clients.InsertAsync(new Client
         {
             BusinessId = businessId,
             FirstName = firstName,
@@ -64,7 +64,7 @@ public sealed class FixedScheduleChangeOwnerControllerTests
             Email = $"{firstName.ToLowerInvariant()}.{lastName.ToLowerInvariant()}@example.com",
             Phone = "1145667788",
             CreatedAt = _clock.Now
-        });
+        })).ClientId;
 
     private async Task<EnrollmentGridClassRow> SeedGridClass(
         string serviceName,

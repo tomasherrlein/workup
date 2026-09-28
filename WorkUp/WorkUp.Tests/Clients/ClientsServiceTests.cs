@@ -105,6 +105,79 @@ public class ClientsServiceTests
         Assert.DoesNotContain(typeof(ClientReference).GetProperties(), property => property.Name == "HealthNotes");
     }
 
+    // A create can pass the sequential email precheck and still lose the insert to a competing create that committed
+    // in between (T27, T01 finding). The per-business UQ_Clients_Email is the last race guard, so that lost race is an
+    // expected business outcome with the same field error as the precheck, never a 500 and never a second ficha.
+    [Fact]
+    public async Task Fails_when_the_email_is_lost_to_a_concurrent_create()
+    {
+        _clients.LoseEmailRaceOnInsert = true;
+
+        var result = await _service.CreateAsync(1, ValidRequest());
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("client_email_taken", result.Error!.Code);
+        Assert.Equal(nameof(CreateClientRequest.Email), result.Error.Field);
+        Assert.Empty(_clients.All);
+    }
+
+    // The edit can pass the sequential precheck and still lose the update to a competing edit. It is reported as the
+    // same client_email_taken field error the precheck produces, never as an unhandled exception.
+    [Fact]
+    public async Task Fails_when_the_new_email_is_lost_to_a_concurrent_edit()
+    {
+        var created = await _service.CreateAsync(1, ValidRequest());
+        _clients.LoseEmailRaceOnUpdate = true;
+
+        var result = await _service.UpdateAsync(1, created.Value.Id,
+            new UpdateClientRequest("Marina", "Gómez", "otra@peluqueria.com", "1122334455", null));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("client_email_taken", result.Error!.Code);
+        Assert.Equal(nameof(UpdateClientRequest.Email), result.Error.Field);
+    }
+
+    // The public find-or-create path has the same latent race: it looks the email up and inserts without a precheck.
+    // Losing that insert must not return a competing ficha's identity nor bind the request to a different account; it
+    // is the same safe failure.
+    [Fact]
+    public async Task Public_find_or_create_reports_the_email_taken_race_instead_of_returning_a_competing_fiche()
+    {
+        _clients.LoseEmailRaceOnInsert = true;
+
+        var result = await _service.FindOrCreateByEmailAsync(1, "marina@peluqueria.com", "Marina", "Gómez", "1122334455");
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("client_email_taken", result.Error!.Code);
+        Assert.Empty(_clients.All);
+    }
+
+    // Only the known unique-email collision is a business outcome. Any other storage failure must keep propagating
+    // instead of being disguised as client_email_taken.
+    [Fact]
+    public async Task Propagates_an_unexpected_storage_failure_instead_of_reporting_an_email_conflict()
+    {
+        _clients.InsertFailure = new InvalidOperationException("connection reset");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _service.CreateAsync(1, ValidRequest()));
+
+        Assert.Equal("connection reset", exception.Message);
+    }
+
+    [Fact]
+    public async Task Propagates_an_unexpected_storage_failure_on_edit_instead_of_reporting_an_email_conflict()
+    {
+        var created = await _service.CreateAsync(1, ValidRequest());
+        _clients.UpdateFailure = new InvalidOperationException("connection reset");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _service.UpdateAsync(1, created.Value.Id,
+                new UpdateClientRequest("Marina", "Gómez", "otra@peluqueria.com", "1122334455", null)));
+
+        Assert.Equal("connection reset", exception.Message);
+    }
+
     [Fact]
     public async Task Searches_only_the_current_business_by_contact_data()
     {

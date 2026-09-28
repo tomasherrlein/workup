@@ -50,7 +50,7 @@ public sealed class EnrollmentControllerTests
 
     private async Task<int> SeedClient(string firstName, string lastName, int businessId = BusinessId)
     {
-        var clientId = await _clients.InsertAsync(new Client
+        var clientId = (await _clients.InsertAsync(new Client
         {
             BusinessId = businessId,
             FirstName = firstName,
@@ -58,7 +58,7 @@ public sealed class EnrollmentControllerTests
             Email = $"{firstName.ToLowerInvariant()}.{lastName.ToLowerInvariant()}@example.com",
             Phone = "1145667788",
             CreatedAt = _clock.Now
-        });
+        })).ClientId;
         // The service validates the client through its own port: the same id must be reachable from both fakes.
         _repository.Clients.Add(new FakeEnrollmentClient(
             businessId, new EnrollmentClient(clientId, $"{firstName} {lastName}")));

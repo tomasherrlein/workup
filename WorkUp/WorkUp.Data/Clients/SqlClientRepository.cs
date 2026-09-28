@@ -31,25 +31,58 @@ public sealed class SqlClientRepository(DbSession session) : SqlRepositoryBase(s
         await ScalarAsync<int>("SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId AND Email = @email AND (@excludingId IS NULL OR Id <> @excludingId)",
             p => p.AddValue("@businessId", businessId).AddValue("@email", email).AddValue("@excludingId", excludingId), ct) > 0;
 
-    public Task<int> InsertAsync(Client client, CancellationToken ct = default) =>
-        InsertAsync(
-            """
-            INSERT INTO Clients (BusinessId, FirstName, LastName, Email, Phone, HealthNotes, CreatedAt)
-            OUTPUT INSERTED.Id
-            VALUES (@businessId, @firstName, @lastName, @email, @phone, @healthNotes, @createdAt)
-            """,
-            p => p.AddValue("@businessId", client.BusinessId).AddValue("@firstName", client.FirstName).AddValue("@lastName", client.LastName)
-                .AddValue("@email", client.Email).AddValue("@phone", client.Phone).AddValue("@healthNotes", client.HealthNotes).AddValue("@createdAt", client.CreatedAt), ct);
+    public async Task<ClientInsertResult> InsertAsync(Client client, CancellationToken ct = default)
+    {
+        try
+        {
+            var id = await InsertAsync(
+                """
+                INSERT INTO Clients (BusinessId, FirstName, LastName, Email, Phone, HealthNotes, CreatedAt)
+                OUTPUT INSERTED.Id
+                VALUES (@businessId, @firstName, @lastName, @email, @phone, @healthNotes, @createdAt)
+                """,
+                p => p.AddValue("@businessId", client.BusinessId).AddValue("@firstName", client.FirstName).AddValue("@lastName", client.LastName)
+                    .AddValue("@email", client.Email).AddValue("@phone", client.Phone).AddValue("@healthNotes", client.HealthNotes).AddValue("@createdAt", client.CreatedAt), ct);
+            return ClientInsertResult.Inserted(id);
+        }
+        catch (SqlException exception) when (IsEmailDuplicate(exception))
+        {
+            // The per-business unique email is the last race guard: losing the check-then-insert window (including the
+            // public find-or-create path) is an expected business outcome, never an unhandled 500.
+            return ClientInsertResult.EmailTaken();
+        }
+    }
 
-    public Task UpdateAsync(Client client, CancellationToken ct = default) =>
-        ExecuteAsync(
-            """
-            UPDATE Clients
-               SET FirstName = @firstName, LastName = @lastName, Email = @email, Phone = @phone, HealthNotes = @healthNotes
-             WHERE Id = @id AND BusinessId = @businessId
-            """,
-            p => p.AddValue("@id", client.Id).AddValue("@businessId", client.BusinessId).AddValue("@firstName", client.FirstName)
-                .AddValue("@lastName", client.LastName).AddValue("@email", client.Email).AddValue("@phone", client.Phone).AddValue("@healthNotes", client.HealthNotes), ct);
+    public async Task<ClientUpdateResult> UpdateAsync(Client client, CancellationToken ct = default)
+    {
+        try
+        {
+            await ExecuteAsync(
+                """
+                UPDATE Clients
+                   SET FirstName = @firstName, LastName = @lastName, Email = @email, Phone = @phone, HealthNotes = @healthNotes
+                 WHERE Id = @id AND BusinessId = @businessId
+                """,
+                p => p.AddValue("@id", client.Id).AddValue("@businessId", client.BusinessId).AddValue("@firstName", client.FirstName)
+                    .AddValue("@lastName", client.LastName).AddValue("@email", client.Email).AddValue("@phone", client.Phone).AddValue("@healthNotes", client.HealthNotes), ct);
+            return ClientUpdateResult.Updated();
+        }
+        catch (SqlException exception) when (IsEmailDuplicate(exception))
+        {
+            // The single statement is atomic: a rejected edit leaves the stored row unchanged.
+            return ClientUpdateResult.EmailTaken();
+        }
+    }
+
+    /// <summary>
+    /// Only <c>UQ_Clients_Email</c> is a benign lost race. Any other unique violation — or any other
+    /// <see cref="SqlException"/> — propagates instead of being swallowed as an email conflict.
+    /// </summary>
+    private static bool IsEmailDuplicate(SqlException exception) =>
+        exception.Errors
+            .Cast<SqlError>()
+            .Any(error => error.Number is 2601 or 2627
+                && error.Message.Contains("UQ_Clients_Email", StringComparison.Ordinal));
 
     public async Task<bool> HasAccountAsync(int businessId, int clientId, CancellationToken ct = default) =>
         await ScalarAsync<int>("SELECT COUNT(*) FROM ClientAccounts WHERE BusinessId = @businessId AND ClientId = @clientId",

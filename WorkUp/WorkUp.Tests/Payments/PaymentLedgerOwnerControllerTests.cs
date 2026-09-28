@@ -82,7 +82,7 @@ public sealed class PaymentLedgerOwnerControllerTests
         });
 
     private async Task<int> StoreClient(string firstName, string lastName, int businessId = BusinessId) =>
-        await _clients.InsertAsync(new Client
+        (await _clients.InsertAsync(new Client
         {
             BusinessId = businessId,
             FirstName = firstName,
@@ -90,7 +90,7 @@ public sealed class PaymentLedgerOwnerControllerTests
             Email = $"{firstName.ToLowerInvariant()}.{lastName.ToLowerInvariant()}@example.com",
             Phone = "1145667788",
             CreatedAt = _clock.Now
-        });
+        })).ClientId;
 
     private PaymentsController Create()
     {

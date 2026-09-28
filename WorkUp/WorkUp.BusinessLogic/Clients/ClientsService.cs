@@ -57,7 +57,13 @@ public sealed class ClientsService(IClientRepository clients, IClientNoteReposit
             HealthNotes = healthNotes,
             CreatedAt = clock.Now
         };
-        client.Id = await clients.InsertAsync(client, ct);
+        // The precheck above is only a courtesy check: between it and the insert a competing create can commit the
+        // same email. Losing the UQ_Clients_Email race is the same business outcome, never a second ficha.
+        var inserted = await clients.InsertAsync(client, ct);
+        if (!inserted.IsInserted)
+            return Result<Client>.Failure("client_email_taken", "Ya existe una ficha con ese email.", nameof(request.Email));
+
+        client.Id = inserted.ClientId;
         return Result<Client>.Success(client);
     }
 
@@ -79,7 +85,11 @@ public sealed class ClientsService(IClientRepository clients, IClientNoteReposit
         client.Email = email;
         client.Phone = phone;
         client.HealthNotes = healthNotes;
-        await clients.UpdateAsync(client, ct);
+        // Same lost window as the create: the edit must report the existing field error and leave the stored row as it
+        // was, never silently repoint the request at another ficha.
+        if (!(await clients.UpdateAsync(client, ct)).IsUpdated)
+            return Result.Failure("client_email_taken", "Ya existe una ficha con ese email.", nameof(request.Email));
+
         return Result.Success();
     }
 
@@ -119,7 +129,13 @@ public sealed class ClientsService(IClientRepository clients, IClientNoteReposit
             Phone = normalizedPhone,
             CreatedAt = clock.Now
         };
-        client.Id = await clients.InsertAsync(client, ct);
+        // This public path looks the email up and inserts without a precheck, so it can lose the race too. Returning
+        // the competing ficha or creating a duplicate would bind the request to the wrong account: it fails instead.
+        var inserted = await clients.InsertAsync(client, ct);
+        if (!inserted.IsInserted)
+            return Result<ClientReference>.Failure("client_email_taken", "Ya existe una ficha con ese email.", nameof(email));
+
+        client.Id = inserted.ClientId;
         return Result<ClientReference>.Success(new ClientReference(client.Id));
     }
 
