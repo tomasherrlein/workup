@@ -280,21 +280,22 @@ indica orden de ejecución.
 
 > ### RF-01: DAR DE ALTA Y CONFIGURAR EL NEGOCIO — `E`
 >
-> **Descripción:** Registrar o modificar el negocio, su única cuenta de acceso, el canal por el que recibe sus
+> **Descripción:** Registrar o modificar el negocio, su única cuenta de acceso, el email por el que recibe sus
 > avisos y los parámetros de operación que consume el resto de los requerimientos.
 >
-> **Inputs:** Nombre del negocio · Usuario · Contraseña · Teléfono de contacto del negocio · Tipos de gasto que
-> usa el negocio · Admite atención sin turno, sí o no (sí por defecto) · Anticipación del recordatorio de turno
-> (24 horas por defecto) · Hora de emisión del resumen de agenda (21:00 por defecto) · Periodicidad del aviso de
-> revisión de existencias (semanal por defecto).
+> **Inputs:** Nombre del negocio · Usuario · Contraseña · Teléfono de contacto del negocio · Email de avisos del
+> negocio (opcional) · Tipos de gasto que usa el negocio · Admite atención sin turno, sí o no (sí por defecto) ·
+> Anticipación del recordatorio de turno (24 horas por defecto) · Hora de emisión del resumen de agenda (21:00 por
+> defecto) · Periodicidad del aviso de revisión de existencias (semanal por defecto).
 >
 > **Proceso:**
 > 1. Recibir los datos del negocio.
 > 2. Registrar la cuenta única de acceso al panel de gestión. *(Restricción 5)*
-> 3. Registrar el teléfono al que se dirigen el resumen de agenda y los avisos de existencias.
+> 3. Registrar el email de avisos al que se dirigen el resumen de agenda y los avisos de existencias.
 > 4. Registrar los parámetros asociados al negocio.
 >
-> **Outputs:** Negocio registrado con su cuenta de acceso, su canal de contacto y sus parámetros.
+> **Outputs:** Negocio registrado con su cuenta de acceso, su teléfono de contacto, su email de avisos y sus
+> parámetros.
 >
 > **Error Handling:** N/A.
 >
@@ -302,7 +303,7 @@ indica orden de ejecución.
 >
 > **Nota:** la cuenta de acceso no proviene de un hecho relevado —los casos operan en papel— sino de D-06 y del
 > RNF de Seguridad. Sin este requerimiento la Restricción 5 no tendría quién la produzca y RF-18 y RF-19 no
-> tendrían a dónde enviar sus avisos.
+> tendrían a qué email enviar sus avisos.
 
 ---
 
@@ -361,7 +362,7 @@ indica orden de ejecución.
 >
 > **Error Handling:** N/A.
 >
-> **Trazabilidad:** `R12`, D-05. Un cambio de horario fijo de un alumno ya inscripto se registra mediante RF-22,
+> **Trazabilidad:** `R12`, D-05. Un cambio de horario fijo de un alumno ya inscripto se registra mediante RF-21,
 > sujeto a que el nuevo horario exista en esta grilla con cupo disponible.
 
 ---
@@ -486,7 +487,7 @@ indica orden de ejecución.
 >
 > **Error Handling:** La confirmación no registra asistencia real ni modifica un estado ya marcado `Atendido` o
 > `Cobrado`. La falta de respuesta conserva la reserva en `Pendiente`, sin cancelarla automáticamente. Si el
-> cliente prefiere no asistir, cancela el turno mediante RF-11 en lugar de confirmar. Si en lugar de cancelarlo
+> cliente prefiere no asistir, cancela el turno mediante RF-22 en lugar de confirmar. Si en lugar de cancelarlo
 > quiere pasarlo a otro horario, se reprograma (RF-09).
 >
 > **Trazabilidad:** `R4`, `R15`, `R32`, D-18, D-19.
@@ -519,7 +520,7 @@ indica orden de ejecución.
 > **Error Handling:** Si no hay ningún horario de esa trabajadora que le sirva al cliente, o si abandona el
 > cambio, el turno original se conserva; no se cancela automáticamente. *(`R36`)* Desde el inicio del turno
 > original no se admite reprogramación: una atención posterior requiere una reserva nueva (RF-07). Las clases
-> grupales no se reprograman: el alumno cancela su inscripción (RF-11) y se anota en otra clase con lugar
+> grupales no se reprograman: el alumno cancela su inscripción (RF-22) y se anota en otra clase con lugar
 > mediante una nueva inscripción (RF-05); no hay traslado automático. El enlace privado sin sesión (RF-23,
 > RF-24) no habilita esta reprogramación.
 >
@@ -585,7 +586,7 @@ indica orden de ejecución.
 >   conflicto pero registra igual**: el registro nunca se bloquea. *(`R22`, D-10, D-25, Regla 11)*
 > - Si el negocio tiene desactivada la atención sin turno (RF-01), no se ofrece el alta de la atención sin
 >   reserva. *(`R13`, Regla 15)*
-> - El cobro ya registrado no se edita ni se borra: se anula con motivo (RF-26) y, si corresponde, se registra
+> - El cobro ya registrado no se edita ni se borra: se anula con motivo (RF-28) y, si corresponde, se registra
 >   uno nuevo. *(D-20)*
 >
 > **Trazabilidad:** `R3`, `R5`, `R13`, `R14`, `R21`, `R22`, D-06, D-07, D-09, D-10, D-20, D-25.
@@ -608,7 +609,7 @@ indica orden de ejecución.
 > **Outputs:** Cliente en estado `Ausente`, disponible para el recuento de ausencias.
 >
 > **Error Handling:** El aviso confirmado del cliente no sobrescribe un estado ya registrado como `Atendido`, ni
-> un turno completado, ni un lugar ya liberado por una cancelación previa (RF-11). *(D-18, D-19)*
+> un turno completado, ni un lugar ya liberado por una cancelación previa (RF-22). *(D-18, D-19)*
 >
 > **Trazabilidad:** `R6`, `R14`, `R32`, D-18, D-19, Regla 18.
 
@@ -687,14 +688,14 @@ indica orden de ejecución.
 > **Proceso:**
 > 1. Recibir el período.
 > 2. Sumar los cobros vigentes, no anulados, de atenciones, clases sueltas y abonos. *(`R8`, `R27`, D-20)*
-> 3. Restar las devoluciones manuales registradas en el período (RF-27) y los gastos. *(`R8`, `R27`, D-20)*
+> 3. Restar las devoluciones manuales registradas en el período y los gastos. *(`R8`, `R27`, D-20)*
 > 4. Calcular los indicadores: facturación por servicio, gastos por tipo, clientes recurrentes, clientes que
 >    dejaron de venir, recuento de ausencias y producción por trabajadora. *(`R6`, `R10`)*
 >
 > **Outputs:** Resultado del período · Indicadores del negocio.
 >
 > **Error Handling:** Los cobros anulados no integran el resultado del período, aunque su historial se conserva
-> junto con la anulación (RF-26). *(D-20)*
+> junto con la anulación (RF-28). *(D-20)*
 >
 > **Trazabilidad:** `R6`, `R7`, `R8`, `R10`, `R18`, `R27`, D-20.
 
@@ -730,18 +731,19 @@ indica orden de ejecución.
 
 > ### RF-18: ENVIAR RESUMEN DE AGENDA DIARIA — `E`
 >
-> **Descripción:** Enviar a la dueña el detalle de la agenda del día siguiente.
+> **Descripción:** Enviar por email a la dueña el detalle de la agenda del día siguiente.
 >
-> **Inputs:** Turnos y clases del día siguiente · Hora de emisión configurada (21:00 por defecto) · Teléfono de
-> contacto del negocio.
+> **Inputs:** Turnos y clases del día siguiente · Hora de emisión configurada (21:00 por defecto) · Email de
+> avisos del negocio.
 >
 > **Proceso:**
 > 1. Al llegar la hora configurada, recuperar los turnos y clases del día siguiente.
-> 2. Emitir el resumen al teléfono de contacto del negocio.
+> 2. Emitir por email el resumen al email de avisos del negocio.
 >
-> **Outputs:** Resumen de agenda enviado a la dueña.
+> **Outputs:** Resumen de agenda enviado por email a la dueña.
 >
-> **Error Handling:** N/A.
+> **Error Handling:** Si el negocio no tiene email de avisos configurado, no se genera el resumen para
+> la dueña; la emisión comienza cuando se registra un email (RF-01).
 >
 > **Trazabilidad:** `R4`, `R16`, RF-01.
 
@@ -749,18 +751,19 @@ indica orden de ejecución.
 
 > ### RF-19: ENVIAR AVISO DE REVISIÓN DE EXISTENCIAS — `E`
 >
-> **Descripción:** Recordar periódicamente a la dueña que actualice la existencia de sus insumos.
+> **Descripción:** Recordar por email, periódicamente, a la dueña que actualice la existencia de sus insumos.
 >
-> **Inputs:** Insumos registrados del negocio · Periodicidad configurada (semanal por defecto) · Teléfono de
-> contacto del negocio.
+> **Inputs:** Insumos registrados del negocio · Periodicidad configurada (semanal por defecto) · Email de avisos
+> del negocio.
 >
 > **Proceso:**
 > 1. Al cumplirse la periodicidad, recuperar los insumos del negocio.
-> 2. Emitir el aviso de revisión al teléfono de contacto del negocio.
+> 2. Emitir por email el aviso de revisión al email de avisos del negocio.
 >
-> **Outputs:** Aviso de revisión enviado a la dueña.
+> **Outputs:** Aviso de revisión enviado por email a la dueña.
 >
-> **Error Handling:** N/A.
+> **Error Handling:** Si el negocio no tiene email de avisos configurado, no se genera el aviso de revisión
+> para la dueña; la emisión comienza cuando se registra un email (RF-01).
 >
 > **Trazabilidad:** `R17`, D-03, RF-01.
 >
@@ -865,8 +868,7 @@ indica orden de ejecución.
 > **Error Handling:** Si la dueña sospecha que el enlace fue comprometido o enviado al destinatario equivocado,
 > puede revocarlo; el enlace revocado deja de autorizar acceso, y el reemplazo conserva la fecha de vencimiento
 > ya acordada, sin extenderla. Vencido el enlace, la persona debe contactar al negocio. No se aprueba una
-> integración automática con WhatsApp ni su uso obligatorio; la mecánica técnica para generar, almacenar,
-> validar, revocar y auditar el enlace queda pendiente de diseño.
+> integración automática con WhatsApp ni su uso obligatorio.
 >
 > **Trazabilidad:** D-18, D-22, RF-07.
 
@@ -884,8 +886,8 @@ indica orden de ejecución.
 > **Proceso:**
 > 1. Validar que el enlace esté vigente y no haya sido revocado.
 > 2. Mostrar únicamente la fecha, el horario, el servicio y la trabajadora del turno exacto al que se limita
->    el enlace, sin historial, clases, abonos, observaciones ni otros datos del cliente. La inclusión de servicio
->    y trabajadora fue confirmada para la demo en T10; no habilita ver otras reservas.
+>    el enlace, sin historial, clases, abonos, observaciones ni otros datos del cliente; el enlace no habilita
+>    ver otras reservas.
 > 3. Antes del inicio del turno, permitir confirmar la intención de asistir (RF-08) o cancelar directamente
 >    (RF-22), sin plazo mínimo ni aprobación de la dueña.
 > 4. Desde el inicio del turno, permitir confirmar "No voy a asistir", lo que registra Ausente con constancia de
@@ -917,7 +919,7 @@ indica orden de ejecución.
 > **Outputs:** Cuenta y ficha de cliente creadas.
 >
 > **Error Handling:** Si el email ya está registrado, se informa y no se crea una ficha duplicada; se indica
-> iniciar sesión o recuperar la contraseña (RF-28). Si no se verifica el email, la cuenta no se activa.
+> iniciar sesión o recuperar la contraseña (RF-27). Si no se verifica el email, la cuenta no se activa.
 >
 > **Trazabilidad:** D-18.
 
