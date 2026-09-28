@@ -84,13 +84,13 @@ public sealed class FixedScheduleChangeOwnerControllerTests
             MaxCapacity = maxCapacity,
             IsActive = serviceActive
         });
-        var workerId = await _workers.InsertAsync(new Worker
+        var workerId = (await _workers.InsertAsync(new Worker
         {
             BusinessId = businessId,
             FirstName = "Ana",
             LastName = "Díaz",
             IsActive = true
-        });
+        })).WorkerId;
         var startTime = new TimeOnly(hour, 0);
         var gridClassId = await _gridClasses.InsertAsync(new GridClass
         {

@@ -128,6 +128,41 @@ public class StaffServiceTests
         Assert.True(result.Succeeded);
     }
 
+    // A create can pass the sequential CUIL precheck and still lose the insert to a competing create that committed in
+    // between (T27, T01 finding). The per-business UQ_Workers_Cuil is the last race guard, so that lost race is an
+    // expected business outcome with the same field error as the precheck, never a 500 and never a second worker.
+    [Fact]
+    public async Task Fails_when_the_cuil_is_lost_to_a_concurrent_create()
+    {
+        _repository.LoseCuilRaceOnInsert = true;
+
+        var result = await _service.CreateAsync(1, ValidRequest());
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("cuil_taken", result.Error!.Code);
+        Assert.Equal("Ya existe una trabajadora con ese CUIL.", result.Error.Message);
+        Assert.Equal(nameof(CreateWorkerRequest.Cuil), result.Error.Field);
+        // The losing create wrote no worker and saved no schedule: the transaction was disposed without committing.
+        Assert.Empty(_repository.All);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
+    // Only the known unique-CUIL collision is a business outcome. Any other storage failure must keep propagating
+    // instead of being disguised as cuil_taken.
+    [Fact]
+    public async Task Propagates_an_unexpected_storage_failure_instead_of_reporting_a_cuil_conflict()
+    {
+        _repository.InsertFailure = new InvalidOperationException("connection reset");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _service.CreateAsync(1, ValidRequest()));
+
+        Assert.Equal("connection reset", exception.Message);
+        Assert.Equal(0, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+    }
+
     [Fact]
     public async Task Fails_when_a_working_day_is_missing_its_start_or_end_time()
     {
@@ -270,6 +305,43 @@ public class StaffServiceTests
 
         Assert.False(result.Succeeded);
         Assert.Equal("cuil_taken", result.Error!.Code);
+    }
+
+    // The edit can pass the sequential precheck and still lose the update to a competing edit that committed in
+    // between. It is reported as the same cuil_taken field error the precheck produces, and the losing edit replaces
+    // neither the stored row nor its schedule: the transaction is disposed without committing.
+    [Fact]
+    public async Task Fails_when_the_new_cuil_is_lost_to_a_concurrent_edit()
+    {
+        var created = await _service.CreateAsync(1, ValidRequest(Week(WorkDay(DayOfWeek.Monday, 9, 20))));
+        _repository.LoseCuilRaceOnUpdate = true;
+
+        var result = await _service.UpdateAsync(1, created.Value.Id,
+            new UpdateWorkerRequest("Marina", "Gómez", "1122334455", "20111222339", Week(WorkDay(DayOfWeek.Tuesday, 10, 18))));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("cuil_taken", result.Error!.Code);
+        Assert.Equal(nameof(UpdateWorkerRequest.Cuil), result.Error.Field);
+        // Only the create committed; the losing edit rolled back and left the stored row and its schedule untouched.
+        Assert.Equal(1, _unitOfWork.CommitCount);
+        Assert.Equal(1, _unitOfWork.RolledBackCount);
+        var stored = await _service.GetWorkerAsync(1, created.Value.Id);
+        Assert.Equal("20-30405060-7", stored!.Cuil);
+        var schedule = Assert.Single(stored.Schedules);
+        Assert.Equal(DayOfWeek.Monday, schedule.DayOfWeek);
+    }
+
+    [Fact]
+    public async Task Propagates_an_unexpected_storage_failure_on_edit_instead_of_reporting_a_cuil_conflict()
+    {
+        var created = await _service.CreateAsync(1, ValidRequest());
+        _repository.UpdateFailure = new InvalidOperationException("connection reset");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _service.UpdateAsync(1, created.Value.Id,
+                new UpdateWorkerRequest("Marina", "Gómez", "1122334455", "20111222339", Week(WorkDay(DayOfWeek.Monday, 9, 20)))));
+
+        Assert.Equal("connection reset", exception.Message);
     }
 
     [Fact]

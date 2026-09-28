@@ -32,7 +32,7 @@ public class ClassesServiceTests
     private async Task<int> SeedWorker(int businessId, DayOfWeek workDay, int startHour, int endHour, bool isActive = true, string cuil = "20304050607", List<WorkerBreak>? breaks = null)
     {
         var worker = new Worker { BusinessId = businessId, FirstName = "Sofía", LastName = "Díaz", Phone = "1122334455", Cuil = cuil, IsActive = isActive };
-        var id = await _workers.InsertAsync(worker);
+        var id = (await _workers.InsertAsync(worker)).WorkerId;
         await _workers.ReplaceSchedulesAsync(id, [new WorkerSchedule { DayOfWeek = workDay, StartTime = new TimeOnly(startHour, 0), EndTime = new TimeOnly(endHour, 0) }]);
         await _workers.ReplaceBreaksAsync(id, breaks ?? []);
         return id;

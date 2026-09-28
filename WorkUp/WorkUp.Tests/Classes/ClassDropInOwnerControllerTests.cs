@@ -461,7 +461,7 @@ public sealed class ClassDropInOwnerControllerTests
         });
 
     private static async Task<int> SeedWorker(FakeWorkerRepository workers) =>
-        await workers.InsertAsync(new Worker { BusinessId = 7, FirstName = "Ana", LastName = "Díaz", IsActive = true });
+        (await workers.InsertAsync(new Worker { BusinessId = 7, FirstName = "Ana", LastName = "Díaz", IsActive = true })).WorkerId;
 
     private static async Task<int> SeedClient(FakeClientRepository clients, string firstName, string lastName)
     {

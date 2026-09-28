@@ -444,10 +444,10 @@ public sealed class ClassDropInChargeOwnerControllerTests
         });
 
     private static async Task<int> SeedWorker(FakeWorkerRepository workers) =>
-        await workers.InsertAsync(new Worker
+        (await workers.InsertAsync(new Worker
         {
             BusinessId = BusinessId, FirstName = "Ana", LastName = "Díaz", IsActive = true
-        });
+        })).WorkerId;
 
     /// <summary>One class session of the detail read, on the owner's tenant unless a test asks for a foreign one.</summary>
     private static int SeedSession(

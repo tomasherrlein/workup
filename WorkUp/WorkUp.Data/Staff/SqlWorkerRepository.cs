@@ -91,37 +91,72 @@ public sealed class SqlWorkerRepository(DbSession session) : SqlRepositoryBase(s
             p => p.AddValue("@businessId", businessId).AddValue("@cuil", cuil).AddValue("@excludingId", excludingId),
             ct) > 0;
 
-    public Task<int> InsertAsync(Worker worker, CancellationToken ct = default) =>
-        InsertAsync(
-            """
-            INSERT INTO Workers (BusinessId, FirstName, LastName, Phone, Cuil, IsActive)
-            OUTPUT INSERTED.Id
-            VALUES (@businessId, @firstName, @lastName, @phone, @cuil, @isActive)
-            """,
-            p => p
-                .AddValue("@businessId", worker.BusinessId)
-                .AddValue("@firstName", worker.FirstName)
-                .AddValue("@lastName", worker.LastName)
-                .AddValue("@phone", worker.Phone)
-                .AddValue("@cuil", worker.Cuil)
-                .AddValue("@isActive", worker.IsActive),
-            ct);
+    public async Task<WorkerInsertResult> InsertAsync(Worker worker, CancellationToken ct = default)
+    {
+        try
+        {
+            var id = await InsertAsync(
+                """
+                INSERT INTO Workers (BusinessId, FirstName, LastName, Phone, Cuil, IsActive)
+                OUTPUT INSERTED.Id
+                VALUES (@businessId, @firstName, @lastName, @phone, @cuil, @isActive)
+                """,
+                p => p
+                    .AddValue("@businessId", worker.BusinessId)
+                    .AddValue("@firstName", worker.FirstName)
+                    .AddValue("@lastName", worker.LastName)
+                    .AddValue("@phone", worker.Phone)
+                    .AddValue("@cuil", worker.Cuil)
+                    .AddValue("@isActive", worker.IsActive),
+                ct);
+            return WorkerInsertResult.Inserted(id);
+        }
+        catch (SqlException exception) when (IsCuilDuplicate(exception))
+        {
+            // The per-business unique CUIL is the last race guard: losing the check-then-insert window is an expected
+            // business outcome, never an unhandled 500. The caller returns before saving schedules, so the losing
+            // create leaves no orphan worker or schedule behind.
+            return WorkerInsertResult.CuilTaken();
+        }
+    }
 
-    public Task UpdateAsync(Worker worker, CancellationToken ct = default) =>
-        ExecuteAsync(
-            """
-            UPDATE Workers
-               SET FirstName = @firstName, LastName = @lastName, Phone = @phone, Cuil = @cuil, IsActive = @isActive
-             WHERE Id = @id
-            """,
-            p => p
-                .AddValue("@id", worker.Id)
-                .AddValue("@firstName", worker.FirstName)
-                .AddValue("@lastName", worker.LastName)
-                .AddValue("@phone", worker.Phone)
-                .AddValue("@cuil", worker.Cuil)
-                .AddValue("@isActive", worker.IsActive),
-            ct);
+    public async Task<WorkerUpdateResult> UpdateAsync(Worker worker, CancellationToken ct = default)
+    {
+        try
+        {
+            await ExecuteAsync(
+                """
+                UPDATE Workers
+                   SET FirstName = @firstName, LastName = @lastName, Phone = @phone, Cuil = @cuil, IsActive = @isActive
+                 WHERE Id = @id
+                """,
+                p => p
+                    .AddValue("@id", worker.Id)
+                    .AddValue("@firstName", worker.FirstName)
+                    .AddValue("@lastName", worker.LastName)
+                    .AddValue("@phone", worker.Phone)
+                    .AddValue("@cuil", worker.Cuil)
+                    .AddValue("@isActive", worker.IsActive),
+                ct);
+            return WorkerUpdateResult.Updated();
+        }
+        catch (SqlException exception) when (IsCuilDuplicate(exception))
+        {
+            // The single statement is atomic: a rejected edit leaves the stored row unchanged. The caller returns
+            // before replacing schedules or breaks, so the losing edit leaves no orphan child rows.
+            return WorkerUpdateResult.CuilTaken();
+        }
+    }
+
+    /// <summary>
+    /// Only <c>UQ_Workers_Cuil</c> is a benign lost race. Any other unique violation — or any other
+    /// <see cref="SqlException"/> — propagates instead of being swallowed as a CUIL conflict.
+    /// </summary>
+    private static bool IsCuilDuplicate(SqlException exception) =>
+        exception.Errors
+            .Cast<SqlError>()
+            .Any(error => error.Number is 2601 or 2627
+                && error.Message.Contains("UQ_Workers_Cuil", StringComparison.Ordinal));
 
     public async Task ReplaceSchedulesAsync(int workerId, List<WorkerSchedule> schedules, CancellationToken ct = default)
     {

@@ -652,11 +652,11 @@ public sealed class ClientReservationsControllerTests
                 BusinessId = fixture.BusinessId, Name = "Yoga", Price = 3000m, DurationMinutes = 60,
                 MaxCapacity = 8, IsActive = true
             });
-            fixture.WorkerId = await fixture.Workers.InsertAsync(new Worker
+            fixture.WorkerId = (await fixture.Workers.InsertAsync(new Worker
             {
                 BusinessId = fixture.BusinessId, FirstName = "Ana", LastName = "Pérez", Phone = "1155001234",
                 Cuil = "27312345674", IsActive = true
-            });
+            })).WorkerId;
             fixture.PublicRepository.Worker = new Worker
             {
                 Id = fixture.WorkerId, BusinessId = fixture.BusinessId, FirstName = "Ana", LastName = "Pérez",

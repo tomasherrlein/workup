@@ -391,10 +391,10 @@ public sealed class WeekGenerationControllerTests
         {
             BusinessId = 7, Name = name, Price = 3000m, DurationMinutes = 60, MaxCapacity = 8, IsActive = true
         });
-        var workerId = await workers.InsertAsync(new Worker
+        var workerId = (await workers.InsertAsync(new Worker
         {
             BusinessId = 7, FirstName = "Ana", LastName = "Díaz", IsActive = true
-        });
+        })).WorkerId;
         return (serviceId, workerId);
     }
 

@@ -65,7 +65,14 @@ public sealed class StaffService(IWorkerRepository workers, IUnitOfWork unitOfWo
         };
 
         await using var tx = await unitOfWork.BeginAsync(ct: ct);
-        worker.Id = await workers.InsertAsync(worker, ct);
+        // The precheck above is only a courtesy check: between it and the insert a competing create can commit the
+        // same CUIL. Losing the UQ_Workers_Cuil race is the same business outcome, and the transaction is disposed
+        // without committing, so no orphan worker or schedule is written.
+        var inserted = await workers.InsertAsync(worker, ct);
+        if (!inserted.IsInserted)
+            return Result<Worker>.Failure("cuil_taken", "Ya existe una trabajadora con ese CUIL.", nameof(request.Cuil));
+
+        worker.Id = inserted.WorkerId;
         await workers.ReplaceSchedulesAsync(worker.Id, schedules, ct);
         await workers.ReplaceBreaksAsync(worker.Id, breaks, ct);
         await tx.CommitAsync(ct);
@@ -109,7 +116,12 @@ public sealed class StaffService(IWorkerRepository workers, IUnitOfWork unitOfWo
         worker.Cuil = cuil;
 
         await using var tx = await unitOfWork.BeginAsync(ct: ct);
-        await workers.UpdateAsync(worker, ct);
+        // Same lost window as the create: the edit must report the existing field error and leave the stored row as it
+        // was, never silently repoint the request at another worker. Returning before the schedule/break replacement
+        // and without committing keeps the row and its child rows untouched.
+        if (!(await workers.UpdateAsync(worker, ct)).IsUpdated)
+            return Result.Failure("cuil_taken", "Ya existe una trabajadora con ese CUIL.", nameof(request.Cuil));
+
         await workers.ReplaceSchedulesAsync(worker.Id, schedules, ct);
         await workers.ReplaceBreaksAsync(worker.Id, breaks, ct);
         await tx.CommitAsync(ct);

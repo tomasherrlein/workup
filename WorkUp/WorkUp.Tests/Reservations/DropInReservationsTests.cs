@@ -232,13 +232,13 @@ public sealed class DropInReservationsTests
             });
 
             var workerRepository = new FakeWorkerRepository();
-            var workerId = await workerRepository.InsertAsync(new Worker
+            var workerId = (await workerRepository.InsertAsync(new Worker
             {
                 BusinessId = businessId,
                 FirstName = "Ana",
                 LastName = "Pérez",
                 IsActive = true
-            });
+            })).WorkerId;
 
             var dropIns = new FakeClassDropInRepository();
             var unitOfWork = new FakeUnitOfWork();
