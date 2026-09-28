@@ -14,9 +14,12 @@ namespace WorkUp.Tests.Accessibility;
 // a tiny DOM mock built on Node.js built-ins (node:assert, node:fs, node:vm) and then drive it with real click and
 // keydown events. The mock covers exactly the DOM surface site.js uses -- attributes, listeners with bubbling, focus,
 // closest, querySelector(All) for tag/class/attribute selectors, and a getComputedStyle that resolves `display: none`
-// for a [hidden] element or for an element the stylesheet hides. What it does NOT prove is anything that only a real
-// browser can resolve: the actual CSS cascade of the 1024px media query, native Tab order of a real document, and
-// assistive-technology behaviour. Those remain for the independent browser/DOM auditor.
+// for a [hidden] element or for an element the stylesheet hides. It also emulates the viewport itself: a matchMedia
+// stub whose lists flip and dispatch a `change` event, paired with the same elements workup.css hides, so a scenario
+// can walk the sheet through mobile -> desktop -> mobile. What it does NOT prove is anything that only a real browser
+// can resolve: the actual CSS cascade of the 1024px media query, native Tab order of a real document, whether the
+// browser refuses to focus an element the layout hid, and assistive-technology behaviour. Those remain for the
+// independent browser/DOM auditor.
 //
 // Node.js on PATH is a hard requirement of this file on purpose: without it the suite fails loudly instead of silently
 // skipping the only executable proof of this keyboard behaviour. It runs the real interpreter, needs no package
@@ -38,6 +41,11 @@ public sealed class OwnerNavigationKeyboardTests
     [InlineData("click-inside-panel-does-not-close")]
     [InlineData("sheet-without-controls-keeps-the-background-out")]
     [InlineData("sheet-hidden-by-the-desktop-media-query-is-not-a-modal")]
+    [InlineData("desktop-breakpoint-closes-the-open-sheet-and-declares-it-collapsed")]
+    [InlineData("desktop-breakpoint-moves-focus-to-the-page-not-the-hidden-opener")]
+    [InlineData("desktop-then-mobile-does-not-reopen-the-sheet-or-strand-focus")]
+    [InlineData("desktop-breakpoint-with-a-closed-sheet-leaves-focus-alone")]
+    [InlineData("desktop-breakpoint-without-a-landing-zone-never-focuses-the-hidden-opener")]
     public void The_owner_navigation_sheet_keeps_the_keyboard_inside_while_it_is_open(string scenario)
     {
         var result = RunScenario(scenario);
@@ -217,6 +225,9 @@ public sealed class OwnerNavigationKeyboardTests
         const siteJsPath = process.env.WORKUP_NAV_SHEET_SITE_JS;
         // Elements the stylesheet hides, i.e. the sheet under the 1024px media query.
         const hiddenByMediaQuery = new Set();
+        // Every MediaQueryList site.js asks for, in creation order, so a scenario can move the emulated viewport and
+        // fire the same `change` event a real browser fires when the query starts or stops matching.
+        const mediaQueries = [];
         let activeDocument = null;
 
         function matchesSimple(selector, element) {
@@ -242,6 +253,44 @@ public sealed class OwnerNavigationKeyboardTests
 
         function matches(selector, element) {
           return selector.split(",").some((part) => matchesSimple(part.trim(), element));
+        }
+
+        function createMediaQueryList(query) {
+          const list = {
+            media: query,
+            matches: false,
+            listeners: [],
+            addEventListener(type, handler) { if (type === "change") this.listeners.push(handler); },
+            removeEventListener(type, handler) {
+              if (type === "change") this.listeners = this.listeners.filter((entry) => entry !== handler);
+            },
+            addListener(handler) { this.listeners.push(handler); },
+            removeListener(handler) { this.listeners = this.listeners.filter((entry) => entry !== handler); },
+          };
+          mediaQueries.push(list);
+          return list;
+        }
+
+        // Moves the emulated viewport: flips every registered query and dispatches one change event per flipped list, in
+        // creation order, the way the browser reports it after layout. Only the width site.js mirrors is emulated.
+        function setViewportDesktop(desktop) {
+          for (const list of mediaQueries) {
+            const next = desktop && /min-width:\s*1024px/.test(list.media);
+            if (next === list.matches) continue;
+            list.matches = next;
+            for (const handler of list.listeners.slice()) handler({ type: "change", matches: next, media: list.media });
+          }
+        }
+
+        // The CSS half of the breakpoint, mirroring workup.css `@media (min-width: 1024px)`: from 1024px up the sheet,
+        // both openers and the bottom bar are display:none and the rail takes over. Script and stylesheet therefore move
+        // together, which is the whole point of the scenario: the DOM state must not outlive the layout that showed it.
+        function applyDesktopLayout(fixture, desktop) {
+          for (const element of [fixture.sheet, fixture.openerMenu, fixture.openerMore, fixture.backgroundAfter]) {
+            if (desktop) hiddenByMediaQuery.add(element);
+            else hiddenByMediaQuery.delete(element);
+          }
+          setViewportDesktop(desktop);
         }
 
         function el(tag, attrs) {
@@ -270,6 +319,9 @@ public sealed class OwnerNavigationKeyboardTests
               if (this.parent) this.parent.dispatch(event);
             },
             focus() { activeDocument.activeElement = this; },
+            blur() {
+              if (activeDocument.activeElement === this) activeDocument.activeElement = activeDocument.body;
+            },
             click() {
               this.dispatch({ type: "click", target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } });
             },
@@ -304,6 +356,8 @@ public sealed class OwnerNavigationKeyboardTests
           const fixture = {
             doc,
             background: el("a", { href: "/owner/day" }),
+            // <main id="main" tabindex="-1"> is the programmatic focus destination _OwnerLayout.cshtml already offers.
+            main: el("main", { id: "main", tabindex: "-1" }),
             openerMenu: el("button", { "data-nav-open": "", "aria-controls": "nav-sheet", "aria-expanded": "false" }),
             openerMore: el("button", { "data-nav-open": "", "aria-controls": "nav-sheet", "aria-expanded": "false" }),
             backgroundAfter: el("a", { href: "/owner/reports" }),
@@ -319,7 +373,14 @@ public sealed class OwnerNavigationKeyboardTests
           else if (options && options.singleControl) fixture.panel.append(fixture.first);
           else fixture.panel.append(fixture.first, fixture.middle, fixture.disabled, fixture.last);
           fixture.sheet.append(fixture.panel);
-          doc.append(el("body").append(fixture.background, fixture.openerMenu, fixture.openerMore, fixture.backgroundAfter, fixture.sheet));
+          const shell = [fixture.background];
+          if (!(options && options.noMain)) shell.push(fixture.main);
+          shell.push(fixture.openerMenu, fixture.openerMore, fixture.backgroundAfter, fixture.sheet);
+          fixture.body = el("body").append(...shell);
+          doc.append(fixture.body);
+          doc.body = fixture.body;
+          // A fresh document has the body as its active element until something else takes focus.
+          doc.activeElement = fixture.body;
           return fixture;
         }
 
@@ -332,6 +393,7 @@ public sealed class OwnerNavigationKeyboardTests
                 display: hiddenByMediaQuery.has(element) || element.hidden ? "none" : "block",
               }),
               setTimeout: () => {},
+              matchMedia: (query) => createMediaQueryList(query),
             },
             navigator: { clipboard: { writeText: async () => {} } },
             setTimeout: () => {},
@@ -455,6 +517,52 @@ public sealed class OwnerNavigationKeyboardTests
             const event = pressKey(f, "Tab", false);
             assert.equal(event.defaultPrevented, false, "the desktop layout must keep normal tabbing");
             assert.equal(f.doc.activeElement, f.last);
+          },
+          "desktop-breakpoint-closes-the-open-sheet-and-declares-it-collapsed"() {
+            const f = start(buildFixture());
+            f.openerMore.click();
+            assert.equal(f.sheet.hidden, false);
+            applyDesktopLayout(f, true);
+            assert.equal(f.sheet.hidden, true, "the desktop layout must close the sheet, not leave it logically open");
+            assert.equal(f.openerMenu.getAttribute("aria-expanded"), "false");
+            assert.equal(f.openerMore.getAttribute("aria-expanded"), "false", "both openers must declare the sheet collapsed");
+          },
+          "desktop-breakpoint-moves-focus-to-the-page-not-the-hidden-opener"() {
+            const f = start(buildFixture());
+            f.openerMore.click();
+            assert.equal(f.doc.activeElement, f.first);
+            applyDesktopLayout(f, true);
+            assert.equal(f.doc.activeElement, f.main, "focus must land on the visible page content");
+            assert.notEqual(f.doc.activeElement, f.openerMore, "the desktop layout hides the opener that owned the sheet");
+            assert.notEqual(f.doc.activeElement, f.first, "the panel that held the focus is not visible either");
+          },
+          "desktop-then-mobile-does-not-reopen-the-sheet-or-strand-focus"() {
+            const f = start(buildFixture());
+            f.openerMenu.click();
+            applyDesktopLayout(f, true);
+            applyDesktopLayout(f, false);
+            assert.equal(f.sheet.hidden, true, "coming back to the mobile layout must not resurrect the modal");
+            assert.equal(f.openerMenu.getAttribute("aria-expanded"), "false");
+            assert.equal(f.doc.activeElement, f.main, "the focus stays where the desktop transition put it");
+            f.background.focus();
+            const event = pressKey(f, "Tab", false);
+            assert.equal(event.defaultPrevented, false, "the sheet is closed, so tabbing is normal again");
+          },
+          "desktop-breakpoint-with-a-closed-sheet-leaves-focus-alone"() {
+            const f = start(buildFixture());
+            f.background.focus();
+            applyDesktopLayout(f, true);
+            assert.equal(f.doc.activeElement, f.background, "a resize with nothing open must not steal the focus");
+          },
+          "desktop-breakpoint-without-a-landing-zone-never-focuses-the-hidden-opener"() {
+            const f = start(buildFixture({ noMain: true }));
+            f.openerMore.click();
+            assert.equal(f.doc.activeElement, f.first);
+            applyDesktopLayout(f, true);
+            assert.equal(f.sheet.hidden, true);
+            assert.notEqual(f.doc.activeElement, f.openerMore, "the hidden opener must not receive the focus");
+            assert.notEqual(f.doc.activeElement, f.first, "nor the panel the desktop layout hides");
+            assert.equal(f.doc.activeElement, f.body, "with nowhere better to go the focus falls back to the document");
           },
         };
 

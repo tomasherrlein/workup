@@ -30,11 +30,20 @@
       && window.getComputedStyle(element).display !== "none");
   };
 
-  const closeSheet = () => {
+  const closeSheet = (restoreOpener = true) => {
     if (!sheet || sheet.hidden) return;
     sheet.hidden = true;
     openers.forEach((b) => b.setAttribute("aria-expanded", "false"));
-    if (lastOpener) lastOpener.focus();
+    if (restoreOpener && lastOpener) lastOpener.focus();
+  };
+
+  // Where focus can land when there is no visible opener to return to: the page itself, which _OwnerLayout.cshtml
+  // already made programmatically focusable with tabindex="-1".
+  const focusPage = () => {
+    const main = document.getElementById("main");
+    if (!main || main.hidden || window.getComputedStyle(main).display === "none") return false;
+    main.focus();
+    return true;
   };
 
   openers.forEach((button) => {
@@ -84,6 +93,24 @@
       first.focus();
     }
   });
+
+  // Growing into the desktop rail layout hides the sheet with CSS (workup.css, `@media (min-width: 1024px)`), but the
+  // DOM would stay logically open: `hidden` false, both openers still advertising aria-expanded="true" and the focus
+  // parked in a panel nobody can see. Mirroring the stylesheet's own breakpoint, close the sheet on that transition and
+  // hand the focus to the page, because the mobile opener that owned it is not on screen either -- focusing it would be
+  // a no-op in the browser and would strand the keyboard. Escape and the backdrop keep restoring the real opener.
+  const desktopQuery = typeof window.matchMedia === "function" ? window.matchMedia("(min-width: 1024px)") : null;
+  if (desktopQuery) {
+    const closeWhenDesktopTakesOver = (event) => {
+      if (!event.matches || !sheet || sheet.hidden) return;
+      closeSheet(false);
+      if (focusPage()) return;
+      const active = document.activeElement;
+      if (active && typeof active.blur === "function") active.blur();
+    };
+    if (typeof desktopQuery.addEventListener === "function") desktopQuery.addEventListener("change", closeWhenDesktopTakesOver);
+    else if (typeof desktopQuery.addListener === "function") desktopQuery.addListener(closeWhenDesktopTakesOver);
+  }
 
   // <button data-dialog-open="id"> opens <dialog id="id" class="sheet">; [data-dialog-close] closes it.
   document.querySelectorAll("[data-dialog-open]").forEach((button) => {
