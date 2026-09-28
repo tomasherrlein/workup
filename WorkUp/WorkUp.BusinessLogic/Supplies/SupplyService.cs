@@ -34,7 +34,13 @@ public sealed class SupplyService(ISupplyRepository supplies, IClock clock)
             LastDeclaredAt = clock.Now,
             IsActive = true
         };
-        supply.Id = await supplies.InsertAsync(supply, ct);
+        // The precheck above is only a courtesy check: between it and the insert a competing create can commit the same
+        // name. Losing the UQ_Supplies_Name race is the same business outcome, never a second supply.
+        var inserted = await supplies.InsertAsync(supply, ct);
+        if (!inserted.IsInserted)
+            return Result<Supply>.Failure("supply_name_taken", "Ya existe un insumo con ese nombre.", nameof(request.Name));
+
+        supply.Id = inserted.SupplyId;
         return Result<Supply>.Success(supply);
     }
 
@@ -52,7 +58,11 @@ public sealed class SupplyService(ISupplyRepository supplies, IClock clock)
         supply.CurrentStock = request.CurrentStock;
         supply.MinimumStock = request.MinimumStock;
         supply.LastDeclaredAt = clock.Now;
-        await supplies.UpdateAsync(supply, ct);
+        // Same lost window as the create: the edit must report the existing field error and leave the stored row as it
+        // was, never silently repoint the request at another supply.
+        if (!(await supplies.UpdateAsync(supply, ct)).IsUpdated)
+            return Result.Failure("supply_name_taken", "Ya existe un insumo con ese nombre.", nameof(request.Name));
+
         return Result.Success();
     }
 

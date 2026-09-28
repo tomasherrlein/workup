@@ -21,25 +21,58 @@ public sealed class SqlSupplyRepository(DbSession session) : SqlRepositoryBase(s
         await ScalarAsync<int>("SELECT COUNT(*) FROM Supplies WHERE BusinessId = @businessId AND Name = @name AND (@excludingId IS NULL OR Id <> @excludingId)",
             p => p.AddValue("@businessId", businessId).AddValue("@name", name).AddValue("@excludingId", excludingId), ct) > 0;
 
-    public Task<int> InsertAsync(Supply supply, CancellationToken ct = default) =>
-        InsertAsync(
-            """
-            INSERT INTO Supplies (BusinessId, Name, CurrentStock, MinimumStock, LastDeclaredAt, IsActive)
-            OUTPUT INSERTED.Id
-            VALUES (@businessId, @name, @currentStock, @minimumStock, @lastDeclaredAt, @isActive)
-            """,
-            p => p.AddValue("@businessId", supply.BusinessId).AddValue("@name", supply.Name).AddValue("@currentStock", supply.CurrentStock)
-                .AddValue("@minimumStock", supply.MinimumStock).AddValue("@lastDeclaredAt", supply.LastDeclaredAt).AddValue("@isActive", supply.IsActive), ct);
+    public async Task<SupplyInsertResult> InsertAsync(Supply supply, CancellationToken ct = default)
+    {
+        try
+        {
+            var id = await InsertAsync(
+                """
+                INSERT INTO Supplies (BusinessId, Name, CurrentStock, MinimumStock, LastDeclaredAt, IsActive)
+                OUTPUT INSERTED.Id
+                VALUES (@businessId, @name, @currentStock, @minimumStock, @lastDeclaredAt, @isActive)
+                """,
+                p => p.AddValue("@businessId", supply.BusinessId).AddValue("@name", supply.Name).AddValue("@currentStock", supply.CurrentStock)
+                    .AddValue("@minimumStock", supply.MinimumStock).AddValue("@lastDeclaredAt", supply.LastDeclaredAt).AddValue("@isActive", supply.IsActive), ct);
+            return SupplyInsertResult.Inserted(id);
+        }
+        catch (SqlException exception) when (IsNameDuplicate(exception))
+        {
+            // The per-business unique name is the last race guard: losing the check-then-insert window is an expected
+            // business outcome, never an unhandled 500 and never a second supply.
+            return SupplyInsertResult.NameTaken();
+        }
+    }
 
-    public Task UpdateAsync(Supply supply, CancellationToken ct = default) =>
-        ExecuteAsync(
-            """
-            UPDATE Supplies
-               SET Name = @name, CurrentStock = @currentStock, MinimumStock = @minimumStock, LastDeclaredAt = @lastDeclaredAt
-             WHERE Id = @id AND BusinessId = @businessId
-            """,
-            p => p.AddValue("@id", supply.Id).AddValue("@businessId", supply.BusinessId).AddValue("@name", supply.Name)
-                .AddValue("@currentStock", supply.CurrentStock).AddValue("@minimumStock", supply.MinimumStock).AddValue("@lastDeclaredAt", supply.LastDeclaredAt), ct);
+    public async Task<SupplyUpdateResult> UpdateAsync(Supply supply, CancellationToken ct = default)
+    {
+        try
+        {
+            await ExecuteAsync(
+                """
+                UPDATE Supplies
+                   SET Name = @name, CurrentStock = @currentStock, MinimumStock = @minimumStock, LastDeclaredAt = @lastDeclaredAt
+                 WHERE Id = @id AND BusinessId = @businessId
+                """,
+                p => p.AddValue("@id", supply.Id).AddValue("@businessId", supply.BusinessId).AddValue("@name", supply.Name)
+                    .AddValue("@currentStock", supply.CurrentStock).AddValue("@minimumStock", supply.MinimumStock).AddValue("@lastDeclaredAt", supply.LastDeclaredAt), ct);
+            return SupplyUpdateResult.Updated();
+        }
+        catch (SqlException exception) when (IsNameDuplicate(exception))
+        {
+            // The single statement is atomic: a rejected rename leaves the stored row unchanged.
+            return SupplyUpdateResult.NameTaken();
+        }
+    }
+
+    /// <summary>
+    /// Only <c>UQ_Supplies_Name</c> is a benign lost race. Any other unique violation — or any other
+    /// <see cref="SqlException"/> — propagates instead of being swallowed as a name conflict.
+    /// </summary>
+    private static bool IsNameDuplicate(SqlException exception) =>
+        exception.Errors
+            .Cast<SqlError>()
+            .Any(error => error.Number is 2601 or 2627
+                && error.Message.Contains("UQ_Supplies_Name", StringComparison.Ordinal));
 
     public async Task<int> CountBelowMinimumAsync(int businessId, CancellationToken ct = default) =>
         await ScalarAsync<int>("SELECT COUNT(*) FROM Supplies WHERE BusinessId = @businessId AND IsActive = 1 AND CurrentStock < MinimumStock",

@@ -64,4 +64,55 @@ public class SupplyServiceTests
         Assert.Equal(1, await _service.CountBelowMinimumAsync(1));
         Assert.Equal(1, await _service.CountBelowMinimumAsync(2));
     }
+
+    // The precheck path and the lost-race path must agree: the ordinary duplicate create is still reported with the
+    // same field error and message, and writes nothing extra.
+    [Fact]
+    public async Task Rejects_a_duplicate_name_at_the_precheck_with_the_same_field_error()
+    {
+        await _service.CreateAsync(1, new DeclareSupplyRequest("Tintura 7.1", 0.5m, 1m));
+
+        var result = await _service.CreateAsync(1, new DeclareSupplyRequest("Tintura 7.1", 2m, 1m));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("supply_name_taken", result.Error!.Code);
+        Assert.Equal("Ya existe un insumo con ese nombre.", result.Error.Message);
+        Assert.Equal("Name", result.Error.Field);
+        Assert.Single(_supplies.All);
+    }
+
+    // A create can pass the sequential name precheck and still lose the insert to a competing create that committed in
+    // between (T27). The per-business UQ_Supplies_Name is the last race guard, so that lost race is an expected
+    // business outcome with the same field error and message as the precheck, never a 500 and never a second supply.
+    [Fact]
+    public async Task Fails_when_the_name_is_lost_to_a_concurrent_create()
+    {
+        _supplies.LoseNameRaceOnInsert = true;
+
+        var result = await _service.CreateAsync(1, new DeclareSupplyRequest("Tintura 7.1", 0.5m, 1m));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("supply_name_taken", result.Error!.Code);
+        Assert.Equal("Ya existe un insumo con ese nombre.", result.Error.Message);
+        Assert.Equal("Name", result.Error.Field);
+        // The losing create wrote nothing: no second supply was added for the contested name.
+        Assert.Empty(_supplies.All);
+    }
+
+    // The edit can pass the sequential precheck and still lose the update to a competing rename. It is reported as the
+    // same supply_name_taken field error and message the precheck produces, never as an unhandled exception.
+    [Fact]
+    public async Task Fails_when_the_new_name_is_lost_to_a_concurrent_rename()
+    {
+        await _service.CreateAsync(1, new DeclareSupplyRequest("Guantes", 2m, 1m));
+        var second = await _service.CreateAsync(1, new DeclareSupplyRequest("Tintura", 1m, 1m));
+        _supplies.LoseNameRaceOnUpdate = true;
+
+        var result = await _service.UpdateAsync(1, second.Value.Id, new DeclareSupplyRequest("Guantes", 1m, 1m));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("supply_name_taken", result.Error!.Code);
+        Assert.Equal("Ya existe un insumo con ese nombre.", result.Error.Message);
+        Assert.Equal("Name", result.Error.Field);
+    }
 }
