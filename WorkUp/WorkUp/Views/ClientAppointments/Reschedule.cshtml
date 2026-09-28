@@ -4,6 +4,13 @@
     Layout = "_ClientLayout";
     ViewData["Title"] = "Reprogramar turno";
     var date = Model.SelectedDate;
+
+    // A field only claims aria-invalid="true" when the server marked that exact field in ModelState. On a valid
+    // rerender the expression is null, so the attribute is not rendered at all and nothing announces a false error.
+    // The hidden day error is lifted into the ModelOnly summary instead (T27 D1), so this lookup names only the
+    // visible start-time key the POST binds.
+    bool ServerMarkedInvalid(string field) =>
+        ViewData.ModelState.TryGetValue(field, out var entry) && entry.Errors.Count > 0;
 }
 <section class="public-booking" aria-labelledby="client-reschedule-title">
     <h1 id="client-reschedule-title">Reprogramar turno</h1>
@@ -44,14 +51,15 @@ else
         <input asp-for="Input.Date" type="hidden" />
         <div class="field">
             <label asp-for="Input.StartTime">Nuevo horario</label>
-            <select asp-for="Input.StartTime">
+            <select asp-for="Input.StartTime" aria-describedby="client-reschedule-start-time-error"
+                    aria-invalid="@(ServerMarkedInvalid("Input.StartTime") ? "true" : null)">
                 <option value="">Elegí un horario</option>
                 @foreach (var startTime in Model.Options.AvailableStartTimes)
                 {
                     <option value="@startTime.ToString("HH:mm")">@Formatting.Time(date.ToDateTime(startTime))</option>
                 }
             </select>
-            <span asp-validation-for="Input.StartTime"></span>
+            <span asp-validation-for="Input.StartTime" id="client-reschedule-start-time-error"></span>
         </div>
         <button type="submit" class="btn btn-primary">Confirmar reprogramación</button>
     </form>

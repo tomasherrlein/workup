@@ -3,6 +3,13 @@
 @{
     Layout = "_ClientLayout";
     ViewData["Title"] = "Reservar turno";
+
+    // A field only claims aria-invalid="true" when the server marked that exact field in ModelState. On a valid
+    // rerender the expression is null, so the attribute is not rendered at all and nothing announces a false error.
+    // The hidden day error is lifted into the ModelOnly summary instead (T27 D1), so this lookup names only the
+    // visible start-time key the POST binds.
+    bool ServerMarkedInvalid(string field) =>
+        ViewData.ModelState.TryGetValue(field, out var entry) && entry.Errors.Count > 0;
 }
 <section class="public-booking" aria-labelledby="client-reserve-title">
     <h1 id="client-reserve-title">Reservar turno</h1>
@@ -76,14 +83,15 @@ else
             <input asp-for="Input.Date" type="hidden" />
             <div class="field">
                 <label asp-for="Input.StartTime">Horario</label>
-                <select asp-for="Input.StartTime">
+                <select asp-for="Input.StartTime" aria-describedby="client-reserve-start-time-error"
+                        aria-invalid="@(ServerMarkedInvalid("Input.StartTime") ? "true" : null)">
                     <option value="">Elegí un horario</option>
                     @foreach (var startTime in Model.AvailableStartTimes)
                     {
                         <option value="@startTime.ToString("HH:mm")">@Formatting.Time(Model.Date.ToDateTime(startTime))</option>
                     }
                 </select>
-                <span asp-validation-for="Input.StartTime"></span>
+                <span asp-validation-for="Input.StartTime" id="client-reserve-start-time-error"></span>
             </div>
             @if (Model.NearestAlternative is { } nearest)
             {
