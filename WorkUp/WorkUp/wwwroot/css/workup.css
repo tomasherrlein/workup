@@ -574,6 +574,24 @@ a:hover { color: var(--pine-deep); }
   border-bottom: 1px solid var(--rule);
 }
 
+/*
+  Narrow reflow of the agenda row. On the owner Agenda the first column is a fixed `64px` time track, which is
+  narrower than the time itself once text is enlarged: at a 360px viewport with a 32px root font the `<time>` box
+  measured a `scrollWidth` of 90 inside a 64px track, so the label painted outside its cell instead of reflowing.
+  Below 480px the row becomes a single `minmax(0, 1fr)` track, so the time gets the whole row width above the detail
+  and the detail keeps its own full-width line. The zero minimum cannot be inflated by a label's min-content the way
+  the fixed `64px` track was. The DOM order of `.row-time` and `.row-main` is untouched, so sequential focus order
+  and the screen-reader reading order stay the same, and no label is hidden: no `overflow: hidden`, no ellipsis, no
+  `white-space: nowrap`. This block is declared before the `.row-flat` and `.supply-row` variants on purpose: they are
+  single-class rules with the same specificity, so keeping them later in the sheet preserves their own track sizing
+  and the settings and supplies rows keep their desktop shape.
+*/
+@media (max-width: 480px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .row-time { color: var(--mat-night); font-variant-numeric: tabular-nums; font-weight: 700; font-size: var(--text-label); }
 .row-time .end { display: block; color: var(--counter-ink-muted); font-weight: 400; }
 
@@ -909,8 +927,14 @@ dialog.sheet::backdrop { background: rgba(21, 28, 27, 0.4); }
 
 /* ---------- Inline navigation and spacing helpers ---------- */
 
+/* `flex-wrap: wrap` is the load-bearing declaration here: without it the date navigation links ("Anterior",
+   "Siguiente", "Ver por semana") are forced onto one line whose min-content is wider than the page, which is what
+   pushed the last link's right edge to 338px against a 305px viewport at 320px. Wrapping moves each link to the next
+   line instead of overflowing. No `nowrap`, ellipsis or `overflow: hidden` is used anywhere on this list, so every
+   label stays fully visible and each link keeps its hit area. */
 .nav-inline {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-md);
   margin: 0;
