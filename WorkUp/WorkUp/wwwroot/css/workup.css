@@ -278,7 +278,10 @@ a:hover { color: var(--pine-deep); }
   inset: auto 0 0 0;
   z-index: 20;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* minmax(0, 1fr), never a bare 1fr (= minmax(auto, 1fr)): the auto minimum is the track's min-content size, which
+     at 200% text is the widest label ("Clientes") and grows the four tracks past the viewport instead of shrinking
+     them. With a zero minimum the tracks always split the available width and the labels wrap inside them. */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   background: var(--sheet);
   border-top: 1px solid var(--rule);
 }
@@ -301,6 +304,15 @@ a:hover { color: var(--pine-deep); }
   font-weight: 700;
   text-decoration: none;
   cursor: pointer;
+}
+
+/* Text labels only, never the absolutely positioned .badge counter. overflow-wrap: anywhere is what makes the labels
+   reflow at 200% text: unlike break-word it also shrinks the label's min-content contribution, so the span fits the
+   track and a word like "Clientes" breaks over two centred lines instead of overflowing the fixed bar. */
+.bottom-bar a > span:not(.badge),
+.bottom-bar button > span:not(.badge) {
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
 .bottom-bar [aria-current="page"] {
