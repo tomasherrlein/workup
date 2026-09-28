@@ -115,4 +115,40 @@ public class ExpenseTypeServiceTests
         Assert.False(result.Succeeded);
         Assert.Equal("expense_type_not_found", result.Error!.Code);
     }
+
+    // A create can pass the sequential name precheck and still lose the insert to a competing create that committed in
+    // between (T27, T01 finding). The per-business UQ_ExpenseTypes_Name is the last race guard, so that lost race is an
+    // expected business outcome with the same field error and message as the precheck, never a 500 and never a second
+    // type.
+    [Fact]
+    public async Task Fails_when_the_name_is_lost_to_a_concurrent_create()
+    {
+        _repository.LoseNameRaceOnInsert = true;
+
+        var result = await _service.CreateAsync(1, "Alquiler");
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("expense_type_name_taken", result.Error!.Code);
+        Assert.Equal("Ya existe un tipo de gasto con ese nombre.", result.Error.Message);
+        Assert.Equal("Name", result.Error.Field);
+        // The losing create wrote nothing: no second type was added for the contested name.
+        Assert.Empty(_repository.All);
+    }
+
+    // The rename can pass the sequential precheck and still lose the update to a competing rename. It is reported as
+    // the same expense_type_name_taken field error and message the precheck produces, never as an unhandled exception.
+    [Fact]
+    public async Task Fails_when_the_new_name_is_lost_to_a_concurrent_rename()
+    {
+        await _service.CreateAsync(1, "Alquiler");
+        var second = await _service.CreateAsync(1, "Insumos");
+        _repository.LoseNameRaceOnUpdate = true;
+
+        var result = await _service.RenameAsync(1, second.Value.Id, "Alquiler");
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("expense_type_name_taken", result.Error!.Code);
+        Assert.Equal("Ya existe un tipo de gasto con ese nombre.", result.Error.Message);
+        Assert.Equal("Name", result.Error.Field);
+    }
 }

@@ -19,7 +19,13 @@ public sealed class ExpenseTypeService(IExpenseTypeRepository expenseTypes)
             return Result<ExpenseType>.Failure("expense_type_name_taken", "Ya existe un tipo de gasto con ese nombre.", "Name");
 
         var expenseType = new ExpenseType { BusinessId = businessId, Name = trimmed, IsActive = true };
-        expenseType.Id = await expenseTypes.InsertAsync(expenseType, ct);
+        // The precheck above is only a courtesy check: between it and the insert a competing create can commit the same
+        // name. Losing the UQ_ExpenseTypes_Name race is the same business outcome, never a second type.
+        var inserted = await expenseTypes.InsertAsync(expenseType, ct);
+        if (!inserted.IsInserted)
+            return Result<ExpenseType>.Failure("expense_type_name_taken", "Ya existe un tipo de gasto con ese nombre.", "Name");
+
+        expenseType.Id = inserted.ExpenseTypeId;
         return Result<ExpenseType>.Success(expenseType);
     }
 
@@ -37,7 +43,11 @@ public sealed class ExpenseTypeService(IExpenseTypeRepository expenseTypes)
             return Result.Failure("expense_type_name_taken", "Ya existe un tipo de gasto con ese nombre.", "Name");
 
         expenseType.Name = trimmed;
-        await expenseTypes.UpdateAsync(expenseType, ct);
+        // Same lost window as the create: the rename must report the existing field error and leave the stored row as it
+        // was, never silently repoint the request at another type.
+        if (!(await expenseTypes.UpdateAsync(expenseType, ct)).IsUpdated)
+            return Result.Failure("expense_type_name_taken", "Ya existe un tipo de gasto con ese nombre.", "Name");
+
         return Result.Success();
     }
 

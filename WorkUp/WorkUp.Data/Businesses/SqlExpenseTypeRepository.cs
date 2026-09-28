@@ -27,27 +27,60 @@ public sealed class SqlExpenseTypeRepository(DbSession session) : SqlRepositoryB
             p => p.AddValue("@businessId", businessId).AddValue("@name", name).AddValue("@excludingId", excludingId),
             ct) > 0;
 
-    public Task<int> InsertAsync(ExpenseType expenseType, CancellationToken ct = default) =>
-        InsertAsync(
-            """
-            INSERT INTO ExpenseTypes (BusinessId, Name, IsActive)
-            OUTPUT INSERTED.Id
-            VALUES (@businessId, @name, @isActive)
-            """,
-            p => p
-                .AddValue("@businessId", expenseType.BusinessId)
-                .AddValue("@name", expenseType.Name)
-                .AddValue("@isActive", expenseType.IsActive),
-            ct);
+    public async Task<ExpenseTypeInsertResult> InsertAsync(ExpenseType expenseType, CancellationToken ct = default)
+    {
+        try
+        {
+            var id = await InsertAsync(
+                """
+                INSERT INTO ExpenseTypes (BusinessId, Name, IsActive)
+                OUTPUT INSERTED.Id
+                VALUES (@businessId, @name, @isActive)
+                """,
+                p => p
+                    .AddValue("@businessId", expenseType.BusinessId)
+                    .AddValue("@name", expenseType.Name)
+                    .AddValue("@isActive", expenseType.IsActive),
+                ct);
+            return ExpenseTypeInsertResult.Inserted(id);
+        }
+        catch (SqlException exception) when (IsNameDuplicate(exception))
+        {
+            // The per-business unique name is the last race guard: losing the check-then-insert window is an expected
+            // business outcome, never an unhandled 500 and never a second type.
+            return ExpenseTypeInsertResult.NameTaken();
+        }
+    }
 
-    public Task UpdateAsync(ExpenseType expenseType, CancellationToken ct = default) =>
-        ExecuteAsync(
-            "UPDATE ExpenseTypes SET Name = @name, IsActive = @isActive WHERE Id = @id",
-            p => p
-                .AddValue("@id", expenseType.Id)
-                .AddValue("@name", expenseType.Name)
-                .AddValue("@isActive", expenseType.IsActive),
-            ct);
+    public async Task<ExpenseTypeUpdateResult> UpdateAsync(ExpenseType expenseType, CancellationToken ct = default)
+    {
+        try
+        {
+            await ExecuteAsync(
+                "UPDATE ExpenseTypes SET Name = @name, IsActive = @isActive WHERE Id = @id",
+                p => p
+                    .AddValue("@id", expenseType.Id)
+                    .AddValue("@name", expenseType.Name)
+                    .AddValue("@isActive", expenseType.IsActive),
+                ct);
+            return ExpenseTypeUpdateResult.Updated();
+        }
+        catch (SqlException exception) when (IsNameDuplicate(exception))
+        {
+            // The single statement is atomic: a rejected rename leaves the stored row unchanged.
+            return ExpenseTypeUpdateResult.NameTaken();
+        }
+    }
+
+    /// <summary>
+    /// Only <c>UQ_ExpenseTypes_Name</c> is a benign lost race. Any other unique violation — or any other
+    /// <see cref="SqlException"/> — propagates instead of being swallowed as a name conflict.
+    /// </summary>
+    private static bool IsNameDuplicate(SqlException exception) =>
+        exception.Errors
+            .Cast<SqlError>()
+            .Any(error => error.Number is 2601 or 2627
+                && error.Message.Contains("UQ_ExpenseTypes_Name", StringComparison.Ordinal));
 
     private static ExpenseType Map(SqlDataReader reader) => new()
     {
