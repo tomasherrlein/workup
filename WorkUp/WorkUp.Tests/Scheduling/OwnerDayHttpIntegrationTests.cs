@@ -94,6 +94,20 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
     private static readonly TimeSpan ReadinessBudget = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan ReadinessPoll = TimeSpan.FromMilliseconds(500);
 
+    /// <summary>
+    /// T27 D3: the editable fields of the single open public drop-in form and the stable id of their own validation
+    /// container. The ids are prefixed by the view so they never collide with the "{field}-error" id
+    /// jquery.validate.js injects into the same container, and the rendered regression reads them from the HTML the
+    /// host actually emitted instead of from the Razor source.
+    /// </summary>
+    private static readonly (string Field, string ContainerId)[] DropInErrorContainers =
+    [
+        ("Email", "dropin-email-error"),
+        ("FirstName", "dropin-first-name-error"),
+        ("LastName", "dropin-last-name-error"),
+        ("Phone", "dropin-phone-error"),
+    ];
+
     [Fact]
     public async Task Owner_jornada_registers_a_walk_in_payment_and_note_on_an_isolated_http_host()
     {
@@ -755,6 +769,8 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
     /// harness variables (<c>WORKUP_T12_HTTP_CONNECTION</c>, <c>WORKUP_T12_HTTP_KEYS_PATH</c>) and the
     /// <c>WorkUpDemoT12Http*</c> database prefix instead of duplicating the isolation harness: every fact is opt-in and
     /// each run needs a fresh, absent database and keyring, so reusing the names never shares state between flows.
+    /// T27 D3 adds the rendered-HTML regression of the public booking form: the valid render links every field to its
+    /// own error container and the three CSRF-valid rejected bookings mark only their own field server-invalid.
     /// </summary>
     private async Task RunDropInFlowAsync(string baseUrl, HarnessPlan plan, string password)
     {
@@ -970,6 +986,79 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
         // the booking POST needs. The email is synthetic and identifies the client, so no account is required.
         var (publicFormStatus, publicFormHtml) = await GetHtmlAsync(publicClient, $"/r/{slug}/clases?session={sessionId}");
         Assert.Equal(HttpStatusCode.OK, publicFormStatus);
+
+        // T27 D3 rendered-HTML regression: the association between each field and its error container is a server
+        // contract, so these checks parse the HTML the host emitted. ClassDropInService validates FirstName, then
+        // LastName, then Email and stops at the first failure, so one invalid field per CSRF-valid POST isolates
+        // exactly one server error; every rejection is a read that re-renders Classes with HTTP 200.
+        var bookingsBeforeInvalidPosts = await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE BusinessId = @businessId", ("@businessId", businessId));
+        var clientsBeforeInvalidPosts = await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId", ("@businessId", businessId));
+
+        AssertDropInErrorAssociation(publicFormHtml, invalidField: null);
+        Note("HTTP: the valid public render links all four drop-in error containers with unique ids and marks no field invalid.");
+
+        // The token of each rejected POST comes from the previous render, because Classes re-renders the same form.
+        var tokenHtml = publicFormHtml;
+        // Each case also names the exact Spanish summary message the view model and ClassDropInService both own, so
+        // the alert summary can be matched verbatim and the English binder fallback can be ruled out.
+        var rejectedCases = new[]
+        {
+            (Field: "FirstName", Invalid: "", Message: "nombre", Summary: "Ingresá tu nombre."),
+            (Field: "LastName", Invalid: "", Message: "apellido", Summary: "Ingresá tu apellido."),
+            (Field: "Email", Invalid: "sin-arroba", Message: "email", Summary: "Ingresá un email válido.")
+        };
+        foreach (var (field, invalid, message, summary) in rejectedCases)
+        {
+            var fields = new Dictionary<string, string>
+            {
+                ["AppointmentId"] = sessionId.ToString(CultureInfo.InvariantCulture),
+                ["Email"] = "t27d3@example.invalid",
+                ["FirstName"] = "T27D3",
+                ["LastName"] = "T27D3",
+                ["__RequestVerificationToken"] = ExtractToken(tokenHtml)
+            };
+            fields[field] = invalid;
+
+            var rejectedResponse = await publicClient.PostAsync($"/r/{slug}/clases/reservar", Form(fields));
+            Assert.Equal(HttpStatusCode.OK, rejectedResponse.StatusCode);
+            var rejectedHtml = await rejectedResponse.Content.ReadAsStringAsync();
+            // The same screen comes back with the reopened form and the alert summary still present.
+            Assert.Contains("Clases sueltas", rejectedHtml, StringComparison.Ordinal);
+            Assert.Contains("Anotarme en esta clase", rejectedHtml, StringComparison.Ordinal);
+            Assert.Contains("role=\"alert\"", rejectedHtml, StringComparison.Ordinal);
+            AssertDropInErrorAssociation(rejectedHtml, field, message);
+            // The alert summary is the only place the English binder default could leak. Every rejection carries one
+            // message -- the Spanish copy both the view model and ClassDropInService own, the controller adds no
+            // duplicate -- so after decoding exactly one summary item must be present and no "field is required"
+            // fallback may appear anywhere in the render.
+            var alertSummaries = Regex.Matches(rejectedHtml,
+                "<div\\b[^>]*role=\"alert\"[^>]*>(.*?)</div>", RegexOptions.Singleline | RegexOptions.CultureInvariant)
+                .Cast<Match>()
+                .ToArray();
+            Assert.NotEmpty(alertSummaries);
+            var summaryItems = alertSummaries
+                .SelectMany(alert => Regex.Matches(alert.Groups[1].Value, "<li\\b[^>]*>(.*?)</li>", RegexOptions.Singleline)
+                    .Cast<Match>())
+                .Select(item => WebUtility.HtmlDecode(Regex.Replace(item.Groups[1].Value, "<[^>]*>", "")).Trim())
+                .ToArray();
+            Assert.Single(summaryItems);
+            Assert.Equal(summary, summaryItems[0]);
+            Assert.False(
+                Regex.IsMatch(rejectedHtml, "The\\s+\\w+\\s+field is required", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant),
+                $"The rejected {field} render fell back to the English binder message instead of '{summary}'.");
+            tokenHtml = rejectedHtml;
+            Note($"HTTP: public drop-in POST rejected for {field} -> 200 re-rendering the form with only that field server-invalid.");
+        }
+
+        // A rejected booking is a read: the three POSTs above must not have written a booking or a client row.
+        Assert.Equal(bookingsBeforeInvalidPosts, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Bookings WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Assert.Equal(clientsBeforeInvalidPosts, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Note($"SQL: the three rejected public bookings left Bookings ({bookingsBeforeInvalidPosts}) and Clients ({clientsBeforeInvalidPosts}) unchanged.");
+
         var publicEmail = $"t14public{Guid.NewGuid():N}@example.invalid";
         var publicResponse = await publicClient.PostAsync($"/r/{slug}/clases/reservar", Form(new Dictionary<string, string>
         {
@@ -977,7 +1066,7 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
             ["Email"] = publicEmail,
             ["FirstName"] = "Synthetic",
             ["LastName"] = "T14Public",
-            ["__RequestVerificationToken"] = ExtractToken(publicFormHtml)
+            ["__RequestVerificationToken"] = ExtractToken(tokenHtml)
         }));
         Assert.Equal(HttpStatusCode.OK, publicResponse.StatusCode);
         var publicConfirmation = await publicResponse.Content.ReadAsStringAsync();
@@ -3214,6 +3303,64 @@ public sealed class OwnerDayHttpIntegrationTests(ITestOutputHelper output)
         if (!match.Success)
             throw new InvalidOperationException("The synthetic client form did not redirect to a client detail page.");
         return int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// T27 D3 rendered-HTML regression. Parses the drop-in form the server emitted and proves that each editable field
+    /// resolves its <c>aria-describedby</c> to its own <c>dropin-*-error</c> container, declared exactly once in the
+    /// document, and that only the field named by <paramref name="invalidField"/> carries the server-driven
+    /// <c>aria-invalid="true"</c> state. For that field the container must expose the stable <c>data-valmsg-for</c>
+    /// name and the server message text, matched by an ASCII-safe fragment because the HTML encoder escapes the accents
+    /// of the Spanish copy. It reads only rendered bytes: no browser and no accessibility tree is involved.
+    /// </summary>
+    private static void AssertDropInErrorAssociation(string html, string? invalidField, string? messageFragment = null)
+    {
+        // Each container id must appear exactly once in the document, so no aria-describedby link is ambiguous.
+        foreach (var (field, containerId) in DropInErrorContainers)
+        {
+            var input = DropInInputTag(html, field);
+            var describedBy = Regex.Match(input, "aria-describedby=\"([^\"]+)\"", RegexOptions.CultureInvariant);
+            Assert.True(describedBy.Success, $"The rendered {field} input must declare aria-describedby.");
+            Assert.Equal(containerId, describedBy.Groups[1].Value);
+            Assert.Single(Regex.Matches(html, $"id=\"{Regex.Escape(containerId)}\"", RegexOptions.CultureInvariant));
+        }
+
+        // Only the rejected field claims the invalid state; Phone has no server error to announce at all.
+        foreach (var (field, _) in DropInErrorContainers)
+        {
+            var input = DropInInputTag(html, field);
+            if (field == invalidField)
+                Assert.Contains("aria-invalid=\"true\"", input, StringComparison.Ordinal);
+            else
+                Assert.DoesNotContain("aria-invalid=\"true\"", input, StringComparison.Ordinal);
+        }
+
+        if (invalidField is not { } rejected)
+            return;
+
+        var rejectedContainerId = DropInErrorContainers.Single(row => row.Field == rejected).ContainerId;
+        var container = Regex.Match(html,
+            $"<span\\b[^>]*id=\"{Regex.Escape(rejectedContainerId)}\"[^>]*>(.*?)</span>", RegexOptions.Singleline);
+        Assert.True(container.Success, $"The rendered HTML must contain the {rejectedContainerId} container.");
+        Assert.Contains($"data-valmsg-for=\"{rejected}\"", container.Value, StringComparison.Ordinal);
+        var text = WebUtility.HtmlDecode(Regex.Replace(container.Groups[1].Value, "<[^>]*>", "")).Trim();
+        Assert.False(string.IsNullOrWhiteSpace(text), $"The {rejectedContainerId} container must carry the server message text.");
+        Assert.Contains(messageFragment ?? "", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Reads the exact editable <c>&lt;input&gt;</c> tag the server rendered for one drop-in field, matched by the
+    /// <c>name</c> attribute the tag helper emits, so the parsed attributes are the ones a browser receives.
+    /// </summary>
+    private static string DropInInputTag(string html, string field)
+    {
+        var inputs = Regex.Matches(html, "<input\\b[^>]*>", RegexOptions.CultureInvariant).Cast<Match>()
+            .Select(match => match.Value)
+            .Where(tag => tag.Contains($"name=\"{field}\"", StringComparison.Ordinal)
+                && !tag.Contains("type=\"hidden\"", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Single(inputs);
+        return inputs[0];
     }
 
     private static async Task<int> ScalarIntAsync(SqlConnection connection, string sql, params (string Name, object Value)[] args)
