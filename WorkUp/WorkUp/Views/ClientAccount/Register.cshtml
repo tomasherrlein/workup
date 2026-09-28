@@ -2,6 +2,11 @@
 @{
     ViewData["Title"] = "Crear mi cuenta";
     var slug = ViewContext.RouteData.Values["slug"] as string ?? "";
+
+    // A field only claims aria-invalid="true" when the server marked that exact field in ModelState. On a valid
+    // rerender the expression is null, so the attribute is not rendered at all and nothing announces a false error.
+    bool ServerMarkedInvalid(string field) =>
+        ViewData.ModelState.TryGetValue(field, out var entry) && entry.Errors.Count > 0;
 }
 <section class="public-booking" aria-labelledby="account-register-title">
     <h1 id="account-register-title">Creá tu cuenta</h1>
@@ -12,29 +17,39 @@
         <div asp-validation-summary="All" class="notice notice-error" role="alert"></div>
         <div class="field">
             <label asp-for="FirstName"></label>
-            <input asp-for="FirstName" autocomplete="given-name" maxlength="60" required />
-            <span asp-validation-for="FirstName" class="field-error"></span>
+            <input asp-for="FirstName" autocomplete="given-name" maxlength="60" required
+                   aria-describedby="account-register-first-name-error"
+                   aria-invalid="@(ServerMarkedInvalid("FirstName") ? "true" : null)" />
+            <span asp-validation-for="FirstName" id="account-register-first-name-error" class="field-error"></span>
         </div>
         <div class="field">
             <label asp-for="LastName"></label>
-            <input asp-for="LastName" autocomplete="family-name" maxlength="60" required />
-            <span asp-validation-for="LastName" class="field-error"></span>
+            <input asp-for="LastName" autocomplete="family-name" maxlength="60" required
+                   aria-describedby="account-register-last-name-error"
+                   aria-invalid="@(ServerMarkedInvalid("LastName") ? "true" : null)" />
+            <span asp-validation-for="LastName" id="account-register-last-name-error" class="field-error"></span>
         </div>
         <div class="field">
             <label asp-for="Email"></label>
-            <input asp-for="Email" type="email" autocomplete="email" maxlength="254" required />
-            <span asp-validation-for="Email" class="field-error"></span>
+            <input asp-for="Email" type="email" autocomplete="email" maxlength="254" required
+                   aria-describedby="account-register-email-error"
+                   aria-invalid="@(ServerMarkedInvalid("Email") ? "true" : null)" />
+            <span asp-validation-for="Email" id="account-register-email-error" class="field-error"></span>
         </div>
         <div class="field">
             <label asp-for="Password"></label>
-            <input asp-for="Password" type="password" autocomplete="new-password" minlength="8" maxlength="100" required />
+            <input asp-for="Password" type="password" autocomplete="new-password" minlength="8" maxlength="100" required
+                   aria-describedby="account-register-password-error"
+                   aria-invalid="@(ServerMarkedInvalid("Password") ? "true" : null)" />
             <p class="hint">Al menos 8 caracteres.</p>
-            <span asp-validation-for="Password" class="field-error"></span>
+            <span asp-validation-for="Password" id="account-register-password-error" class="field-error"></span>
         </div>
         <div class="field">
             <label asp-for="ConfirmPassword"></label>
-            <input asp-for="ConfirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="100" required />
-            <span asp-validation-for="ConfirmPassword" class="field-error"></span>
+            <input asp-for="ConfirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="100" required
+                   aria-describedby="account-register-confirm-password-error"
+                   aria-invalid="@(ServerMarkedInvalid("ConfirmPassword") ? "true" : null)" />
+            <span asp-validation-for="ConfirmPassword" id="account-register-confirm-password-error" class="field-error"></span>
         </div>
         <div class="actions">
             <button class="btn btn-primary btn-block" type="submit">Crear mi cuenta</button>
