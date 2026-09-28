@@ -6,6 +6,11 @@
     // The sentence stays conditional (RF-27) and only the mode decides what it says about the link.
     var prompt = EmailDeliveryCopy.RecoverPrompt(
         EmailDeliveryCopy.ResolveMode(Options.Value.Email?.Mode), ViewData["BusinessName"] as string);
+
+    // A field only claims aria-invalid="true" when the server marked that exact field in ModelState. On a valid
+    // rerender the expression is null, so the attribute is not rendered at all and nothing announces a false error.
+    bool ServerMarkedInvalid(string field) =>
+        ViewData.ModelState.TryGetValue(field, out var entry) && entry.Errors.Count > 0;
 }
 <section class="public-booking" aria-labelledby="account-recover-title">
     <h1 id="account-recover-title">Recuperar mi contraseña</h1>
@@ -16,8 +21,10 @@
         <div asp-validation-summary="All" class="notice notice-error" role="alert"></div>
         <div class="field">
             <label asp-for="Email"></label>
-            <input asp-for="Email" type="email" autocomplete="email" maxlength="254" required />
-            <span asp-validation-for="Email" class="field-error"></span>
+            <input asp-for="Email" type="email" autocomplete="email" maxlength="254" required
+                   aria-describedby="account-recover-email-error"
+                   aria-invalid="@(ServerMarkedInvalid("Email") ? "true" : null)" />
+            <span asp-validation-for="Email" id="account-recover-email-error" class="field-error"></span>
         </div>
         <div class="actions">
             <button class="btn btn-primary btn-block" type="submit">Enviar enlace</button>
