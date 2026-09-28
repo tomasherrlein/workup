@@ -31,7 +31,7 @@
         <p>No hay horarios disponibles para ese día con @Model.WorkerName.</p>
         @if (Model.Options?.NearestAlternative is { } nearest)
         {
-            <a class="btn-primary" href="/r/@Model.Slug/mis-turnos/@Model.BookingId/reprogramar?date=@DateOnly.FromDateTime(nearest).ToString("yyyy-MM-dd")">
+            <a class="btn btn-primary" href="/r/@Model.Slug/mis-turnos/@Model.BookingId/reprogramar?date=@DateOnly.FromDateTime(nearest).ToString("yyyy-MM-dd")">
                 Horario más cercano: @Formatting.LongDate(DateOnly.FromDateTime(nearest)), @Formatting.Time(nearest)
             </a>
         }
@@ -53,7 +53,7 @@ else
             </select>
             <span asp-validation-for="Input.StartTime"></span>
         </div>
-        <button type="submit" class="btn-primary">Confirmar reprogramación</button>
+        <button type="submit" class="btn btn-primary">Confirmar reprogramación</button>
     </form>
 }
 

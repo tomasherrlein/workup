@@ -69,7 +69,7 @@ else if (form.ServiceId is not null && form.WorkerId is not null)
             {
                 var nearestDate = DateOnly.FromDateTime(nearestAlternative);
                 var nearestTime = TimeOnly.FromDateTime(nearestAlternative);
-                <a class="btn-primary" asp-action="NewBooking"
+                <a class="btn btn-primary" asp-action="NewBooking"
                    asp-route-serviceId="@form.ServiceId" asp-route-workerId="@form.WorkerId"
                    asp-route-date="@nearestDate.ToString("yyyy-MM-dd")"
                    asp-route-startTime="@nearestTime.ToString("HH:mm")"
@@ -111,7 +111,7 @@ else if (form.ServiceId is not null && form.WorkerId is not null)
                 <input asp-for="Input.LastName" autocomplete="family-name" />
                 <span asp-validation-for="Input.LastName"></span>
             </div>
-            <button type="submit" class="btn-primary">Reservar turno</button>
+            <button type="submit" class="btn btn-primary">Reservar turno</button>
         </form>
     }
 }

@@ -31,7 +31,7 @@
         <p>No hay horarios disponibles para ese día con @booking.WorkerName.</p>
         @if (options?.NearestAlternative is { } nearest)
         {
-            <a class="btn-primary" asp-action="Reschedule" asp-route-id="@booking.BookingId"
+            <a class="btn btn-primary" asp-action="Reschedule" asp-route-id="@booking.BookingId"
                asp-route-date="@DateOnly.FromDateTime(nearest).ToString("yyyy-MM-dd")">
                 Horario más cercano: @Formatting.LongDate(DateOnly.FromDateTime(nearest)), @Formatting.Time(nearest)
             </a>
@@ -53,7 +53,7 @@ else
             </select>
             <span asp-validation-for="Input.StartTime"></span>
         </div>
-        <button type="submit" class="btn-primary">Confirmar reprogramación</button>
+        <button type="submit" class="btn btn-primary">Confirmar reprogramación</button>
     </form>
 }
 

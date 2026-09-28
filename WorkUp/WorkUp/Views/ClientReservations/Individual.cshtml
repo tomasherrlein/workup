@@ -61,7 +61,7 @@ else
             <p>@ClientIndividualReservationViewModel.NoSlotsMessage</p>
             @if (Model.NearestAlternative is { } noSlotNearest)
             {
-                <a class="btn-primary" href="/r/@Model.Slug/mis-turnos/reservar/turno?serviceId=@Model.Input.ServiceId&workerId=@Model.Input.WorkerId&date=@DateOnly.FromDateTime(noSlotNearest).ToString("yyyy-MM-dd")">
+                <a class="btn btn-primary" href="/r/@Model.Slug/mis-turnos/reservar/turno?serviceId=@Model.Input.ServiceId&workerId=@Model.Input.WorkerId&date=@DateOnly.FromDateTime(noSlotNearest).ToString("yyyy-MM-dd")">
                     Horario más cercano: @Formatting.LongDate(DateOnly.FromDateTime(noSlotNearest)), @Formatting.Time(noSlotNearest)
                 </a>
             }
@@ -94,7 +94,7 @@ else
                     </a>
                 </p>
             }
-            <button type="submit" class="btn-primary">Confirmar reserva</button>
+            <button type="submit" class="btn btn-primary">Confirmar reserva</button>
         </form>
     }
 }
