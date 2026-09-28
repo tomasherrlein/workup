@@ -3,6 +3,11 @@
     ViewData["Title"] = "Tus datos";
     var dateValue = Model.Date.ToString("yyyy-MM-dd");
     var timeValue = Model.StartTime.ToString("HH:mm");
+
+    // A field only claims aria-invalid="true" when the server marked that exact field in ModelState. On a valid
+    // rerender the expression is null, so the attribute is not rendered at all and nothing announces a false error.
+    bool ServerMarkedInvalid(string field) =>
+        ViewData.ModelState.TryGetValue(field, out var entry) && entry.Errors.Count > 0;
 }
 <partial name="_BookingSteps" model="4" />
 <section class="public-booking" aria-labelledby="booking-title">
@@ -26,18 +31,24 @@
 
         <div class="field">
             <label asp-for="Email">Email</label>
-            <input asp-for="Email" type="email" autocomplete="email" maxlength="254" required />
-            <span asp-validation-for="Email"></span>
+            <input asp-for="Email" type="email" autocomplete="email" maxlength="254" required
+                   aria-describedby="contact-email-error"
+                   aria-invalid="@(ServerMarkedInvalid("Email") ? "true" : null)" />
+            <span asp-validation-for="Email" id="contact-email-error"></span>
         </div>
         <div class="field">
             <label asp-for="FirstName">Nombre</label>
-            <input asp-for="FirstName" autocomplete="given-name" maxlength="60" required />
-            <span asp-validation-for="FirstName"></span>
+            <input asp-for="FirstName" autocomplete="given-name" maxlength="60" required
+                   aria-describedby="contact-first-name-error"
+                   aria-invalid="@(ServerMarkedInvalid("FirstName") ? "true" : null)" />
+            <span asp-validation-for="FirstName" id="contact-first-name-error"></span>
         </div>
         <div class="field">
             <label asp-for="LastName">Apellido</label>
-            <input asp-for="LastName" autocomplete="family-name" maxlength="60" required />
-            <span asp-validation-for="LastName"></span>
+            <input asp-for="LastName" autocomplete="family-name" maxlength="60" required
+                   aria-describedby="contact-last-name-error"
+                   aria-invalid="@(ServerMarkedInvalid("LastName") ? "true" : null)" />
+            <span asp-validation-for="LastName" id="contact-last-name-error"></span>
         </div>
 
         <p class="muted">No necesitás crear una cuenta. Usamos estos datos para identificar tu reserva.</p>
