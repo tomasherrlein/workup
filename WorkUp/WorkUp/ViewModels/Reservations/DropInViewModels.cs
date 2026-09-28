@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using WorkUp.BusinessLogic.Scheduling;
 
@@ -42,10 +43,23 @@ public sealed class PublicDropInListViewModel
 
     public int AppointmentId { get; set; }
 
+    // The three contact fields carry explicit Spanish DataAnnotations so the MVC binder records a Spanish message
+    // before the action runs, instead of the English implicit-required default of a non-nullable reference type. The
+    // required and the nombre/apellido length messages are the ones ClassDropInService.ValidateRequest owns; the Email
+    // >254 message is this application's own convention and is deliberately not copied verbatim from the service,
+    // which collapses over-long and malformed emails into the same "Ingresá un email válido." error. Phone stays
+    // unannotated: it is optional and the service never validates it, so it must not claim a server-side error.
+    [Required(ErrorMessage = "Ingresá tu email.")]
+    [EmailAddress(ErrorMessage = "Ingresá un email válido.")]
+    [StringLength(254, ErrorMessage = "El email no puede superar los 254 caracteres.")]
     public string Email { get; set; } = "";
 
+    [Required(ErrorMessage = "Ingresá tu nombre.")]
+    [StringLength(60, ErrorMessage = "El nombre no puede superar los 60 caracteres.")]
     public string FirstName { get; set; } = "";
 
+    [Required(ErrorMessage = "Ingresá tu apellido.")]
+    [StringLength(60, ErrorMessage = "El apellido no puede superar los 60 caracteres.")]
     public string LastName { get; set; } = "";
 
     public string? Phone { get; set; }

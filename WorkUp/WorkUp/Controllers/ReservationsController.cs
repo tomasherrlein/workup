@@ -189,7 +189,19 @@ public sealed class ReservationsController(
 
         // The service owns the stable codes; mapping them onto the same field names the form posted keeps the
         // message next to the right control and, because the whole model comes back, keeps what the person typed.
-        ModelState.AddBusinessError(attempt.Error!);
+        // The binder validates the three contact fields before this action with the aligned Spanish messages of the
+        // view model, so a field it already rejected must not receive the service error again: duplicating it would
+        // show the same text twice in the alert summary and next to the control. A business error on any other field
+        // (AppointmentId, for instance) has no binder entry and is still mapped, and a fieldless error still lands on
+        // the summary. No gate is added: the service is still the one that judges the request.
+        var error = attempt.Error!;
+        if (error.Field is not { } errorField
+            || !ModelState.TryGetValue(errorField, out var errorEntry)
+            || errorEntry.Errors.Count == 0)
+        {
+            ModelState.AddBusinessError(error);
+        }
+
         list.OpenAppointmentId = model.AppointmentId;
         list.AppointmentId = model.AppointmentId;
         list.Email = model.Email;
