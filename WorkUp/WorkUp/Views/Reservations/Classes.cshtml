@@ -6,6 +6,11 @@
         .GroupBy(session => session.Date)
         .OrderBy(group => group.Key)
         .ToArray();
+
+    // A field only claims aria-invalid="true" when the server marked that exact field in ModelState. On a valid
+    // rerender the expression is null, so the attribute is not rendered at all and nothing announces a false error.
+    bool ServerMarkedInvalid(string field) =>
+        ViewData.ModelState.TryGetValue(field, out var entry) && entry.Errors.Count > 0;
 }
 <section class="public-booking" aria-labelledby="drop-in-title">
     <h1 id="drop-in-title">Clases sueltas</h1>
@@ -48,23 +53,33 @@
                                         <input type="hidden" name="AppointmentId" value="@session.AppointmentId" />
                                         <div class="field">
                                             <label asp-for="Email">Email</label>
-                                            <input asp-for="Email" type="email" autocomplete="email" maxlength="254" required />
-                                            <span asp-validation-for="Email"></span>
+                                            <input asp-for="Email" type="email" autocomplete="email" maxlength="254" required
+                                                   aria-describedby="dropin-email-error"
+                                                   aria-invalid="@(ServerMarkedInvalid("Email") ? "true" : null)" />
+                                            <span asp-validation-for="Email" id="dropin-email-error"></span>
                                         </div>
                                         <div class="field">
                                             <label asp-for="FirstName">Nombre</label>
-                                            <input asp-for="FirstName" autocomplete="given-name" maxlength="60" required />
-                                            <span asp-validation-for="FirstName"></span>
+                                            <input asp-for="FirstName" autocomplete="given-name" maxlength="60" required
+                                                   aria-describedby="dropin-first-name-error"
+                                                   aria-invalid="@(ServerMarkedInvalid("FirstName") ? "true" : null)" />
+                                            <span asp-validation-for="FirstName" id="dropin-first-name-error"></span>
                                         </div>
                                         <div class="field">
                                             <label asp-for="LastName">Apellido</label>
-                                            <input asp-for="LastName" autocomplete="family-name" maxlength="60" required />
-                                            <span asp-validation-for="LastName"></span>
+                                            <input asp-for="LastName" autocomplete="family-name" maxlength="60" required
+                                                   aria-describedby="dropin-last-name-error"
+                                                   aria-invalid="@(ServerMarkedInvalid("LastName") ? "true" : null)" />
+                                            <span asp-validation-for="LastName" id="dropin-last-name-error"></span>
                                         </div>
                                         <div class="field">
                                             <label asp-for="Phone">Teléfono (opcional)</label>
-                                            <input asp-for="Phone" type="tel" autocomplete="tel" maxlength="30" />
-                                            <span asp-validation-for="Phone"></span>
+                                            @* Phone carries no server and no data-val validation, so it can never produce a message
+                                               and it gets no aria-invalid. The empty span below is linked only to keep this field's
+                                               markup consistent with the validated ones. *@
+                                            <input asp-for="Phone" type="tel" autocomplete="tel" maxlength="30"
+                                                   aria-describedby="dropin-phone-error" />
+                                            <span asp-validation-for="Phone" id="dropin-phone-error"></span>
                                         </div>
                                         <div class="actions">
                                             <button class="btn btn-primary" type="submit">Anotarme en esta clase</button>
