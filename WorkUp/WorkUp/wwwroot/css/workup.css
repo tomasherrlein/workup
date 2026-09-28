@@ -873,6 +873,29 @@ dialog.sheet::backdrop { background: rgba(21, 28, 27, 0.4); }
 .details dt { color: var(--counter-ink-muted); font-size: var(--text-label); }
 .details dd { margin: 0; }
 
+/*
+  Narrow-viewport reflow (phone portrait, and the same width at 200% text). The two-column
+  `max-content 1fr` contract sizes the label column to its longest word, which on a 360px viewport with a 32px root
+  font is wider than the whole page: the value column is pushed off-screen and the document scrolls sideways. Below
+  480px the list stacks into a single full-width column instead, so every label and value wraps on its own line with
+  no sideways scroll. The `dt`/`dd` document order is untouched, so each pair stays paired. `minmax(0, 1fr)` removes
+  the content-based `auto` minimum that would let a long value grow the track, and `overflow-wrap: anywhere` lets an
+  unbreakable token (a money amount, a long name) break inside the line rather than overflow it. Neither an ellipsis
+  nor nowrap is used: the full text stays visible at 200% text. Desktop keeps the original two-column contract.
+*/
+@media (max-width: 480px) {
+  .details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .details dt,
+  .details dd {
+    overflow-wrap: anywhere;
+  }
+
+  .details dd { margin-bottom: var(--space-sm); }
+}
+
 /* ---------- Dev tools marker (yellow stays on the dark frame) ---------- */
 
 .devtools-banner {
