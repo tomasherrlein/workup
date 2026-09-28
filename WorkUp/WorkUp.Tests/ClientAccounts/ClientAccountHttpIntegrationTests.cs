@@ -681,6 +681,38 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         var rescheduleAntiforgery = ExtractAntiforgeryToken(rescheduleFormHtml);
         log.KeepSecret(rescheduleAntiforgery);
 
+        // T27 D3 emitted HTML: the clean reprogramming render links its start-time select to its own container and
+        // claims no error, while a CSRF-valid save that omits only the start re-renders 200 with the select marked
+        // aria-invalid and the field message in that span. The valid day travels in the hidden field, so the refusal
+        // is caused by the omitted start alone and must be a read: no appointment, booking, link or payment may move.
+        var cleanRescheduleWire = ReadStartTimeSelect(rescheduleFormHtml);
+        Assert.Equal("client-reschedule-start-time-error", cleanRescheduleWire.ContainerId);
+        Assert.Null(cleanRescheduleWire.AriaInvalid);
+        Assert.Equal(string.Empty, cleanRescheduleWire.ContainerText);
+        using (var omittedStartReschedule = await client.PostAsync(ownReschedulePath, Form(new Dictionary<string, string>
+               {
+                   ["Input.Date"] = rescheduleSeed.OriginalStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                   ["__RequestVerificationToken"] = rescheduleAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.OK, omittedStartReschedule.StatusCode);
+            var omittedStartHtml = await omittedStartReschedule.Content.ReadAsStringAsync();
+            var invalidRescheduleWire = ReadStartTimeSelect(omittedStartHtml);
+            Assert.Equal("true", invalidRescheduleWire.AriaInvalid);
+            Assert.Equal("Elegí un horario.", invalidRescheduleWire.ContainerText);
+            // Field-only branch: the omitted start is the sole invalid input, so ModelState holds a field error and
+            // no model-level one. The view's <div asp-validation-summary="ModelOnly" role="alert"> is the only
+            // role="alert" marker on this screen and the TagHelper suppresses it entirely when there is nothing to
+            // summarize, so no alert container is expected here: the one server message lives in the start-time span
+            // already asserted above and is never duplicated into a summary.
+            Assert.Equal(1, CountOccurrences(WebUtility.HtmlDecode(omittedStartHtml), "Elegí un horario."));
+        }
+        Assert.Equal(rescheduleBookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        Assert.Equal(rescheduleAppointmentBefore, await ReadAppointmentRangeAsync(connection, rescheduleSeed.AppointmentId));
+        AssertLinkUnchanged(rescheduleLinkBefore, await ReadRescheduleLinkAsync(connection, rescheduleSeed.LinkId));
+        Assert.Equal(reschedulePaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
+        log.Note("HTTP/SQL: an omitted start on the reprogramming save -> 200 with the start select aria-invalid and its span carrying the server message, and no appointment, booking, link or payment moved.");
+
         // Another ficha's booking is the same generic 404 for the read and, with a valid token, for the save.
         using (var foreignRescheduleForm = await client.GetAsync(foreignReschedulePath))
         {
@@ -833,6 +865,43 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
 
         var reserveAntiforgery = ExtractAntiforgeryToken(reserveSlotsHtml);
         log.KeepSecret(reserveAntiforgery);
+
+        // T27 D3 emitted HTML: the clean individual render links its start-time select to its own container and
+        // claims no error, while a CSRF-valid save that omits only the start re-renders 200 with the select marked
+        // aria-invalid and the field message in that span. The service, worker and day are the valid hidden selectors,
+        // so the refusal is caused by the omitted start alone and must be a read: no appointment, booking, payment or
+        // client row may move.
+        var cleanReserveWire = ReadStartTimeSelect(reserveSlotsHtml);
+        Assert.Equal("client-reserve-start-time-error", cleanReserveWire.ContainerId);
+        Assert.Null(cleanReserveWire.AriaInvalid);
+        Assert.Equal(string.Empty, cleanReserveWire.ContainerText);
+        using (var omittedStartReserve = await client.PostAsync(reserveTurnPath, Form(new Dictionary<string, string>
+               {
+                   ["Input.ServiceId"] = reserveServiceId.ToString(CultureInfo.InvariantCulture),
+                   ["Input.WorkerId"] = reserveWorkerId.ToString(CultureInfo.InvariantCulture),
+                   ["Input.Date"] = reservationDateText,
+                   ["__RequestVerificationToken"] = reserveAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.OK, omittedStartReserve.StatusCode);
+            var omittedStartHtml = await omittedStartReserve.Content.ReadAsStringAsync();
+            var invalidReserveWire = ReadStartTimeSelect(omittedStartHtml);
+            Assert.Equal("true", invalidReserveWire.AriaInvalid);
+            Assert.Equal("Elegí un horario.", invalidReserveWire.ContainerText);
+            // Field-only branch: the omitted start is the sole invalid input, so ModelState holds a field error and
+            // no model-level one. The view's <div asp-validation-summary="ModelOnly" role="alert"> is the only
+            // role="alert" marker on this screen and the TagHelper suppresses it entirely when there is nothing to
+            // summarize, so no alert container is expected here: the one server message lives in the start-time span
+            // already asserted above and is never duplicated into a summary.
+            Assert.Equal(1, CountOccurrences(WebUtility.HtmlDecode(omittedStartHtml), "Elegí un horario."));
+        }
+        Assert.Equal(reservationReadBookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        Assert.Equal(reservationReadPaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
+        Assert.Equal(reservationReadAppointmentsBefore, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Appointments WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Assert.Equal(reservationReadClientsBefore, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        log.Note("HTTP/SQL: an omitted start on the individual save -> 200 with the start select aria-invalid and its span carrying the server message, and no appointment, booking, payment or client row moved.");
 
         // Without its anti-CSRF token the save is refused before any appointment or booking can be created.
         using (var noTokenReserve = await client.PostAsync(reserveTurnPath, Form(new Dictionary<string, string>
@@ -1379,6 +1448,39 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         var value = Regex.Match(tag.Value, "value=\"([^\"]*)\"", RegexOptions.CultureInvariant);
         Assert.True(value.Success, $"The hidden field '{name}' must carry a value.");
         return value.Groups[1].Value;
+    }
+
+    /// <summary>
+    /// T27 D3 emitted-HTML contract of one client-authenticated start-time select. The select carries the stable id the
+    /// tag helper emits, points its <c>aria-describedby</c> at its own validation span (declared exactly once, so the
+    /// link is never ambiguous) and that span names the same bound field through <c>data-valmsg-for</c>. The raw
+    /// <c>aria-invalid</c> value is returned so the caller can prove the attribute is omitted on a clean render and
+    /// <c>true</c> after a refused save, and the decoded span text is the field error the server wrote.
+    /// </summary>
+    private static StartTimeSelectWire ReadStartTimeSelect(string html)
+    {
+        Assert.Single(Regex.Matches(html, "id=\"Input_StartTime\"", RegexOptions.CultureInvariant).Cast<Match>());
+        var selectTag = Regex.Match(html, "<select\\b[^>]*id=\"Input_StartTime\"[^>]*>", RegexOptions.CultureInvariant);
+        Assert.True(selectTag.Success, "The rendered screen must carry the start-time select the tag helper emits.");
+        var select = selectTag.Value;
+        Assert.Contains("name=\"Input.StartTime\"", select, StringComparison.Ordinal);
+
+        var describedBy = Regex.Match(select, "aria-describedby=\"([^\"]+)\"", RegexOptions.CultureInvariant);
+        Assert.True(describedBy.Success, "The start-time select must link its own error span through aria-describedby.");
+        var containerId = describedBy.Groups[1].Value;
+        Assert.Single(Regex.Matches(html, $"id=\"{Regex.Escape(containerId)}\"", RegexOptions.CultureInvariant).Cast<Match>());
+
+        var container = Regex.Match(html,
+            $"<span\\b[^>]*id=\"{Regex.Escape(containerId)}\"[^>]*>(.*?)</span>",
+            RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        Assert.True(container.Success, $"The rendered HTML must contain the '{containerId}' validation span.");
+        Assert.Contains("data-valmsg-for=\"Input.StartTime\"", container.Value, StringComparison.Ordinal);
+
+        var invalid = Regex.Match(select, "aria-invalid=\"([^\"]*)\"", RegexOptions.CultureInvariant);
+        return new StartTimeSelectWire(
+            containerId,
+            invalid.Success ? invalid.Groups[1].Value : null,
+            WebUtility.HtmlDecode(Regex.Replace(container.Groups[1].Value, "<[^>]*>", string.Empty)).Trim());
     }
 
     private static string LinkFrom(string bodyHtml)
@@ -2220,6 +2322,12 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
     private sealed record NotificationRow(int Id, byte Type, string Recipient, string Subject, string BodyHtml, string DedupKey);
 
     private sealed record SeededClientTurn(int OwnBookingId, int OtherBookingId);
+
+    /// <summary>
+    /// Parsed T27 D3 wiring of a rendered start-time select: the id of its own validation span, the raw aria-invalid
+    /// value when the attribute was emitted (null on a clean render) and the decoded text of that span.
+    /// </summary>
+    private sealed record StartTimeSelectWire(string ContainerId, string? AriaInvalid, string ContainerText);
 
     private sealed record SeededDropInClass(int OwnBookingId, int OtherBookingId, int PaymentId);
 
