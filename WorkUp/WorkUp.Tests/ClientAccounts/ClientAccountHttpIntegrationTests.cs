@@ -713,6 +713,35 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         Assert.Equal(reschedulePaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
         log.Note("HTTP/SQL: an omitted start on the reprogramming save -> 200 with the start select aria-invalid and its span carrying the server message, and no appointment, booking, link or payment moved.");
 
+        // T27 D1 emitted HTML: a CSRF-valid save that omits only the hidden day, and keeps the valid start,
+        // re-renders 200 with the day rebuilt from the reservation. The day has no span of its own and the summary
+        // is ModelOnly, so the day error is the one the controller lifts into that summary: exactly one model-level
+        // item with the exact Spanish copy. The carried start is valid, so its visible span stays clean and no field
+        // error is duplicated for it, and the refusal is a read: no appointment, booking, link or payment may move.
+        using (var omittedDateReschedule = await client.PostAsync(ownReschedulePath, Form(new Dictionary<string, string>
+               {
+                   ["Input.StartTime"] = chosenStart.ToString("HH:mm", CultureInfo.InvariantCulture),
+                   ["__RequestVerificationToken"] = rescheduleAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.OK, omittedDateReschedule.StatusCode);
+            var omittedDateHtml = await omittedDateReschedule.Content.ReadAsStringAsync();
+            Assert.Contains("client-reschedule-title", omittedDateHtml, StringComparison.Ordinal);
+            Assert.Equal(new[] { "Elegí un día." }, ValidationSummaryItems(omittedDateHtml));
+            var cleanDayWire = ReadStartTimeSelect(omittedDateHtml);
+            Assert.Null(cleanDayWire.AriaInvalid);
+            Assert.Equal(string.Empty, cleanDayWire.ContainerText);
+            Assert.Equal(0, CountOccurrences(WebUtility.HtmlDecode(omittedDateHtml), "Elegí un horario."));
+        }
+        Assert.Equal(rescheduleBookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        Assert.Equal(rescheduleAppointmentBefore, await ReadAppointmentRangeAsync(connection, rescheduleSeed.AppointmentId));
+        AssertLinkUnchanged(rescheduleLinkBefore, await ReadRescheduleLinkAsync(connection, rescheduleSeed.LinkId));
+        Assert.Equal(reschedulePaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
+        Assert.Equal(1, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM AppointmentLinks WHERE BookingId = @bookingId",
+            ("@bookingId", rescheduleSeed.BookingId)));
+        log.Note("HTTP/SQL: an omitted day on the reprogramming save -> 200 with exactly one model-level 'Elegí un día.' summary item, a clean start-time span, and no appointment, booking, link or payment moved.");
+
         // Another ficha's booking is the same generic 404 for the read and, with a valid token, for the save.
         using (var foreignRescheduleForm = await client.GetAsync(foreignReschedulePath))
         {
@@ -813,6 +842,12 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
             "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId", ("@businessId", businessId));
         var reservationReadAppointmentsBefore = await ScalarIntAsync(connection,
             "SELECT COUNT(*) FROM Appointments WHERE BusinessId = @businessId", ("@businessId", businessId));
+        var reservationReadLinksBefore = await ScalarIntAsync(connection,
+            """
+            SELECT COUNT(*) FROM AppointmentLinks
+             WHERE BookingId IN (SELECT Id FROM Bookings WHERE BusinessId = @businessId)
+            """,
+            ("@businessId", businessId));
 
         var reserveTurnPath = $"/r/{DemoSlug}/mis-turnos/reservar/turno";
         var reserveClassPath = $"/r/{DemoSlug}/mis-turnos/reservar/clase";
@@ -902,6 +937,39 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
         Assert.Equal(reservationReadClientsBefore, await ScalarIntAsync(connection,
             "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId", ("@businessId", businessId)));
         log.Note("HTTP/SQL: an omitted start on the individual save -> 200 with the start select aria-invalid and its span carrying the server message, and no appointment, booking, payment or client row moved.");
+
+        // T27 D1 emitted HTML: a CSRF-valid save that omits only the hidden day, and keeps the valid service, worker
+        // and start, re-renders 200. The day has no span of its own and the summary is ModelOnly, so the day error is
+        // the one the controller lifts into that summary: exactly one model-level item with the exact Spanish copy.
+        // The carried start is valid, so no field error is duplicated for it, and the refusal is a read: no
+        // appointment, booking, link, payment or client row may move.
+        using (var omittedDateReserve = await client.PostAsync(reserveTurnPath, Form(new Dictionary<string, string>
+               {
+                   ["Input.ServiceId"] = reserveServiceId.ToString(CultureInfo.InvariantCulture),
+                   ["Input.WorkerId"] = reserveWorkerId.ToString(CultureInfo.InvariantCulture),
+                   ["Input.StartTime"] = chosenReserveStart.ToString("HH:mm", CultureInfo.InvariantCulture),
+                   ["__RequestVerificationToken"] = reserveAntiforgery
+               })))
+        {
+            Assert.Equal(HttpStatusCode.OK, omittedDateReserve.StatusCode);
+            var omittedDateHtml = await omittedDateReserve.Content.ReadAsStringAsync();
+            Assert.Contains("client-reserve-title", omittedDateHtml, StringComparison.Ordinal);
+            Assert.Equal(new[] { "Elegí un día." }, ValidationSummaryItems(omittedDateHtml));
+            Assert.Equal(0, CountOccurrences(WebUtility.HtmlDecode(omittedDateHtml), "Elegí un horario."));
+        }
+        Assert.Equal(reservationReadBookingsBefore, await ReadBookingStatesAsync(connection, businessId));
+        Assert.Equal(reservationReadPaymentsBefore, await ReadPaymentStatesAsync(connection, businessId));
+        Assert.Equal(reservationReadAppointmentsBefore, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Appointments WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Assert.Equal(reservationReadClientsBefore, await ScalarIntAsync(connection,
+            "SELECT COUNT(*) FROM Clients WHERE BusinessId = @businessId", ("@businessId", businessId)));
+        Assert.Equal(reservationReadLinksBefore, await ScalarIntAsync(connection,
+            """
+            SELECT COUNT(*) FROM AppointmentLinks
+             WHERE BookingId IN (SELECT Id FROM Bookings WHERE BusinessId = @businessId)
+            """,
+            ("@businessId", businessId)));
+        log.Note("HTTP/SQL: an omitted day on the individual save -> 200 with exactly one model-level 'Elegí un día.' summary item, no start-time field error, and no appointment, booking, link, payment or client row moved.");
 
         // Without its anti-CSRF token the save is refused before any appointment or booking can be created.
         using (var noTokenReserve = await client.PostAsync(reserveTurnPath, Form(new Dictionary<string, string>
@@ -1481,6 +1549,25 @@ public sealed class ClientAccountHttpIntegrationTests(ITestOutputHelper output)
             containerId,
             invalid.Success ? invalid.Groups[1].Value : null,
             WebUtility.HtmlDecode(Regex.Replace(container.Groups[1].Value, "<[^>]*>", string.Empty)).Trim());
+    }
+
+    /// <summary>
+    /// Decoded text of every <c>&lt;li&gt;</c> of the one model-level validation summary a client screen renders, in
+    /// document order. The live region the Razor view declares is a <c>role="alert"</c> div whose summary is its only
+    /// <c>&lt;ul&gt;</c>, so a flash alert -- which renders a paragraph, not a list -- can never be mistaken for it. The
+    /// summary is what a screen reader announces, so a field message duplicated into it would show up here as a second
+    /// item even when the field span collapses its own messages into one line.
+    /// </summary>
+    private static string[] ValidationSummaryItems(string html)
+    {
+        var summary = Regex.Match(html, "<div\\b[^>]*role=\"alert\"[^>]*>\\s*<ul\\b[^>]*>(.*?)</ul>",
+            RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        Assert.True(summary.Success, "The rendered screen must contain the model-level validation-summary alert.");
+        return Regex.Matches(summary.Groups[1].Value, "<li\\b[^>]*>(.*?)</li>",
+                RegexOptions.Singleline | RegexOptions.CultureInvariant)
+            .Cast<Match>()
+            .Select(match => WebUtility.HtmlDecode(Regex.Replace(match.Groups[1].Value, "<[^>]*>", string.Empty)).Trim())
+            .ToArray();
     }
 
     private static string LinkFrom(string bodyHtml)
