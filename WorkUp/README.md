@@ -66,6 +66,27 @@ finally {
 
 Las cuentas creadas son `marina.demo` y `lucia.demo`; la contraseña la define quien ejecuta el comando. Los negocios de Marina y Lucía, las trabajadoras/profesoras, teléfonos, CUIL, precios y horarios del plan son ficticios o sintéticos y solo para demo. Los emails terminan en `.invalid` para impedir el envío a direcciones reales. Si los identificadores demo ya existen con datos distintos o incompletos, la operación se detiene sin modificarlos; una repetición sobre los datos demo intactos no duplica filas.
 
+### Datos variados para la demo local
+
+Después de crear el esquema y sembrar los dos negocios de T07, podés cargar ejemplos operativos **de forma explícita** desde la raíz del repositorio:
+
+```powershell
+sqlcmd -I -b -f 65001 -S '(localdb)\MSSQLLocalDB' -E `
+  -d WorkUpDemoLocal1222f629b401 `
+  -i .\WorkUp\scripts\LocalDemoEnrichment.sql
+```
+
+Ese catálogo es el de la demo manual preparada en esta máquina; en otra máquina reemplazalo por tu catálogo demo dedicado, ya migrado y sembrado. El lote rechaza servidores que no sean LocalDB y catálogos fuera de `WorkUpDemo*`/`WorkUpT07Demo*`. **No apunta a la base compartida `WorkUp`.**
+
+- Agrega clientes ficticios, turnos individuales pasados y futuros, reservas fijas y sueltas de yoga, cobros, gastos, insumos con existencias bajas, abonos y períodos.
+- Solo inserta: no cambia contraseñas de dueña ni actualiza o borra filas previas. Ambos negocios se cargan en una transacción; ante una colisión incompatible, se rechaza todo el lote.
+- Los emails reservados `.invalid` identifican la carga. Una repetición no genera nuevas fechas ni duplica registros; no es un generador de datos renovados para cada semana. Si faltan partes de una carga previa, se detiene en lugar de repararlas silenciosamente.
+- Crea cuentas verificadas de clienta: `demo.client.m1@demo.invalid` y `demo.client.m4@demo.invalid` para Marina; `demo.client.y1@demo.invalid` y `demo.client.y3@demo.invalid` para Lucía. Cada una usa la contraseña de demo que tenía su dueña **al cargar el lote**, copiada solo como hash; nunca se incluye una contraseña en el script.
+- Para probarlas: `/r/peluqueria-marina-demo/cuenta/ingresar` o `/r/estudio-yoga-lucia-demo/cuenta/ingresar`, y luego «Mis turnos». Las fichas están vinculadas por ID y no por coincidencia de email.
+- No fabrica tokens, invitaciones, enlaces privados ni avisos. Los avisos que produzca la app quedan retenidos si se conserva `WorkUp:Email:Mode=Outbox`.
+
+Es una carga de datos de prueba, **no** una migración ni un cambio al contrato de `--seed-demo-data`; nunca se ejecuta automáticamente al iniciar WorkUp.
+
 ### Herramientas de prueba (T26)
 
 La sección **Herramientas de prueba** (`/panel/DevTools`) existe solo si se cumplen **las tres** condiciones al arrancar: entorno `Development`, `WorkUp:Features:DevTools=true` y modo de email que retiene los avisos (`WorkUp:Email:Mode=Outbox`). Si falta cualquiera, la sección responde 404 aunque se entre por URL directa: la guardia falla cerrada y no activa el visor, las tareas ni el reloj. Además exige dueña autenticada y solo muestra los avisos del negocio con el que se ingresó.
