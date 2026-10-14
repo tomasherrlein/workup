@@ -97,7 +97,9 @@ public sealed class OwnerDayTests
     {
         // SQL integration requires an isolated LocalDB; this guard covers the CASE ordering without opening a database.
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
-        var sql = File.ReadAllText(Path.Combine(root, "WorkUp.Data", "Scheduling", "SqlOwnerDayRepository.cs"));
+        // Normalize line endings so the guard holds on CRLF checkouts (core.autocrlf=true on Windows).
+        var sql = File.ReadAllText(Path.Combine(root, "WorkUp.Data", "Scheduling", "SqlOwnerDayRepository.cs"))
+            .Replace("\r\n", "\n");
         var caseStart = sql.IndexOf("CASE\n                       WHEN b.Id IS NULL", StringComparison.Ordinal);
         var caseEnd = sql.IndexOf("END AS PaymentState", caseStart, StringComparison.Ordinal);
         Assert.True(caseStart >= 0 && caseEnd > caseStart);
