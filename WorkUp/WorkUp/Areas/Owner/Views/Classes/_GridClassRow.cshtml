@@ -1,0 +1,25 @@
+@model GridClassRowViewModel
+<li class="row row-flat">
+    <div class="row-main">
+        <div class="row-title">
+            <strong>@Formatting.Time(Model.StartTime)–@Formatting.Time(Model.EndTime) · @Model.ServiceName</strong>
+            <partial name="_StatusTag" model="Model.IsActive ? StatusTag.Active : StatusTag.Archived" />
+        </div>
+        <p class="row-sub">@Model.TeacherName · Cupo @Model.Capacity</p>
+        <div class="row-actions">
+            <a class="btn-link" asp-action="Edit" asp-route-id="@Model.Id">@Icons.Svg("edit", "icon-sm") Editar</a>
+            @if (Model.IsActive)
+            {
+                <form method="post" asp-action="Archive" asp-route-id="@Model.Id" data-confirm="¿Archivar esta clase?">
+                    <button type="submit" class="btn-link">@Icons.Svg("pause", "icon-sm") Archivar</button>
+                </form>
+            }
+            else
+            {
+                <form method="post" asp-action="Reactivate" asp-route-id="@Model.Id">
+                    <button type="submit" class="btn-link">@Icons.Svg("check-double", "icon-sm") Reactivar</button>
+                </form>
+            }
+        </div>
+    </div>
+</li>

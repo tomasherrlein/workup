@@ -1,0 +1,136 @@
+@using WorkUp.ViewModels.ClientPanel
+@model ClientAppointmentsViewModel
+@{
+    Layout = "_ClientLayout";
+    ViewData["Title"] = "Mis turnos y clases";
+}
+<section class="public-booking" aria-labelledby="client-appointments-title">
+    <h1 id="client-appointments-title">Mis turnos y clases</h1>
+    <p>Tus turnos individuales, tus clases fijas y tus clases sueltas en este negocio.</p>
+    @* The two reservation entries are always visible, even when the agenda is empty: reserving is what the person
+       came to do, and the empty state must not be the only thing the screen offers. *@
+    <div class="row-actions">
+        <a class="btn btn-primary" href="/r/@Model.Slug/mis-turnos/reservar/turno">Reservar un turno</a>
+        <a class="btn" href="/r/@Model.Slug/mis-turnos/reservar/clase">Anotarme a una clase suelta</a>
+    </div>
+</section>
+
+<section aria-labelledby="client-appointments-upcoming">
+    <div class="section-header">
+        <h2 id="client-appointments-upcoming">Próximos</h2>
+        <span class="count">@Model.Upcoming.Count</span>
+    </div>
+    @if (!Model.HasUpcoming)
+    {
+        <div class="empty-state" role="status">
+            <p>@ClientAppointmentsViewModel.UpcomingEmptyMessage</p>
+        </div>
+    }
+    else
+    {
+        <ul class="rows" aria-label="Próximos turnos y clases">
+            @foreach (var item in Model.Upcoming)
+            {
+                <li class="row row-flat">
+                    <div class="row-main">
+                        <div class="row-title">
+                            <strong>@item.ServiceName</strong>
+                            <span class="muted">@item.KindLabel</span>
+                        </div>
+                        <div class="row-sub">
+                            <time datetime="@item.StartsAt.ToString("yyyy-MM-dd'T'HH:mm:ss")">@Formatting.LongDate(item.StartsAt)</time>
+                            · de @Formatting.Time(item.StartsAt) a @Formatting.Time(item.EndsAt) · @item.WorkerName
+                        </div>
+                        <div class="row-tags">
+                            <partial name="_StatusTag" model="item.Status" />
+                            @if (item.SuspensionStatus is { } suspension)
+                            {
+                                <partial name="_StatusTag" model="suspension" />
+                            }
+                        </div>
+                        @if (item.EligibilityLabel is { } eligibility)
+                        {
+                            <p class="row-sub">@eligibility</p>
+                        }
+                        @if (item.CanConfirmIntention || (item.CanCancel && (item.IsIndividualTurn || item.IsDropInClass)) || item.CanReschedule)
+                        {
+                            @* The typed shape derived from the appointment kind and modality decides each action: the
+                               individual turn (T21.2) offers confirmation and cancel, the drop-in class (T21.3) offers
+                               its own class cancel, a fixed class keeps its place with no form at all, and the future
+                               reserved individual turn (T21.4) offers a GET link to its own reprogramming screen. *@
+                            <div class="row-actions">
+                                @if (item.CanConfirmIntention)
+                                {
+                                    <form method="post" action="/r/@Model.Slug/mis-turnos/@item.BookingId/confirmar">
+                                        @Html.AntiForgeryToken()
+                                        <button type="submit" class="btn">Confirmar que voy a asistir</button>
+                                    </form>
+                                }
+                                @if (item.CanCancel && item.IsIndividualTurn)
+                                {
+                                    <form method="post" action="/r/@Model.Slug/mis-turnos/@item.BookingId/cancelar">
+                                        @Html.AntiForgeryToken()
+                                        <button type="submit" class="btn">Cancelar turno</button>
+                                    </form>
+                                }
+                                @if (item.CanCancel && item.IsDropInClass)
+                                {
+                                    <form method="post" action="/r/@Model.Slug/mis-turnos/@item.BookingId/cancelar-clase">
+                                        @Html.AntiForgeryToken()
+                                        <button type="submit" class="btn">Cancelar clase</button>
+                                    </form>
+                                }
+                                @if (item.CanReschedule)
+                                {
+                                    @* A GET link to its own form: the move starts on the next screen, never on the
+                                       agenda, so opening the panel can never trigger a state change. *@
+                                    <a class="btn" href="/r/@Model.Slug/mis-turnos/@item.BookingId/reprogramar">Reprogramar</a>
+                                }
+                            </div>
+                        }
+                    </div>
+                </li>
+            }
+        </ul>
+    }
+</section>
+
+<section aria-labelledby="client-appointments-history">
+    <div class="section-header">
+        <h2 id="client-appointments-history">Historial</h2>
+        <span class="count">@Model.History.Count</span>
+    </div>
+    @if (!Model.HasHistory)
+    {
+        <div class="empty-state" role="status">
+            <p>@ClientAppointmentsViewModel.HistoryEmptyMessage</p>
+        </div>
+    }
+    else
+    {
+        <ul class="rows" aria-label="Turnos y clases anteriores">
+            @foreach (var item in Model.History)
+            {
+                <li class="row row-flat">
+                    <div class="row-main">
+                        <div class="row-title">
+                            <strong>@item.ServiceName</strong>
+                            <span class="muted">@item.KindLabel</span>
+                        </div>
+                        <div class="row-sub">
+                            <time datetime="@item.StartsAt.ToString("yyyy-MM-dd'T'HH:mm:ss")">@Formatting.LongDate(item.StartsAt)</time>
+                            · de @Formatting.Time(item.StartsAt) a @Formatting.Time(item.EndsAt) · @item.WorkerName
+                        </div>
+                        <div class="row-tags">
+                            <partial name="_StatusTag" model="item.Status" />
+                            @if (item.SuspensionStatus is { } suspension)
+                            {
+                                <partial name="_StatusTag" model="suspension" />
+                            }
+                        </div>
+                    </div>
+                </li>
+            }
+        </ul>
+    }
+</section>

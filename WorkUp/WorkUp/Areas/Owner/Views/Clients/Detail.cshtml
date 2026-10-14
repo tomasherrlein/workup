@@ -1,0 +1,129 @@
+@model WorkUp.BusinessLogic.Clients.ClientDetail
+@{
+    ViewData["Title"] = Model.Client.FullName;
+    string BookingStatusLabel(BookingStatus status) => status switch
+    {
+        BookingStatus.Pending => "Pendiente",
+        BookingStatus.Confirmed => "Confirmado",
+        BookingStatus.Attended => "Atendido",
+        BookingStatus.Absent => "Ausente",
+        BookingStatus.Cancelled => "Cancelado",
+        _ => throw new ArgumentOutOfRangeException(nameof(status), status, null)
+    };
+}
+<div class="page-header">
+    <div>
+        <h1>@Model.Client.FullName</h1>
+        <p>@Model.Client.Email · @Model.Client.Phone · @(Model.HasAccount ? "Con cuenta" : "Sin cuenta")</p>
+    </div>
+    <a class="btn" asp-action="Edit" asp-route-id="@Model.Client.Id">Editar ficha</a>
+</div>
+
+<section>
+    <h2>Cuenta de la persona</h2>
+    @if (!Model.HasAccount)
+    {
+        <p>
+            Esta ficha todavía no tiene cuenta. La invitación dura 48 horas, sirve una sola vez y podés revocarla;
+            emitir otra invalida la anterior.
+        </p>
+        <form asp-action="Invite" asp-route-id="@Model.Client.Id" method="post" class="form">
+            <div class="field">
+                <label for="Email">Email de destino</label>
+                <input id="Email" name="Email" type="email" value="@Model.Client.Email" required />
+                <span class="hint">Confirmá este email con la persona: si difiere del de la ficha, ese será el email de su cuenta.</span>
+            </div>
+            <div class="field">
+                <label><input id="EmailConfirmed" name="EmailConfirmed" type="checkbox" value="true" /> Confirmé este email con la persona</label>
+            </div>
+            <div class="actions"><button type="submit" class="btn">Invitar a crear su cuenta</button></div>
+        </form>
+        <form asp-action="RevokeInvitation" asp-route-id="@Model.Client.Id" method="post" class="form">
+            <div class="actions"><button type="submit" class="btn">Revocar invitación</button></div>
+        </form>
+    }
+    else
+    {
+        <p>Esta ficha ya tiene una cuenta vinculada: desde acá no se invita ni se revoca nada.</p>
+    }
+</section>
+
+<section>
+    <h2>Observaciones de salud</h2>
+    <p>@(string.IsNullOrWhiteSpace(Model.Client.HealthNotes) ? "Sin observaciones de salud." : Model.Client.HealthNotes)</p>
+</section>
+
+<section>
+    <h2>Observaciones para la próxima atención</h2>
+    <form asp-action="AddNote" asp-route-id="@Model.Client.Id" method="post" class="form">
+        <div class="field">
+            <label for="text">Nueva observación</label>
+            <textarea id="text" name="text" rows="3" required></textarea>
+        </div>
+        <div class="actions"><button type="submit" class="btn btn-primary">Agregar observación</button></div>
+    </form>
+    @if (Model.Notes.Count == 0)
+    {
+        <p>Sin observaciones registradas.</p>
+    }
+    else
+    {
+        <ul class="rows">
+            @foreach (var note in Model.Notes)
+            {
+                <li class="row"><div><strong>@Formatting.LongDate(note.CreatedAt)</strong><br />@note.Text</div></li>
+            }
+        </ul>
+    }
+</section>
+
+<section>
+    <h2>Próximos turnos y clases</h2>
+    @if (Model.UpcomingBookings.Count == 0)
+    {
+        <p>Todavía no hay turnos ni clases registrados para esta ficha.</p>
+    }
+    else
+    {
+        <ul class="rows">
+            @foreach (var booking in Model.UpcomingBookings)
+            {
+                <li class="row"><div><strong>@booking.ServiceName</strong><br />@Formatting.LongDate(booking.StartsAt), @Formatting.Time(booking.StartsAt) · @booking.WorkerName · @BookingStatusLabel(booking.Status)</div></li>
+            }
+        </ul>
+    }
+</section>
+
+<section>
+    <h2>Historial de turnos y clases</h2>
+    @if (Model.PastBookings.Count == 0)
+    {
+        <p>Todavía no hay atenciones ni clases anteriores registradas.</p>
+    }
+    else
+    {
+        <ul class="rows">
+            @foreach (var booking in Model.PastBookings)
+            {
+                <li class="row"><div><strong>@booking.ServiceName</strong><br />@Formatting.LongDate(booking.StartsAt), @Formatting.Time(booking.StartsAt) · @booking.WorkerName · @BookingStatusLabel(booking.Status)</div></li>
+            }
+        </ul>
+    }
+</section>
+
+<section>
+    <h2>Historial de cobros</h2>
+    @if (Model.Payments.Count == 0)
+    {
+        <p>Todavía no hay cobros registrados para esta ficha.</p>
+    }
+    else
+    {
+        <ul class="rows">
+            @foreach (var payment in Model.Payments)
+            {
+                <li class="row"><div><strong>@Formatting.Money(payment.Amount)</strong><br />@Formatting.LongDate(payment.PaidAt) · @(payment.IsAnnulled ? "Anulado" : "Vigente")</div></li>
+            }
+        </ul>
+    }
+</section>

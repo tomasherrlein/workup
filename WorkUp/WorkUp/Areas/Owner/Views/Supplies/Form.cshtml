@@ -1,0 +1,35 @@
+@model WorkUp.Areas.Owner.Controllers.SupplyFormViewModel
+@{
+    var supplyId = ViewData["SupplyId"] as int?;
+    var actionName = supplyId.HasValue ? "Edit" : "Create";
+}
+<div class="page-header"><div><h1>@ViewData["Title"]</h1></div></div>
+
+<form asp-action="@actionName" method="post" class="form" novalidate>
+    <div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+    @if (supplyId.HasValue)
+    {
+        <input type="hidden" name="id" value="@supplyId" />
+    }
+    <div class="field">
+        <label asp-for="Name"></label>
+        <input asp-for="Name" maxlength="100" />
+        <span asp-validation-for="Name" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="CurrentStock"></label>
+        <input asp-for="CurrentStock" type="number" min="0" step="0.01" />
+        <p class="hint">Ingresá el valor que acabás de verificar o reponer.</p>
+        <span asp-validation-for="CurrentStock" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="MinimumStock"></label>
+        <input asp-for="MinimumStock" type="number" min="0" step="0.01" />
+        <span asp-validation-for="MinimumStock" class="field-error"></span>
+    </div>
+    <div class="actions"><button type="submit" class="btn btn-primary">@(supplyId.HasValue ? "Guardar declaración" : "Declarar insumo")</button></div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

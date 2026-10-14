@@ -1,0 +1,58 @@
+@model WorkUp.Areas.Owner.Models.AppointmentLinks.AppointmentLinksIndexViewModel
+@{
+    ViewData["Title"] = "Enlaces privados";
+}
+<div class="page-header">
+    <div>
+        <h1>Enlaces privados</h1>
+        <p>Copiá, revocá o reemplazá el enlace de un turno individual.</p>
+    </div>
+</div>
+
+@if (Model.Bookings.Count == 0)
+{
+    <div class="empty-state"><p>Todavía no hay turnos individuales recientes.</p></div>
+}
+else
+{
+    <ul class="rows">
+        @foreach (var booking in Model.Bookings)
+        {
+            <li class="row">
+                <div>
+                    <strong>Turno #@booking.AppointmentId · Reserva #@booking.BookingId</strong><br />
+                    <span>@Formatting.LongDate(booking.StartsAt), @Formatting.Time(booking.StartsAt) · @booking.ServiceName · @booking.WorkerName</span>
+                    @if (booking.ActiveLinkCount == 1 && booking.ActiveLinkExpiresAt is not null)
+                    {
+                        <br /><span>Vence: @Formatting.LongDate(booking.ActiveLinkExpiresAt.Value), @Formatting.Time(booking.ActiveLinkExpiresAt.Value)</span>
+                    }
+                    else if (booking.ActiveLinkCount > 1)
+                    {
+                        <br /><span>Enlace no disponible.</span>
+                    }
+                    else
+                    {
+                        <br /><span>Sin enlace vigente.</span>
+                    }
+                </div>
+                @if (booking.ActiveLinkCount == 1)
+                {
+                    <div class="actions">
+                        <form asp-action="Copy" method="post">
+                            <input type="hidden" name="id" value="@booking.BookingId" />
+                            <button type="submit" class="btn">@Icons.Svg("copy") Copiar enlace</button>
+                        </form>
+                        <form asp-action="Replace" method="post" data-confirm="¿Reemplazar el enlace? El anterior dejará de funcionar.">
+                            <input type="hidden" name="id" value="@booking.BookingId" />
+                            <button type="submit" class="btn">@Icons.Svg("link") Reemplazar</button>
+                        </form>
+                        <form asp-action="Revoke" method="post" data-confirm="¿Revocar el enlace? La persona ya no podrá abrirlo.">
+                            <input type="hidden" name="id" value="@booking.BookingId" />
+                            <button type="submit" class="btn">@Icons.Svg("cross") Revocar</button>
+                        </form>
+                    </div>
+                }
+            </li>
+        }
+    </ul>
+}

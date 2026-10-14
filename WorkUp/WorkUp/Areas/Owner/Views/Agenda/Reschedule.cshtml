@@ -1,0 +1,62 @@
+@model WorkUp.Areas.Owner.Models.Agenda.AgendaBookingRescheduleViewModel
+@{
+    ViewData["Title"] = "Reprogramar turno";
+    var booking = Model.Booking;
+    var options = Model.Options;
+    var date = Model.Input.Date ?? DateOnly.FromDateTime(booking.StartsAt);
+}
+<div class="page-header">
+    <div>
+        <h1>Reprogramar turno</h1>
+        <p>Elegí un nuevo día y horario para @booking.ClientName, con @booking.WorkerName.</p>
+        <p>Turno actual: @Formatting.LongDate(booking.StartsAt), @Formatting.Time(booking.StartsAt).</p>
+    </div>
+    <a class="btn" asp-action="Detail" asp-route-id="@booking.BookingId">Volver al turno</a>
+</div>
+
+<p class="notice notice-warning">El horario se valida al guardar y puede ocuparse mientras tanto.</p>
+<div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+
+<form method="get" asp-action="Reschedule" asp-route-id="@booking.BookingId" class="agenda-filters" aria-label="Elegir día">
+    <div class="field">
+        <label for="date">Día</label>
+        <input id="date" name="date" type="date" value="@date.ToString("yyyy-MM-dd")" />
+    </div>
+    <button type="submit" class="btn">Ver horarios</button>
+</form>
+
+@if (options is null || options.AvailableStartTimes.Count == 0)
+{
+    <div class="empty-state">
+        <p>No hay horarios disponibles para ese día con @booking.WorkerName.</p>
+        @if (options?.NearestAlternative is { } nearest)
+        {
+            <a class="btn btn-primary" asp-action="Reschedule" asp-route-id="@booking.BookingId"
+               asp-route-date="@DateOnly.FromDateTime(nearest).ToString("yyyy-MM-dd")">
+                Horario más cercano: @Formatting.LongDate(DateOnly.FromDateTime(nearest)), @Formatting.Time(nearest)
+            </a>
+        }
+    </div>
+}
+else
+{
+    <form asp-action="Reschedule" asp-route-id="@booking.BookingId" method="post" class="form">
+        <input asp-for="Input.Date" type="hidden" />
+        <div class="field">
+            <label asp-for="Input.StartTime">Nuevo horario</label>
+            <select asp-for="Input.StartTime">
+                <option value="">Elegí un horario</option>
+                @foreach (var startTime in options.AvailableStartTimes)
+                {
+                    <option value="@startTime.ToString("HH:mm")">@Formatting.Time(date.ToDateTime(startTime))</option>
+                }
+            </select>
+            <span asp-validation-for="Input.StartTime"></span>
+        </div>
+        <button type="submit" class="btn btn-primary">Confirmar reprogramación</button>
+    </form>
+}
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

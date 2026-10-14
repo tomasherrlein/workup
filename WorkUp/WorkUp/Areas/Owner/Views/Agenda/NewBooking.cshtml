@@ -1,0 +1,121 @@
+@model WorkUp.Areas.Owner.Models.Agenda.AgendaBookingFormViewModel
+@{
+    ViewData["Title"] = "Anotar turno";
+    var form = Model.Form;
+}
+<div class="page-header">
+    <div>
+        <h1>Anotar turno individual</h1>
+        <p>Elegí un servicio, una trabajadora, un día y un horario disponible.</p>
+    </div>
+    <a class="btn" asp-action="Index">Volver a la agenda</a>
+</div>
+
+<form method="get" asp-action="NewBooking" class="agenda-filters" aria-label="Elegir disponibilidad">
+    <div class="field">
+        <label for="serviceId">Servicio</label>
+        <select id="serviceId" name="serviceId">
+            <option value="">Elegí un servicio</option>
+            @foreach (var service in form.Catalog.Services)
+            {
+                <option value="@service.Id" selected="@(Model.Input.ServiceId == service.Id)">@service.Name · @Formatting.Money(service.Price)</option>
+            }
+        </select>
+    </div>
+    <div class="field">
+        <label for="workerId">Trabajadora</label>
+        <select id="workerId" name="workerId">
+            <option value="">Elegí una trabajadora</option>
+            @foreach (var worker in form.Workers)
+            {
+                <option value="@worker.Id" selected="@(Model.Input.WorkerId == worker.Id)">@worker.FullName</option>
+            }
+        </select>
+    </div>
+    <div class="field">
+        <label for="date">Día</label>
+        <input id="date" name="date" type="date" value="@form.Date.ToString("yyyy-MM-dd")" />
+    </div>
+    <button type="submit" class="btn">Ver horarios</button>
+</form>
+<div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+
+@if (form.IsPastDate)
+{
+    <div class="notice notice-warning"><p>Elegiste un día que ya pasó. Elegí un día futuro para ver horarios.</p></div>
+}
+else if (form.ServiceId is not null && form.WorkerId is not null)
+{
+    @if (Model.ConflictAlternative is { } conflictAlternative)
+    {
+        var conflictDate = DateOnly.FromDateTime(conflictAlternative);
+        var conflictTime = TimeOnly.FromDateTime(conflictAlternative);
+        <div class="notice notice-warning">
+            <p>Ese horario se ocupó justo ahora. Tus datos se conservaron; elegí otro horario o probá el más cercano:</p>
+            <a class="btn" asp-action="NewBooking"
+               asp-route-serviceId="@form.ServiceId" asp-route-workerId="@form.WorkerId"
+               asp-route-date="@conflictDate.ToString("yyyy-MM-dd")"
+               asp-route-startTime="@conflictTime.ToString("HH:mm")"
+               asp-route-email="@Model.Input.Email" asp-route-firstName="@Model.Input.FirstName" asp-route-lastName="@Model.Input.LastName">
+                @Formatting.LongDate(conflictDate), @Formatting.Time(conflictAlternative)
+            </a>
+        </div>
+    }
+    @if (form.AvailableStartTimes.Count == 0)
+    {
+        <div class="empty-state">
+            <p>No hay horarios disponibles para esa selección y ese día.</p>
+            @if (form.NearestAlternative is { } nearestAlternative)
+            {
+                var nearestDate = DateOnly.FromDateTime(nearestAlternative);
+                var nearestTime = TimeOnly.FromDateTime(nearestAlternative);
+                <a class="btn btn-primary" asp-action="NewBooking"
+                   asp-route-serviceId="@form.ServiceId" asp-route-workerId="@form.WorkerId"
+                   asp-route-date="@nearestDate.ToString("yyyy-MM-dd")"
+                   asp-route-startTime="@nearestTime.ToString("HH:mm")"
+                   asp-route-email="@Model.Input.Email" asp-route-firstName="@Model.Input.FirstName" asp-route-lastName="@Model.Input.LastName">
+                    Horario más cercano: @Formatting.LongDate(nearestDate), @Formatting.Time(nearestAlternative)
+                </a>
+            }
+        </div>
+    }
+    else
+    {
+        <form asp-action="CreateBooking" method="post" class="form" novalidate>
+            <input asp-for="Input.ServiceId" type="hidden" />
+            <input asp-for="Input.WorkerId" type="hidden" />
+            <input asp-for="Input.Date" type="hidden" />
+            <div class="field">
+                <label asp-for="Input.StartTime">Horario disponible</label>
+                <select asp-for="Input.StartTime">
+                    <option value="">Elegí un horario</option>
+                    @foreach (var startTime in form.AvailableStartTimes)
+                    {
+                        <option value="@startTime.ToString("HH:mm")" selected="@(Model.Input.StartTime == startTime)">@Formatting.Time(form.Date.ToDateTime(startTime))</option>
+                    }
+                </select>
+                <span asp-validation-for="Input.StartTime"></span>
+            </div>
+            <div class="field">
+                <label asp-for="Input.Email">Email</label>
+                <input asp-for="Input.Email" type="email" autocomplete="email" />
+                <span asp-validation-for="Input.Email"></span>
+            </div>
+            <div class="field">
+                <label asp-for="Input.FirstName">Nombre</label>
+                <input asp-for="Input.FirstName" autocomplete="given-name" />
+                <span asp-validation-for="Input.FirstName"></span>
+            </div>
+            <div class="field">
+                <label asp-for="Input.LastName">Apellido</label>
+                <input asp-for="Input.LastName" autocomplete="family-name" />
+                <span asp-validation-for="Input.LastName"></span>
+            </div>
+            <button type="submit" class="btn btn-primary">Reservar turno</button>
+        </form>
+    }
+}
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

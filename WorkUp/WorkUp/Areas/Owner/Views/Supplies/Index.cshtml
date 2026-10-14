@@ -1,0 +1,40 @@
+@model WorkUp.Areas.Owner.Controllers.SuppliesIndexViewModel
+@{
+    ViewData["Title"] = "Insumos";
+    var lowStock = Model.Supplies.Where(supply => supply.IsBelowMinimum).ToList();
+}
+<div class="page-header">
+    <div>
+        <h1>Insumos</h1>
+        <p>La existencia se actualiza solo cuando la declarás.</p>
+    </div>
+    <a class="btn btn-primary" asp-action="Create">@Icons.Svg("plus") Nuevo insumo</a>
+</div>
+
+@if (lowStock.Count > 0)
+{
+    <div class="notice notice-warning" role="status">
+        @Icons.Svg("info")
+        <p>@lowStock.Count @(lowStock.Count == 1 ? "insumo está" : "insumos están") por debajo del mínimo. Reponelos y declará la nueva existencia.</p>
+    </div>
+}
+
+@if (Model.Supplies.Count == 0)
+{
+    <div class="empty-state"><p>Todavía no cargaste insumos.</p></div>
+}
+else
+{
+    <ul class="rows">
+        @foreach (var supply in Model.Supplies)
+        {
+            <li class="row supply-row">
+                <div class="row-main">
+                    <div class="row-title"><strong>@supply.Name</strong>@if (supply.IsBelowMinimum) { <span class="tag tag-alert">@Icons.Svg("info", "icon-sm") Reponer</span> }</div>
+                    <div class="row-sub">Existencia declarada: <span class="num">@supply.CurrentStock</span> · Mínimo: <span class="num">@supply.MinimumStock</span></div>
+                </div>
+                <a class="btn" asp-action="Edit" asp-route-id="@supply.Id">Declarar existencia</a>
+            </li>
+        }
+    </ul>
+}

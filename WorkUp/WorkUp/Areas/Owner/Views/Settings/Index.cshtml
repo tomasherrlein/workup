@@ -1,0 +1,45 @@
+@{
+    ViewData["Title"] = "Configuración";
+}
+<div class="page-header">
+    <div>
+        <h1>Configuración</h1>
+    </div>
+</div>
+
+@* Later tasks append their own row here (Servicios, Trabajadoras, Grilla). *@
+<ul class="choice-list">
+    <li>
+        <a class="choice" asp-action="Business">
+            <span><strong>Negocio y avisos</strong><br /><span class="muted">Datos del negocio, contacto y parámetros de avisos</span></span>
+            @Icons.Svg("arrow-right")
+        </a>
+    </li>
+    <li>
+        <a class="choice" asp-action="ExpenseTypes">
+            <span><strong>Tipos de gasto</strong><br /><span class="muted">Categorías para registrar los gastos del negocio</span></span>
+            @Icons.Svg("arrow-right")
+        </a>
+    </li>
+    <li>
+        <a class="choice" asp-action="Services">
+            <span><strong>Servicios y precios</strong><br /><span class="muted">Tarifario de turnos individuales y clases, precios de abono</span></span>
+            @Icons.Svg("arrow-right")
+        </a>
+    </li>
+    <li>
+        <a class="choice" asp-action="Workers">
+            <span><strong>Trabajadoras y horarios</strong><br /><span class="muted">Datos de contacto, horario de atención y pausas por día</span></span>
+            @Icons.Svg("arrow-right")
+        </a>
+    </li>
+    @if ((bool)(ViewData["HasGroupServices"] ?? false))
+    {
+        <li>
+            <a class="choice" asp-controller="Classes" asp-action="Index">
+                <span><strong>Grilla semanal</strong><br /><span class="muted">Días, horarios y profesoras de las clases</span></span>
+                @Icons.Svg("arrow-right")
+            </a>
+        </li>
+    }
+</ul>

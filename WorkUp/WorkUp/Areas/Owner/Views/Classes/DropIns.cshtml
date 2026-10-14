@@ -1,0 +1,135 @@
+@using System.Globalization
+@model DropInOwnerIndexViewModel
+@{
+    ViewData["Title"] = "Clases sueltas";
+    var days = Model.Sessions.GroupBy(session => session.Date).OrderBy(group => group.Key).ToArray();
+}
+@*
+    Owner roster of the sueltas (RF-22, RF-07 cupo > 1). Read-only except for two actions, both PRG: booking a client
+    the owner picks and cancelling an annotation before its class starts. A cancelled annotation stays listed with its
+    status, so the owner sees which place was released instead of watching it disappear; only its cancel action is
+    gone. Every action is gated on the flags the controller derived, never on what the query can write.
+
+    Exactly two primary buttons in the file, each on a mutually exclusive screen: the empty-state escape to the grid
+    and the submit of the one booking form that is open. The roster itself offers only secondary actions, so no screen
+    ever shows two competing primary actions.
+*@
+<div class="page-header">
+    <div>
+        <h1>Clases sueltas</h1>
+        <p>
+            De hoy al @Formatting.LongDate(Model.WindowEnd), con quién está anotado como suelta. Anotá a una alumna que
+            ya tiene ficha o cancelá una suelta antes de que empiece la clase.
+        </p>
+    </div>
+</div>
+
+@if (!Model.HasSessions)
+{
+    <div class="empty-state">
+        <p>No hay clases en los próximos 30 días. Generá la semana para poder anotar sueltas.</p>
+        <a class="btn btn-primary" asp-action="Index">@Icons.Svg("grid") Ir a la grilla</a>
+    </div>
+}
+else
+{
+    @foreach (var day in days)
+    {
+        var headingId = "drop-in-day-" + day.Key.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        var daySessions = day.OrderBy(session => session.StartTime).ToList();
+        <section class="section" aria-labelledby="@headingId">
+            <div class="section-header">
+                <h2 id="@headingId">@Formatting.LongDate(day.Key)</h2>
+                <span class="count">@daySessions.Count</span>
+            </div>
+            <ul class="rows" aria-label="Clases sueltas del @Formatting.LongDate(day.Key)">
+                @foreach (var session in daySessions)
+                {
+                    <li class="row">
+                        <div class="row-time">@Formatting.Time(session.StartTime)</div>
+                        <div class="row-main">
+                            <div class="row-title">
+                                <strong>@session.ServiceName</strong>
+                                <partial name="_StatusTag" model="session.StatusTag" />
+                            </div>
+                            <p class="row-sub">Profesora: @session.TeacherName</p>
+                            @* T16: the roster of generated classes is the way into the class detail, where the
+                               attendance, the walk-in, the cancellation and the suspension live. *@
+                            <div class="row-actions">
+                                <a class="btn" asp-action="Detail" asp-route-id="@session.AppointmentId">@Icons.Svg("users") Ver detalle</a>
+                            </div>
+
+                            @if (!session.HasDropIns)
+                            {
+                                <p class="owner-day-empty-attendees">Sin anotaciones sueltas.</p>
+                            }
+                            else
+                            {
+                                <ul class="owner-day-attendees" aria-label="Anotaciones sueltas de @session.ServiceName">
+                                    @foreach (var annotation in session.DropIns)
+                                    {
+                                        <li>
+                                            <span class="owner-day-attendee-name">@annotation.DisplayName</span>
+                                            <span class="row-tags">
+                                                <partial name="_StatusTag" model="annotation.StatusTag" />
+                                            </span>
+                                            @if (annotation.CanCancel)
+                                            {
+                                                <form method="post" asp-action="CancelDropIn" asp-route-bookingId="@annotation.BookingId"
+                                                      data-confirm="¿Cancelar la reserva suelta de @annotation.DisplayName?">
+                                                    <button type="submit" class="btn-link"
+                                                            aria-label="Cancelar la reserva suelta de @annotation.DisplayName">
+                                                        @Icons.Svg("cross", "icon-sm")
+                                                        <span>Cancelar</span>
+                                                    </button>
+                                                </form>
+                                            }
+                                        </li>
+                                    }
+                                </ul>
+                            }
+
+                            @if (!session.CanBook)
+                            {
+                                <p class="owner-day-empty-attendees">Clase suspendida: no se pueden anotar sueltas.</p>
+                            }
+                            else if (Model.OpenAppointmentId == session.AppointmentId)
+                            {
+                                <form asp-action="BookDropIn" asp-route-appointmentId="@session.AppointmentId" method="post" class="form owner-walk-in-form">
+                                    @if (!Model.HasClients)
+                                    {
+                                        <p class="owner-walk-in-note">
+                                            Todavía no tenés fichas de clientes.
+                                            <a asp-controller="Clients" asp-action="Create">Creá la primera</a>
+                                            para anotar una suelta.
+                                        </p>
+                                    }
+                                    <div class="field">
+                                        <label for="drop-in-client-@session.AppointmentId">Alumna</label>
+                                        <select id="drop-in-client-@session.AppointmentId" name="clientId" required>
+                                            <option value="">Elegí una alumna con ficha</option>
+                                            @foreach (var client in Model.Clients)
+                                            {
+                                                <option value="@client.Id">@client.Name</option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <div class="actions">
+                                        <button type="submit" class="btn btn-primary">@Icons.Svg("user") Anotar suelta</button>
+                                        <a class="btn" asp-action="DropIns">Cerrar</a>
+                                    </div>
+                                </form>
+                            }
+                            else
+                            {
+                                <div class="row-actions">
+                                    <a class="btn" asp-action="DropIns" asp-route-session="@session.AppointmentId">@Icons.Svg("user") Anotar suelta</a>
+                                </div>
+                            }
+                        </div>
+                    </li>
+                }
+            </ul>
+        </section>
+    }
+}

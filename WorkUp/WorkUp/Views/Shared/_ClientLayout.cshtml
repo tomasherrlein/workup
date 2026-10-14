@@ -1,0 +1,27 @@
+@{
+    Layout = "_Layout";
+    var slug = ViewContext.RouteData.Values["slug"] as string ?? User.GetBusinessSlug();
+}
+<header class="public-header on-frame">
+    <div class="inner">
+        <a class="title" href="/r/@slug">@User.GetBusinessName()</a>
+        <nav aria-label="Mi cuenta">
+            <ul class="nav-inline">
+                <li><a href="/r/@slug/mis-turnos">Mis turnos</a></li>
+                <li>
+                    <form method="post" action="/r/@slug/cuenta/salir">
+                        @Html.AntiForgeryToken()
+                        <button class="btn-link" type="submit">Salir</button>
+                    </form>
+                </li>
+            </ul>
+        </nav>
+    </div>
+</header>
+<main id="main" class="public-content" tabindex="-1">
+    <partial name="_Flash" />
+    @RenderBody()
+</main>
+@section Scripts {
+    @await RenderSectionAsync("Scripts", required: false)
+}

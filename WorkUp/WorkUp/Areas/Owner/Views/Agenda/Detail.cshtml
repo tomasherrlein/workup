@@ -1,0 +1,62 @@
+@using WorkUp.Domain.Enums
+@model WorkUp.Areas.Owner.Models.Agenda.AgendaBookingDetailViewModel
+@{
+    ViewData["Title"] = "Detalle del turno";
+    var booking = Model.Booking;
+}
+<div class="page-header">
+    <div>
+        <h1>Detalle del turno</h1>
+        <p>Turno #@booking.AppointmentId · Reserva #@booking.BookingId</p>
+    </div>
+    <div class="page-actions">
+        @if (Model.CanReschedule)
+        {
+            <a class="btn" asp-action="Reschedule" asp-route-id="@booking.BookingId">Reprogramar turno</a>
+        }
+        <a class="btn" asp-action="Index">Volver a la agenda</a>
+    </div>
+</div>
+
+<section class="agenda-detail" aria-label="Información del turno">
+    <div>
+        <h2>Horario</h2>
+        <p>@Formatting.LongDate(booking.StartsAt), @Formatting.Time(booking.StartsAt)–@Formatting.Time(booking.EndsAt)</p>
+    </div>
+    <div>
+        <h2>Servicio y trabajadora</h2>
+        <p>@booking.ServiceName · @booking.WorkerName</p>
+    </div>
+    <div>
+        <h2>Cliente</h2>
+        <p>@booking.ClientName</p>
+        <p>@booking.ClientEmail</p>
+        @if (booking.ClientPhone is not null)
+        {
+            <p>@booking.ClientPhone</p>
+        }
+    </div>
+    <div>
+        <h2>Estado</h2>
+        <div class="row-tags">
+            <partial name="_StatusTag" model="StatusTag.For(booking.AppointmentStatus)" />
+            <partial name="_StatusTag" model="StatusTag.For(booking.BookingStatus)" />
+        </div>
+        <p>Origen: @(booking.Origin == AppointmentOrigin.Reserved ? "Reservado" : "Sin reserva")</p>
+    </div>
+    @if (booking.AgreedPrice is { } agreedPrice)
+    {
+        <div>
+            <h2>Precio acordado</h2>
+            <p>@Formatting.Money(agreedPrice)</p>
+        </div>
+    }
+</section>
+
+@if (booking.CanCancel)
+{
+    <form asp-action="Cancel" method="post" class="form">
+        <input type="hidden" name="id" value="@booking.BookingId" />
+        <button type="submit" class="btn btn-destructive" data-confirm="¿Cancelar este turno? El cobro, si existe, se conserva.">Cancelar turno</button>
+    </form>
+}

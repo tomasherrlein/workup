@@ -1,0 +1,43 @@
+@model WorkUp.Areas.Owner.Controllers.ExpensesIndexViewModel
+@{
+    ViewData["Title"] = "Gastos";
+}
+<div class="page-header">
+    <div>
+        <h1>Gastos</h1>
+        <p>Registrá los gastos del negocio para ver el resultado del período.</p>
+    </div>
+    <a class="btn btn-primary" asp-action="Create">@Icons.Svg("plus") Registrar gasto</a>
+</div>
+
+<form method="get" class="form" role="search">
+    <div class="field">
+        <label asp-for="From"></label>
+        <input asp-for="From" type="date" />
+    </div>
+    <div class="field">
+        <label asp-for="To"></label>
+        <input asp-for="To" type="date" />
+    </div>
+    <div class="actions"><button type="submit" class="btn">Ver período</button></div>
+</form>
+
+@if (Model.Expenses.Count == 0)
+{
+    <div class="empty-state"><p>No hay gastos para el período elegido.</p></div>
+}
+else
+{
+    <ul class="rows">
+        @foreach (var item in Model.Expenses)
+        {
+            <li class="row expense-row">
+                <div class="row-time">@Formatting.ShortDate(item.Expense.SpentOn)</div>
+                <div class="row-main">
+                    <div class="row-title"><strong>@item.Expense.Description</strong><span class="num">@Formatting.Money(item.Expense.Amount)</span></div>
+                    <div class="row-sub">@item.ExpenseTypeName@if (!item.ExpenseTypeIsActive) { <span> · Tipo archivado</span> }</div>
+                </div>
+            </li>
+        }
+    </ul>
+}

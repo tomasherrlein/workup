@@ -1,0 +1,85 @@
+@model WorkerFormViewModel
+@{
+    var workerId = ViewData["WorkerId"] as int?;
+    var actionName = workerId.HasValue ? "EditWorker" : "CreateWorker";
+}
+<div class="page-header">
+    <div>
+        <h1>@ViewData["Title"]</h1>
+    </div>
+</div>
+
+<form asp-action="@actionName" method="post" class="form" novalidate>
+    <div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+    @if (workerId.HasValue)
+    {
+        <input type="hidden" name="id" value="@workerId" />
+    }
+    <div class="field">
+        <label asp-for="FirstName"></label>
+        <input asp-for="FirstName" />
+        <span asp-validation-for="FirstName" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="LastName"></label>
+        <input asp-for="LastName" />
+        <span asp-validation-for="LastName" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="Phone"></label>
+        <input asp-for="Phone" autocomplete="tel" />
+        <span asp-validation-for="Phone" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="Cuil"></label>
+        <input asp-for="Cuil" placeholder="20-30405060-7" />
+        <p class="hint">Con o sin guiones, 11 dígitos.</p>
+        <span asp-validation-for="Cuil" class="field-error"></span>
+    </div>
+
+    <h2>Horario semanal</h2>
+    <p class="hint">Marcá los días que trabaja y su horario. Un día sin marcar es un día libre. Las pausas son opcionales, hasta dos por día, y tienen que quedar dentro del horario de ese día.</p>
+
+    @for (var i = 0; i < Model.Days.Count; i++)
+    {
+        var day = Model.Days[i];
+        <fieldset class="fieldset">
+            <legend>@Formatting.DayName(day.DayOfWeek)</legend>
+            <input type="hidden" asp-for="Days[i].DayOfWeek" />
+            <div class="field">
+                <label class="check">
+                    <input asp-for="Days[i].WorksThisDay" />
+                    Trabaja este día
+                </label>
+            </div>
+            <div class="field">
+                <label asp-for="Days[i].StartTime"></label>
+                <input asp-for="Days[i].StartTime" type="time" asp-format="{0:HH:mm}" />
+            </div>
+            <div class="field">
+                <label asp-for="Days[i].EndTime"></label>
+                <input asp-for="Days[i].EndTime" type="time" asp-format="{0:HH:mm}" />
+            </div>
+
+            @for (var b = 0; b < day.Breaks.Count; b++)
+            {
+                <div class="field">
+                    <label asp-for="Days[i].Breaks[b].StartTime">Inicio de pausa @(b + 1)</label>
+                    <input asp-for="Days[i].Breaks[b].StartTime" type="time" asp-format="{0:HH:mm}" />
+                </div>
+                <div class="field">
+                    <label asp-for="Days[i].Breaks[b].EndTime">Fin de pausa @(b + 1)</label>
+                    <input asp-for="Days[i].Breaks[b].EndTime" type="time" asp-format="{0:HH:mm}" />
+                </div>
+            }
+        </fieldset>
+    }
+
+    <div class="actions">
+        <button type="submit" class="btn btn-primary">@(workerId.HasValue ? "Guardar cambios" : "Crear trabajadora")</button>
+    </div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

@@ -1,0 +1,25 @@
+@model PublicBookingConfirmationViewModel
+@inject Microsoft.Extensions.Options.IOptions<WorkUpOptions> Options
+@{
+    ViewData["Title"] = "Reserva recibida";
+    var emailMode = EmailDeliveryCopy.ResolveMode(Options.Value.Email?.Mode);
+}
+<partial name="_BookingSteps" model="5" />
+<section class="public-booking" aria-labelledby="booking-title">
+    <h1 id="booking-title">Recibimos tu reserva</h1>
+    <div class="notice notice-success" role="status">
+        @Icons.Svg("check")
+        <p>@EmailDeliveryCopy.BookingConfirmationNotice(emailMode)</p>
+    </div>
+
+    <dl class="details public-booking-summary">
+        <dt>Estado</dt><dd><partial name="_StatusTag" model="StatusTag.For(BookingStatus.Pending)" /></dd>
+        <dt>Servicio</dt><dd>@Model.Confirmation.ServiceName</dd>
+        <dt>Trabajadora</dt><dd>@Model.Confirmation.WorkerName</dd>
+        <dt>Día</dt><dd>@Formatting.LongDate(Model.Confirmation.StartsAt)</dd>
+        <dt>Horario</dt><dd>@Formatting.Time(Model.Confirmation.StartsAt)</dd>
+        <dt>Precio</dt><dd>@Formatting.Money(Model.Confirmation.AgreedPrice)</dd>
+    </dl>
+    <p class="muted">@EmailDeliveryCopy.BookingConfirmationHint(emailMode)</p>
+    <a class="btn btn-secondary" asp-action="Index" asp-route-slug="@Model.Business.Slug">Volver a los servicios</a>
+</section>

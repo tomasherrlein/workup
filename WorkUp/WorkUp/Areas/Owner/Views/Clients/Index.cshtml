@@ -1,0 +1,33 @@
+@model WorkUp.Areas.Owner.Controllers.ClientsIndexViewModel
+@{
+    ViewData["Title"] = "Clientes";
+}
+<div class="page-header">
+    <div><h1>Clientes</h1></div>
+    <a class="btn btn-primary" asp-action="Create">@Icons.Svg("plus") Nueva ficha</a>
+</div>
+
+<form method="get" class="form" role="search">
+    <div class="field">
+        <label for="query">Buscar cliente</label>
+        <input id="query" name="query" value="@Model.Query" type="search" placeholder="Nombre, email o teléfono" />
+    </div>
+    <div class="actions"><button type="submit" class="btn">Buscar</button></div>
+</form>
+
+@if (Model.Clients.Count == 0)
+{
+    <div class="empty-state"><p>Todavía no cargaste clientes.</p></div>
+}
+else
+{
+    <ul class="rows">
+        @foreach (var client in Model.Clients)
+        {
+            <li class="row">
+                <div><strong>@client.FullName</strong><br /><span>@client.Email · @client.Phone</span></div>
+                <a class="btn" asp-action="Detail" asp-route-id="@client.Id">Ver ficha</a>
+            </li>
+        }
+    </ul>
+}

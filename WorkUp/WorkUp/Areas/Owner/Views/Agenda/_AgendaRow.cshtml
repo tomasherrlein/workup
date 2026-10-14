@@ -1,0 +1,36 @@
+@using WorkUp.Domain.Enums
+@model WorkUp.BusinessLogic.Scheduling.OwnerAgendaRow
+@{
+    var originLabel = Model.Origin switch
+    {
+        AppointmentOrigin.Reserved => "Reservado",
+        AppointmentOrigin.WalkIn => "Sin reserva",
+        _ => null
+    };
+    var kindLabel = Model.Kind == AppointmentKind.Individual ? "Turno individual" : "Clase de la semana";
+}
+<li class="row">
+    <div class="row-time">
+        <time datetime="@Model.StartsAt.ToString("yyyy-MM-dd'T'HH:mm:ss")">@Formatting.Time(Model.StartsAt)</time>
+        <span class="end">Hasta @Formatting.Time(Model.EndsAt)</span>
+    </div>
+    <div class="row-main">
+        <div class="row-title">
+            <strong>@Model.ServiceName · @(Model.ClientName ?? (Model.BookingId is null ? "Sin anotaciones" : "Cliente"))</strong>
+        </div>
+        <div class="row-sub">@Model.WorkerName · @kindLabel@if (originLabel is not null) { <text> · @originLabel</text> }</div>
+        <div class="row-tags">
+            <partial name="_StatusTag" model="StatusTag.For(Model.AppointmentStatus)" />
+            @if (Model.BookingStatus is { } bookingStatus)
+            {
+                <partial name="_StatusTag" model="StatusTag.For(bookingStatus)" />
+            }
+        </div>
+        @if (Model.Kind == AppointmentKind.Individual && Model.BookingId is { } bookingId)
+        {
+            <div class="row-actions">
+                <a class="btn" asp-action="Detail" asp-route-id="@bookingId">Ver detalle del turno</a>
+            </div>
+        }
+    </div>
+</li>

@@ -1,0 +1,65 @@
+@model List<ExpenseTypeRowViewModel>
+@{
+    ViewData["Title"] = "Tipos de gasto";
+}
+<div class="page-header">
+    <div>
+        <h1>Tipos de gasto</h1>
+    </div>
+</div>
+
+<form asp-action="CreateExpenseType" method="post" class="form" novalidate>
+    <div class="field">
+        <label for="new-expense-type-name">Nuevo tipo de gasto</label>
+        <input id="new-expense-type-name" name="name" maxlength="80" required />
+    </div>
+    <div class="actions">
+        <button type="submit" class="btn btn-primary">Agregar</button>
+    </div>
+</form>
+
+<div class="section">
+    <div class="section-header">
+        <h2>Tipos registrados</h2>
+        <span class="count">@Model.Count</span>
+    </div>
+    @if (Model.Count == 0)
+    {
+        <div class="empty-state">
+            <p>Todavía no cargaste tipos de gasto.</p>
+        </div>
+    }
+    else
+    {
+        <ul class="rows">
+            @foreach (var item in Model)
+            {
+                <li class="row row-flat">
+                    <div class="row-main">
+                        <form method="post" asp-action="RenameExpenseType" class="row-title">
+                            <input type="hidden" name="id" value="@item.Id" />
+                            <label for="expense-type-name-@item.Id" class="visually-hidden">Nombre</label>
+                            <input id="expense-type-name-@item.Id" name="name" value="@item.Name" maxlength="80" required />
+                            <button type="submit" class="btn-link">@Icons.Svg("check", "icon-sm") Guardar</button>
+                        </form>
+                        <div class="row-actions">
+                            <partial name="_StatusTag" model="item.IsActive ? StatusTag.Active : StatusTag.Archived" />
+                            @if (item.IsActive)
+                            {
+                                <form method="post" asp-action="ArchiveExpenseType" asp-route-id="@item.Id" data-confirm="¿Archivar este tipo de gasto?">
+                                    <button type="submit" class="btn-link">@Icons.Svg("pause", "icon-sm") Archivar</button>
+                                </form>
+                            }
+                            else
+                            {
+                                <form method="post" asp-action="ReactivateExpenseType" asp-route-id="@item.Id">
+                                    <button type="submit" class="btn-link">@Icons.Svg("check-double", "icon-sm") Reactivar</button>
+                                </form>
+                            }
+                        </div>
+                    </div>
+                </li>
+            }
+        </ul>
+    }
+</div>

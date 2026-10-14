@@ -5,3 +5,10 @@
 # Material de cátedra: no es producción del equipo, no se redistribuye
 Metodologías de Análisis de Sistemas de Información v4.pdf
 Relevamiento Corralón UTN.pdf
+
+# .NET
+bin/
+obj/
+.vs/
+*.user
+TestResults/

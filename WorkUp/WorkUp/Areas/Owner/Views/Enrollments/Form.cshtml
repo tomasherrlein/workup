@@ -1,0 +1,108 @@
+@using WorkUp.ViewModels.Enrollments
+@model EnrollmentFormViewModel
+@{
+    ViewData["Title"] = "Nueva inscripción";
+    // The amount starts empty on the first render: leaving it untouched must use the tariff of the frequency the
+    // owner actually chose, so the tariff of the preselected frequency is shown only as a placeholder. A re-render
+    // keeps what the owner typed, and only then is the invariant-form guarantee applied to its value.
+    var amountStartsEmpty = ViewData["AgreedPriceStartsEmpty"] as bool? ?? false;
+    var amountPlaceholder = ViewData["AgreedPricePlaceholder"] as string;
+    if (!amountStartsEmpty)
+    {
+        // HTML number inputs only accept the invariant dot form: the input tag helper would otherwise format a
+        // decimal with the request culture ("100,25" under es-AR) and the browser would silently drop it.
+        InvariantDecimalFormValue.Ensure(ViewData.ModelState,
+            ViewData.TemplateInfo.GetFullHtmlFieldName(nameof(Model.AgreedPrice)), Model.AgreedPrice);
+    }
+}
+<div class="page-header">
+    <div>
+        <h1>Nueva inscripción</h1>
+        <p>Inscribí a la alumna en sus clases fijas. El lugar queda reservado desde ahora, antes del primer cobro.</p>
+    </div>
+    <a class="btn" asp-action="Index">@Icons.Svg("arrow-left") Volver a abonos</a>
+</div>
+
+@if (!Model.CanEnroll)
+{
+    <div class="empty-state">
+        <p>@Model.MissingRequirement</p>
+    </div>
+}
+else
+{
+    <form asp-action="Create" method="post" class="form" novalidate>
+        <div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+
+        <div class="field">
+            <label asp-for="ClientId"></label>
+            <select asp-for="ClientId">
+                <option value="">Elegí una alumna</option>
+                @foreach (var client in Model.Clients)
+                {
+                    <option value="@client.Id">@client.Name</option>
+                }
+            </select>
+            <span asp-validation-for="ClientId" class="field-error"></span>
+        </div>
+
+        <div class="field">
+            <label asp-for="WeeklyFrequency"></label>
+            <select asp-for="WeeklyFrequency">
+                @foreach (var option in Model.FrequencyOptions)
+                {
+                    <option value="@option.Frequency">@option.Label · @Formatting.Money(option.Price)</option>
+                }
+            </select>
+            <p class="hint">El precio del abono depende de la frecuencia semanal.</p>
+            <span asp-validation-for="WeeklyFrequency" class="field-error"></span>
+        </div>
+
+        <fieldset class="fieldset">
+            <legend>Clases fijas</legend>
+            <p class="hint">Elegí las clases de la grilla que va a cursar todas las semanas. Se ofrecen solo las que tienen lugar libre.</p>
+            <ul class="rows">
+                @foreach (var gridClass in Model.GridClasses)
+                {
+                    <li class="row row-flat">
+                        <label>
+                            <input type="checkbox" name="GridClassIds" value="@gridClass.GridClassId"
+                                   checked="@Model.GridClassIds.Contains(gridClass.GridClassId)" />
+                            @gridClass.Label — @(gridClass.FreeSeats == 1 ? "1 lugar libre" : $"{gridClass.FreeSeats} lugares libres")
+                        </label>
+                    </li>
+                }
+            </ul>
+            <span asp-validation-for="GridClassIds" class="field-error"></span>
+        </fieldset>
+
+        <div class="field">
+            <label asp-for="AgreedPrice"></label>
+            @if (amountStartsEmpty)
+            {
+                <input id="AgreedPrice" name="AgreedPrice" type="number" min="0.01" max="9999999999.99" step="0.01" value="" placeholder="@amountPlaceholder" />
+            }
+            else
+            {
+                <input asp-for="AgreedPrice" type="number" min="0.01" max="9999999999.99" step="0.01" placeholder="@amountPlaceholder" />
+            }
+            <p class="hint">Dejalo vacío para usar el precio del abono de la frecuencia elegida. Si cargás otro monto, indicá el motivo.</p>
+            <span asp-validation-for="AgreedPrice" class="field-error"></span>
+        </div>
+
+        <div class="field">
+            <label asp-for="PriceReason"></label>
+            <input asp-for="PriceReason" maxlength="200" />
+            <p class="hint">Indicá el motivo solo si el monto acordado difiere del precio del abono.</p>
+            <span asp-validation-for="PriceReason" class="field-error"></span>
+        </div>
+
+        <div class="actions">
+            <button type="submit" class="btn btn-primary">Registrar inscripción</button>
+        </div>
+    </form>
+}
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

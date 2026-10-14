@@ -1,0 +1,120 @@
+@model ServicesPageViewModel
+@{
+    ViewData["Title"] = "Servicios y precios";
+}
+<div class="page-header">
+    <div>
+        <h1>Servicios y precios</h1>
+    </div>
+    <a class="btn btn-primary" asp-action="CreateService">@Icons.Svg("plus") Nuevo servicio</a>
+</div>
+
+<div class="section">
+    <div class="section-header">
+        <h2>Turnos individuales</h2>
+        <span class="count">@Model.Individual.Count</span>
+    </div>
+    @if (Model.Individual.Count == 0)
+    {
+        <div class="empty-state">
+            <p>Todavía no cargaste turnos individuales.</p>
+        </div>
+    }
+    else
+    {
+        <ul class="rows">
+            @foreach (var service in Model.Individual)
+            {
+                <partial name="_ServiceRow" model="service" />
+            }
+        </ul>
+    }
+</div>
+
+<div class="section">
+    <div class="section-header">
+        <h2>Clases</h2>
+        <span class="count">@Model.Classes.Count</span>
+    </div>
+    @if (Model.Classes.Count == 0)
+    {
+        <div class="empty-state">
+            <p>Todavía no cargaste tipos de clase.</p>
+        </div>
+    }
+    else
+    {
+        <ul class="rows">
+            @foreach (var service in Model.Classes)
+            {
+                <partial name="_ServiceRow" model="service" />
+            }
+        </ul>
+    }
+</div>
+
+@if (Model.HasGroupServices)
+{
+    <div class="section">
+        <div class="section-header">
+            <h2>Precios de abono</h2>
+            <span class="count">@Model.MembershipPrices.Count</span>
+        </div>
+        <p class="hint">Precio mensual del abono según la frecuencia semanal. Una frecuencia sin precio cargado no se ofrece al inscribir a un alumno.</p>
+
+        @if (Model.AvailableFrequencies.Count > 0)
+        {
+            <form asp-action="SetMembershipPrice" method="post" class="form" novalidate>
+                <div class="field">
+                    <label for="new-membership-frequency">Frecuencia semanal</label>
+                    <select id="new-membership-frequency" name="weeklyFrequency" required>
+                        @foreach (var frequency in Model.AvailableFrequencies)
+                        {
+                            <option value="@frequency">@frequency @(frequency == 1 ? "vez por semana" : "veces por semana")</option>
+                        }
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="new-membership-price">Precio mensual</label>
+                    <input id="new-membership-price" name="price" type="number" step="0.01" min="0.01" required />
+                </div>
+                <div class="actions">
+                    <button type="submit" class="btn btn-secondary">Guardar precio</button>
+                </div>
+            </form>
+        }
+
+        @if (Model.MembershipPrices.Count == 0)
+        {
+            <div class="empty-state">
+                <p>Todavía no cargaste precios de abono.</p>
+            </div>
+        }
+        else
+        {
+            <ul class="rows">
+                @foreach (var price in Model.MembershipPrices)
+                {
+                    <li class="row row-flat">
+                        <div class="row-main">
+                            <form method="post" asp-action="SetMembershipPrice" class="row-title">
+                                <input type="hidden" name="weeklyFrequency" value="@price.WeeklyFrequency" />
+                                <span>@price.WeeklyFrequency @(price.WeeklyFrequency == 1 ? "vez por semana" : "veces por semana")</span>
+                                <label for="membership-price-@price.WeeklyFrequency" class="visually-hidden">Precio</label>
+                                <input id="membership-price-@price.WeeklyFrequency" name="price" type="number" step="0.01" min="0.01"
+                                       value="@price.Price.ToString(System.Globalization.CultureInfo.InvariantCulture)" required />
+                                <button type="submit" class="btn-link">@Icons.Svg("check", "icon-sm") Guardar</button>
+                            </form>
+                            <div class="row-actions">
+                                <form method="post" asp-action="RemoveMembershipPrice" data-confirm="¿Quitar este precio de abono?">
+                                    <input type="hidden" name="weeklyFrequency" value="@price.WeeklyFrequency" />
+                                    <button type="submit" class="btn-link">@Icons.Svg("cross", "icon-sm") Quitar</button>
+                                </form>
+                            </div>
+                        </div>
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+}

@@ -1,0 +1,76 @@
+@inject OwnerNavigationProvider NavigationProvider
+@inject WorkUp.Infrastructure.DevToolsGate DevToolsGate
+@{
+    Layout = "_Layout";
+    var current = ViewContext.RouteData.Values["controller"] as string;
+    var isAuthenticated = User.Identity?.IsAuthenticated == true;
+    // Anonymous pages (Account/Login, Account/Register) render this same layout: keep the full section list for
+    // them, since there is no signed-in business yet to ask the catalog about.
+    var visibleSections = isAuthenticated
+        ? await NavigationProvider.VisibleSectionsAsync(User.GetBusinessId())
+        : OwnerNavigation.Sections;
+    var sections = visibleSections.ToList();
+    // The test tools are offered only through the fail-closed gate to a signed-in owner, never to an anonymous
+    // visitor and never through the raw feature flag: a production host that mistakenly turns that flag on gets no
+    // link, and the login and register pages never advertise the panel's test section. A positive business claim is
+    // required as well, so even an authenticated principal without a tenant can never be offered the section.
+    var hasOwnerBusiness = int.TryParse(User.FindFirst(WorkUpClaims.BusinessId)?.Value, out var ownerBusinessId)
+        && ownerBusinessId > 0;
+    if (DevToolsGate.IsEnabled && isAuthenticated && hasOwnerBusiness)
+    {
+        sections.Add(OwnerNavigation.DevTools);
+    }
+    var bottomBarItems = OwnerNavigationProvider.BottomBarItems(visibleSections);
+    string? CurrentFor(NavItem item) => string.Equals(item.Controller, current, StringComparison.OrdinalIgnoreCase) ? "page" : null;
+}
+<div class="owner-shell">
+    <header class="app-bar on-frame">
+        <button class="icon-button" type="button" data-nav-open aria-controls="nav-sheet" aria-expanded="false">
+            @Icons.Svg("menu")<span class="visually-hidden">Menú</span>
+        </button>
+        <a class="brand" asp-area="Owner" asp-controller="Day" asp-action="Index">WorkUp</a>
+        <span class="business-name">@User.GetBusinessName()</span>
+    </header>
+
+    <nav class="rail on-frame" aria-label="Principal">
+        <a class="brand" asp-area="Owner" asp-controller="Day" asp-action="Index">WorkUp</a>
+        <div class="business-name">@User.GetBusinessName()</div>
+        <ul class="nav-list">
+            @foreach (var item in sections)
+            {
+                <li><a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon) @item.Label @if (item.AlertCount > 0) { <span class="badge" aria-label="@item.AlertCount insumos para reponer">@item.AlertCount</span> }</a></li>
+            }
+        </ul>
+        <div class="rail-footer">
+            <partial name="_OwnerAccountLinks" />
+        </div>
+    </nav>
+
+    <main id="main" class="content" tabindex="-1">
+        <partial name="_Flash" />
+        @RenderBody()
+    </main>
+
+    <nav class="bottom-bar" aria-label="Accesos rápidos">
+        @foreach (var item in bottomBarItems)
+        {
+            <a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon)<span>@item.Label</span>@if (item.AlertCount > 0) { <span class="badge" aria-label="@item.AlertCount insumos para reponer">@item.AlertCount</span> }</a>
+        }
+        <button type="button" data-nav-open aria-controls="nav-sheet" aria-expanded="false">@Icons.Svg("more")<span>Más</span></button>
+    </nav>
+
+    <div id="nav-sheet" class="nav-sheet" hidden>
+        <div class="nav-sheet-panel" role="dialog" aria-modal="true" aria-label="Menú">
+            <ul class="nav-list">
+                @foreach (var item in sections)
+                {
+                    <li><a asp-area="Owner" asp-controller="@item.Controller" asp-action="Index" aria-current="@CurrentFor(item)">@Icons.Svg(item.Icon) @item.Label @if (item.AlertCount > 0) { <span class="badge" aria-label="@item.AlertCount insumos para reponer">@item.AlertCount</span> }</a></li>
+                }
+            </ul>
+            <partial name="_OwnerAccountLinks" />
+        </div>
+    </div>
+</div>
+@section Scripts {
+    @await RenderSectionAsync("Scripts", required: false)
+}

@@ -1,0 +1,62 @@
+@model RegisterBusinessViewModel
+@{
+    ViewData["Title"] = "Registrar mi negocio";
+    Layout = "_PublicLayout";
+}
+<div class="page-header">
+    <div>
+        <h1>Registrá tu negocio</h1>
+        <p>Creá tu cuenta para empezar a usar WorkUp.</p>
+    </div>
+</div>
+
+<form asp-action="Register" method="post" class="form" novalidate>
+    <div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+    <div class="field">
+        <label asp-for="Name"></label>
+        <input asp-for="Name" autocomplete="organization" data-slug-source autofocus />
+        <span asp-validation-for="Name" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="Slug"></label>
+        <input asp-for="Slug" data-slug-target autocomplete="off" />
+        <p class="hint">Así queda tu enlace de reserva: /r/@(string.IsNullOrEmpty(Model.Slug) ? "tu-negocio" : Model.Slug)</p>
+        <span asp-validation-for="Slug" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="ContactPhone"></label>
+        <input asp-for="ContactPhone" autocomplete="tel" />
+        <span asp-validation-for="ContactPhone" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="NotificationEmail"></label>
+        <input asp-for="NotificationEmail" autocomplete="email" />
+        <p class="hint">Opcional. Ahí llegan el resumen diario y los avisos de existencias.</p>
+        <span asp-validation-for="NotificationEmail" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="Username"></label>
+        <input asp-for="Username" autocomplete="username" />
+        <span asp-validation-for="Username" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="Password"></label>
+        <input asp-for="Password" autocomplete="new-password" />
+        <p class="hint">Al menos 8 caracteres.</p>
+        <span asp-validation-for="Password" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="ConfirmPassword"></label>
+        <input asp-for="ConfirmPassword" autocomplete="new-password" />
+        <span asp-validation-for="ConfirmPassword" class="field-error"></span>
+    </div>
+    <div class="actions">
+        <button type="submit" class="btn btn-primary btn-block">Crear mi cuenta</button>
+    </div>
+</form>
+
+<p><a asp-action="Login">¿Ya tenés cuenta? Ingresá.</a></p>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

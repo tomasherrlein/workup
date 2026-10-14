@@ -1,0 +1,10 @@
+@model WorkUp.Areas.Owner.Models.Day.WalkInViewModel
+@{
+    ViewData["Title"] = "Atención sin turno";
+}
+<div class="page-header"><div><h1>Atención sin turno</h1><p>Registrá una atención individual en el momento. Si se superpone con otra, se guardará igual y te avisaremos.</p></div></div>
+<div class="owner-walk-in-body">
+    <partial name="_WalkInForm" model="Model" />
+</div>
+<div class="actions"><a class="btn" asp-area="Owner" asp-controller="Day" asp-action="Index">Volver a jornada</a></div>
+@section Scripts { <partial name="_ValidationScriptsPartial" /> }

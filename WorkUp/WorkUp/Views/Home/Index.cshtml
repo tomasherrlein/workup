@@ -1,0 +1,38 @@
+@inject WorkUp.Infrastructure.DevToolsGate DevToolsGate
+@{
+    ViewData["Title"] = "Inicio";
+}
+<div class="page-header">
+    <div>
+        <h1>La libreta del mostrador, en el celular</h1>
+        <p>Agenda, clases, abonos, cobros y gastos de tu negocio de servicios por turno.</p>
+    </div>
+</div>
+
+<ul class="choice-list">
+    <li>
+        <a class="choice" href="/panel/Account/Login">
+            <span><strong>Ingresar a mi panel</strong><br /><span class="muted">Para la dueña del negocio</span></span>
+            @Icons.Svg("arrow-right")
+        </a>
+    </li>
+    <li>
+        <a class="choice" href="/panel/Account/Register">
+            <span><strong>Registrar mi negocio</strong><br /><span class="muted">Creá tu cuenta y configurá tus servicios</span></span>
+            @Icons.Svg("arrow-right")
+        </a>
+    </li>
+</ul>
+
+@*
+    The demo-business section is test tooling, so it is offered only through the fail-closed gate and never through the
+    raw feature flag. The viewer itself is never linked from a public page: its entry point is the owner panel, which
+    requires the owner cookie on top of the gate.
+*@
+@if (DevToolsGate.IsEnabled)
+{
+    <section class="section" aria-labelledby="demo-title">
+        <div class="section-header"><h2 id="demo-title">Negocios de demostración</h2></div>
+        <p class="muted">Los usuarios de prueba se listan en <code>WorkUp/README.md</code> cuando se cargan los datos de demostración (T07).</p>
+    </section>
+}

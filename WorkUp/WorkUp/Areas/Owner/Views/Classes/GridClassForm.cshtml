@@ -1,0 +1,75 @@
+@model GridClassFormViewModel
+@{
+    var gridClassId = ViewData["GridClassId"] as int?;
+    var actionName = gridClassId.HasValue ? "Edit" : "Create";
+    var hasActiveFixedAssignment = ViewData["HasActiveFixedAssignment"] as bool? ?? false;
+}
+<div class="page-header">
+    <div>
+        <h1>@ViewData["Title"]</h1>
+    </div>
+</div>
+
+@if (hasActiveFixedAssignment)
+{
+    <div class="notice notice-warning" role="status">
+        <span>@Icons.Svg("info")</span>
+        <p>Esta clase tiene alumnas con horario fijo vigente: para cambiar el tipo de clase, el día o el horario primero cambiá su horario fijo (Abonos). Podés cambiar la profesora si la nueva está disponible.</p>
+    </div>
+}
+
+<form asp-action="@actionName" method="post" class="form" novalidate>
+    <div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+    @if (gridClassId.HasValue)
+    {
+        <input type="hidden" name="id" value="@gridClassId" />
+    }
+    <div class="field">
+        <label asp-for="ServiceId"></label>
+        <select asp-for="ServiceId">
+            <option value="">Elegí un tipo de clase</option>
+            @foreach (var option in Model.ServiceOptions)
+            {
+                <option value="@option.Id">@option.Name</option>
+            }
+        </select>
+        <p class="hint">Solo se ofrecen servicios activos con cupo mayor a 1.</p>
+        <span asp-validation-for="ServiceId" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="DayOfWeek"></label>
+        <select asp-for="DayOfWeek">
+            <option value="">Elegí un día</option>
+            @foreach (var day in GridClassFormViewModel.MondayFirst)
+            {
+                <option value="@day">@Formatting.DayName(day)</option>
+            }
+        </select>
+        <span asp-validation-for="DayOfWeek" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="StartTime"></label>
+        <input asp-for="StartTime" type="time" asp-format="{0:HH:mm}" />
+        <span asp-validation-for="StartTime" class="field-error"></span>
+    </div>
+    <div class="field">
+        <label asp-for="WorkerId"></label>
+        <select asp-for="WorkerId">
+            <option value="">Elegí una profesora</option>
+            @foreach (var option in Model.WorkerOptions)
+            {
+                <option value="@option.Id">@option.FullName</option>
+            }
+        </select>
+        <p class="hint">Solo se ofrecen trabajadoras activas.</p>
+        <span asp-validation-for="WorkerId" class="field-error"></span>
+    </div>
+
+    <div class="actions">
+        <button type="submit" class="btn btn-primary">@(gridClassId.HasValue ? "Guardar cambios" : "Crear clase")</button>
+    </div>
+</form>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

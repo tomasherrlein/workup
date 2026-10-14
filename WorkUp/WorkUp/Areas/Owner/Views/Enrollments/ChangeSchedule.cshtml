@@ -1,0 +1,74 @@
+@using WorkUp.ViewModels.Enrollments
+@model ChangeScheduleFormViewModel
+@{
+    ViewData["Title"] = "Cambiar horario";
+    // HTML date inputs only accept the invariant ISO form; the tag helper already renders it for a DateOnly, and the
+    // minimum keeps a past date from being offered even though the service is the only guard that rejects it.
+    var minimumDate = Model.Today.ToString("yyyy-MM-dd");
+}
+<div class="page-header">
+    <div>
+        <h1>Cambiar horario</h1>
+        <p>Mové una clase fija del abono a otro horario de la grilla. Los días anteriores a la vigencia no se modifican.</p>
+    </div>
+    <a class="btn" asp-action="Index">@Icons.Svg("arrow-left") Volver a abonos</a>
+</div>
+
+@if (!Model.CanChange)
+{
+    <div class="empty-state">
+        <p>@(Model.HasCurrentClasses
+            ? "No hay otro horario de la grilla con lugar libre. Liberá un lugar o agregá una clase a la grilla."
+            : "Esa inscripción no tiene un horario fijo vigente para cambiar.")</p>
+    </div>
+}
+else
+{
+    <form asp-action="ChangeSchedule" method="post" class="form" novalidate>
+        <div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+        <input type="hidden" asp-for="EnrollmentId" />
+
+        <p class="hint">Alumna: <strong>@Model.ClientName</strong></p>
+
+        <div class="field">
+            <label asp-for="CurrentGridClassId"></label>
+            <select asp-for="CurrentGridClassId">
+                <option value="">Elegí el horario actual que se muda</option>
+                @foreach (var option in Model.CurrentClasses)
+                {
+                    <option value="@option.GridClassId">@option.Label</option>
+                }
+            </select>
+            <p class="hint">Elegí cuál de sus clases fijas cambia de horario.</p>
+            <span asp-validation-for="CurrentGridClassId" class="field-error"></span>
+        </div>
+
+        <div class="field">
+            <label asp-for="NewGridClassId"></label>
+            <select asp-for="NewGridClassId">
+                <option value="">Elegí el nuevo horario</option>
+                @foreach (var option in Model.GridClasses)
+                {
+                    <option value="@option.GridClassId">@option.Label — @(option.FreeSeats == 1 ? "1 lugar libre" : $"{option.FreeSeats} lugares libres")</option>
+                }
+            </select>
+            <p class="hint">Los lugares libres son orientativos: el sistema vuelve a verificar el cupo al registrar el cambio.</p>
+            <span asp-validation-for="NewGridClassId" class="field-error"></span>
+        </div>
+
+        <div class="field">
+            <label asp-for="EffectiveFrom"></label>
+            <input asp-for="EffectiveFrom" type="date" min="@minimumDate" />
+            <p class="hint">Desde esa fecha rige el nuevo horario. Las asistencias, cancelaciones y suspensiones anteriores no se tocan, y el vencimiento, el precio y el día de referencia del abono quedan igual.</p>
+            <span asp-validation-for="EffectiveFrom" class="field-error"></span>
+        </div>
+
+        <div class="actions">
+            <button type="submit" class="btn btn-primary">Cambiar horario</button>
+        </div>
+    </form>
+}
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

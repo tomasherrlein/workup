@@ -1,0 +1,95 @@
+@using WorkUp.ViewModels.ClientAccounts
+@model WorkUp.ViewModels.ClientAccounts.ClientInvitationViewModel
+@{
+    ViewData["Title"] = "Aceptá tu invitación";
+    var slug = ViewContext.RouteData.Values["slug"] as string ?? "";
+    var action = $"/r/{slug}/cuenta/invitacion";
+
+    // The two sibling forms post the same ModelState key "Password", but only the mode the request submitted can own
+    // the server error: an unknown mode falls back to the new-account form, the only one the whitelist validates.
+    var activeExisting = Model.Mode == ClientInvitationModes.ExistingAccount;
+
+    // A field only claims aria-invalid="true" when the server marked that exact field in ModelState; the attribute is
+    // omitted entirely (null) on the valid branch, so nothing announces a false error.
+    bool ServerMarkedInvalid(string field) =>
+        ViewData.ModelState.TryGetValue(field, out var entry) && entry.Errors.Count > 0;
+}
+<section class="public-booking" aria-labelledby="account-invitation-title">
+    <h1 id="account-invitation-title">Aceptá tu invitación</h1>
+    <p>
+        Este enlace es para <strong>@Model.Email</strong> y vence el @Formatting.ShortDate(Model.ExpiresAt)
+        a las @Formatting.Time(Model.ExpiresAt). Sirve una sola vez.
+    </p>
+
+    <div asp-validation-summary="All" class="notice notice-error" role="alert"></div>
+
+    <form method="post" action="@action" class="form">
+        @Html.AntiForgeryToken()
+        <input asp-for="Token" id="NewInvitationToken" type="hidden" />
+        <input type="hidden" name="Mode" value="@ClientInvitationModes.NewAccount" />
+        <h2>Crear mi cuenta</h2>
+        <p>Elegí una contraseña para tu cuenta nueva de @ViewData["BusinessName"].</p>
+        <div class="field">
+            <label asp-for="Password">Contraseña</label>
+            <input asp-for="Password" type="password" autocomplete="new-password" minlength="8" maxlength="100" required
+                   aria-describedby="account-invitation-new-password-error"
+                   aria-invalid="@(!activeExisting && ServerMarkedInvalid("Password") ? "true" : null)" />
+            <p class="hint">Al menos 8 caracteres.</p>
+            @if (!activeExisting)
+            {
+                <span asp-validation-for="Password" id="account-invitation-new-password-error" class="field-error"></span>
+            }
+            else
+            {
+                <span id="account-invitation-new-password-error" data-valmsg-for="Password" data-valmsg-replace="true" class="field-error"></span>
+            }
+        </div>
+        <div class="field">
+            <label asp-for="ConfirmPassword">Repetí la contraseña</label>
+            <input asp-for="ConfirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="100" required
+                   aria-describedby="account-invitation-confirm-password-error"
+                   aria-invalid="@(!activeExisting && ServerMarkedInvalid("ConfirmPassword") ? "true" : null)" />
+            @if (!activeExisting)
+            {
+                <span asp-validation-for="ConfirmPassword" id="account-invitation-confirm-password-error" class="field-error"></span>
+            }
+            else
+            {
+                <span id="account-invitation-confirm-password-error" data-valmsg-for="ConfirmPassword" data-valmsg-replace="true" class="field-error"></span>
+            }
+        </div>
+        <div class="actions">
+            <button class="btn btn-primary btn-block" type="submit">Crear mi cuenta</button>
+        </div>
+    </form>
+
+    <form method="post" action="@action" class="form">
+        @Html.AntiForgeryToken()
+        <input asp-for="Token" id="ExistingInvitationToken" type="hidden" />
+        <input type="hidden" name="Mode" value="@ClientInvitationModes.ExistingAccount" />
+        <h2>Ya tengo una cuenta</h2>
+        <p>Si ya te registraste y todavía no confirmaste el email, ingresá con esa contraseña.</p>
+        <div class="field">
+            <label for="ExistingPassword">Contraseña</label>
+            <input asp-for="Password" id="ExistingPassword" type="password" autocomplete="current-password" maxlength="100" required
+                   aria-describedby="account-invitation-existing-password-error"
+                   aria-invalid="@(activeExisting && ServerMarkedInvalid("Password") ? "true" : null)" />
+            @if (activeExisting)
+            {
+                <span asp-validation-for="Password" id="account-invitation-existing-password-error" class="field-error"></span>
+            }
+            else
+            {
+                <span id="account-invitation-existing-password-error" data-valmsg-for="Password" data-valmsg-replace="true" class="field-error"></span>
+            }
+        </div>
+        <div class="actions">
+            <button class="btn btn-primary btn-block" type="submit">Vincular mi cuenta</button>
+        </div>
+    </form>
+
+    <p class="muted">El enlace vence a las 48 horas y sirve una sola vez. Si ya venció, pedile al negocio una invitación nueva.</p>
+</section>
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

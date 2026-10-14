@@ -1,0 +1,249 @@
+@using System.Globalization
+@model ClassDetailViewModel
+@{
+    ViewData["Title"] = "Detalle de la clase";
+    var session = Model.Session;
+    var appointmentId = session.AppointmentId.ToString(CultureInfo.InvariantCulture);
+}
+@*
+    Owner detail of one generated class (RF-10, RF-11, RF-12, RF-22, D-15, D-16, D-20, D-23). Read-only except for the
+    six actions, all PRG: per-student attendance with the optional drop-in charge and observation, absence, at-arrival
+    walk-in, cancellation of one annotation, suspension of the date and the late charge of a drop-in already marked as
+    present (T18). Every action is gated on the flags the controller derived — the service still enforces every rule
+    under its own lock — and each form posts the id of the class only to choose the page the owner returns to, never
+    what the action writes.
+
+    The late charge exists because a second attendance is refused and no other path writes the drop-in money: the owner
+    marked the attendance and forgot the charge. It writes the payment and nothing else, so the hint says in words that
+    it changes neither the attendance nor anything sent, that a duplicate is refused, and that a wrong charge is
+    corrected by annulling it in the ledger and then registering the corrected one here.
+
+    The roster shows cancelled annotations with «Cancelada (lugar liberado)» and absences as «Ausente»: cancelling
+    releases the place and does not erase who held it. The occupancy comes from the read (a single capacity rule), and
+    the page never counts anything of its own.
+
+    Exactly one primary button in the file: the submit of the walk-in form. The roster offers only secondary actions,
+    so no screen shows two competing primary actions.
+*@
+<div class="page-header">
+    <div>
+        <h1>@session.ServiceName</h1>
+        <p>
+            @Formatting.LongDate(session.Date) · @Formatting.Time(session.StartTime) · Hasta @Formatting.Time(session.EndTime) · Profesora: @session.TeacherName
+        </p>
+    </div>
+    <div class="nav-inline">
+        <partial name="_StatusTag" model="session.StatusTag" />
+        <a class="btn" asp-action="DropIns">@Icons.Svg("arrow-left") Clases sueltas</a>
+    </div>
+</div>
+
+<div class="summary-band" aria-label="Ocupación de la clase">
+    <div>
+        <span class="label">Ocupación</span>
+        <strong class="figure">@session.PlacesTaken/@session.MaxCapacity</strong>
+        <span class="hint">@session.OccupancyLabel</span>
+    </div>
+    <div>
+        <span class="label">Lugares libres</span>
+        <strong class="figure-sm">@session.RemainingPlaces</strong>
+    </div>
+    <div>
+        <span class="label">Ausentes</span>
+        <strong class="figure-sm">@Model.AbsentCount</strong>
+    </div>
+    <div>
+        <span class="label">Pendientes de renovación</span>
+        <strong class="figure-sm">@Model.PendingRenewalCount</strong>
+    </div>
+</div>
+
+@if (session.Suspended)
+{
+    <div class="section">
+        <div class="section-header">
+            <h2>Clase suspendida</h2>
+        </div>
+        <p>
+            @if (!string.IsNullOrWhiteSpace(session.SuspensionReason))
+            {
+                <text>Motivo: @session.SuspensionReason. </text>
+            }
+            Las alumnas anotadas siguen en la lista: suspender no cancela a nadie.
+        </p>
+    </div>
+}
+
+@if (session.CanRegisterWalkIn)
+{
+    <div class="section">
+        <div class="section-header">
+            <h2>Llegada sin reserva</h2>
+        </div>
+        <p class="owner-walk-in-note">
+            Registrá a una alumna que llegó sin anotarse a esta clase. Queda como suelta y presente; no se envía ningún
+            email y el cobro es opcional.
+        </p>
+        <form asp-action="RegisterWalkIn" asp-route-appointmentId="@session.AppointmentId" method="post"
+              class="form owner-walk-in-form">
+            @if (!Model.HasClients)
+            {
+                <p class="owner-walk-in-note">
+                    Todavía no tenés fichas de clientes.
+                    <a asp-controller="Clients" asp-action="Create">Creá la primera</a>
+                    para registrar una llegada.
+                </p>
+            }
+            <div class="field">
+                <label for="walk-in-client">Alumna</label>
+                <select id="walk-in-client" name="clientId" required>
+                    <option value="">Elegí una alumna con ficha</option>
+                    @foreach (var client in Model.Clients)
+                    {
+                        <option value="@client.Id">@client.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="field">
+                <label for="walk-in-amount">Cobro de la suelta (opcional)</label>
+                <input id="walk-in-amount" name="amount" type="number" min="0.01" max="9999999999.99" step="0.01"
+                       placeholder="Sin cobro" />
+            </div>
+            <div class="field">
+                <label for="walk-in-note">Observación para la próxima atención (opcional, solo dueña)</label>
+                <textarea id="walk-in-note" name="nextVisitNote" maxlength="1000"></textarea>
+            </div>
+            <div class="actions">
+                <button type="submit" class="btn btn-primary">@Icons.Svg("user") Registrar llegada</button>
+            </div>
+        </form>
+    </div>
+}
+
+<div class="section">
+    <div class="section-header">
+        <h2>Alumnas anotadas</h2>
+        <span class="count">@Model.Students.Count</span>
+    </div>
+    @if (!Model.HasStudents)
+    {
+        <div class="empty-state">
+            <p>Todavía no hay alumnas anotadas en esta clase.</p>
+        </div>
+    }
+    else
+    {
+        <ul class="rows owner-day-rows" aria-label="Alumnas anotadas de @session.ServiceName">
+            @foreach (var student in Model.Students)
+            {
+                <li class="row owner-day-item">
+                    <div class="row-main">
+                        <div class="row-title">
+                            <strong>@student.DisplayName</strong>
+                            <partial name="_StatusTag" model="student.StatusTag" />
+                            @if (student.FixedStateTag is { } fixedStateTag)
+                            {
+                                <partial name="_StatusTag" model="fixedStateTag" />
+                            }
+                        </div>
+                        <p class="row-sub">@student.ModalityLabel</p>
+
+                        @if (student.CanAttend)
+                        {
+                            <form asp-action="Attend" asp-route-id="@student.BookingId" method="post"
+                                  class="owner-day-action">
+                                <input type="hidden" name="appointmentId" value="@appointmentId" />
+                                @if (student.IsDropIn)
+                                {
+                                    <div class="field">
+                                        <label for="attend-amount-@student.BookingId">Cobro de la suelta (opcional)</label>
+                                        <input id="attend-amount-@student.BookingId" name="amount" type="number"
+                                               min="0.01" max="9999999999.99" step="0.01" placeholder="Sin cobro" />
+                                    </div>
+                                }
+                                <div class="field">
+                                    <label for="attend-note-@student.BookingId">Observación para la próxima atención (opcional, solo dueña)</label>
+                                    <textarea id="attend-note-@student.BookingId" name="nextVisitNote"
+                                              maxlength="1000"></textarea>
+                                </div>
+                                <button type="submit" class="btn">Registrar asistencia</button>
+                            </form>
+                        }
+
+                        @if (student.CanMarkAbsent)
+                        {
+                            <form asp-action="MarkAbsent" asp-route-id="@student.BookingId" method="post"
+                                  class="owner-day-action">
+                                <input type="hidden" name="appointmentId" value="@appointmentId" />
+                                <button type="submit" class="btn">Marcar ausente</button>
+                            </form>
+                        }
+
+                        @if (student.CanCancel)
+                        {
+                            <form asp-action="CancelBooking" asp-route-id="@student.BookingId" method="post"
+                                  class="owner-day-action"
+                                  data-confirm="¿Cancelar la anotación de @student.DisplayName? El lugar queda libre.">
+                                <input type="hidden" name="appointmentId" value="@appointmentId" />
+                                <button type="submit" class="btn">
+                                    @Icons.Svg("cross", "icon-sm")
+                                    <span>Cancelar anotación</span>
+                                </button>
+                            </form>
+                        }
+
+                        @* The late charge of a drop-in already marked as present (T18, D-20): the owner forgot it at the
+                           desk and this is the only path that can still write it. It never re-marks the attendance and
+                           never sends anything, and the server refuses a duplicate: the text says both things in words. *@
+                        @if (student.CanCharge)
+                        {
+                            <form asp-action="ChargeDropIn" asp-route-id="@student.BookingId" method="post"
+                                  class="owner-day-action">
+                                <input type="hidden" name="appointmentId" value="@appointmentId" />
+                                <div class="field">
+                                    <label for="charge-amount-@student.BookingId">Cobro de la suelta ya asistida</label>
+                                    <input id="charge-amount-@student.BookingId" name="amount" type="number"
+                                           min="0.01" max="9999999999.99" step="0.01" required />
+                                </div>
+                                <div class="field">
+                                    <label for="charge-reason-@student.BookingId">Motivo del precio (opcional, solo dueña)</label>
+                                    <input id="charge-reason-@student.BookingId" name="priceReason" maxlength="200" />
+                                </div>
+                                <button type="submit" class="btn">Registrar cobro</button>
+                                <p class="hint">
+                                    Registrar el cobro no cambia la asistencia ni envía ningún email. Si esa clase suelta ya
+                                    tiene un cobro vigente, se rechaza: anulá ese cobro en
+                                    <a asp-controller="Payments" asp-action="Index">Cobros</a> y registrá acá el corregido.
+                                </p>
+                            </form>
+                        }
+                    </div>
+                </li>
+            }
+        </ul>
+        <p class="hint">Cancelar una anotación libera el lugar: no anula ni devuelve cobros.</p>
+    }
+</div>
+
+@if (session.CanSuspend)
+{
+    <div class="section">
+        <div class="section-header">
+            <h2>Suspender esta fecha</h2>
+        </div>
+        <p class="hint">
+            Suspender la clase no cancela las anotaciones ni devuelve dinero: se avisa a las alumnas anotadas y la
+            grilla queda igual.
+        </p>
+        <form asp-action="Suspend" asp-route-id="@session.AppointmentId" method="post" class="form"
+              data-confirm="¿Suspender la clase del @Formatting.LongDate(session.Date)?">
+            <div class="field">
+                <label for="suspend-reason">Motivo de la suspensión</label>
+                <input id="suspend-reason" name="reason" required maxlength="300" />
+            </div>
+            <div class="actions">
+                <button type="submit" class="btn">Suspender clase</button>
+            </div>
+        </form>
+    </div>
+}

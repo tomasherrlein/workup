@@ -1,0 +1,14 @@
+@{
+    Layout = "_ClientLayout";
+    ViewData["Title"] = "Mi cuenta";
+    var slug = ViewContext.RouteData.Values["slug"] as string ?? User.GetBusinessSlug();
+    var email = User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? "";
+}
+<section class="public-booking" aria-labelledby="client-panel-title">
+    <h1 id="client-panel-title">Mi cuenta</h1>
+    <p>Ya iniciaste sesión@(string.IsNullOrEmpty(email) ? "" : $" como {email}").</p>
+    <p class="muted">Muy pronto vas a poder ver y gestionar tus turnos desde acá.</p>
+    <div class="actions">
+        <a class="btn btn-primary" href="/r/@slug">Reservar un turno</a>
+    </div>
+</section>

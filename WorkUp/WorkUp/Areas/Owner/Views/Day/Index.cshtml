@@ -1,0 +1,166 @@
+@using System.Globalization
+@using WorkUp.BusinessLogic.Scheduling
+@using WorkUp.Domain.Enums
+@model WorkUp.Areas.Owner.Models.Day.DayIndexViewModel
+@{
+    ViewData["Title"] = "Jornada";
+    var now = Model.Now; // Visibility is advisory; the service revalidates state and time.
+    var selectedDate = Model.Day.SelectedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    var walkIn = Model.WalkIn;
+    // Stay on the Jornada after an invalid submission so the errors and the typed input remain visible.
+    var walkInOpen = !ViewData.ModelState.IsValid;
+    var sections = new[]
+    {
+        (Id: "now", Title: "Ahora", Empty: "No hay atenciones en curso.", Items: Model.Day.Now),
+        (Id: "next", Title: "Próximo", Empty: "No hay próximos turnos ni clases.", Items: Model.Day.Next),
+        (Id: "later", Title: "Más tarde", Empty: "No hay más turnos ni clases para este día.", Items: Model.Day.Later),
+        (Id: "finished", Title: "Finalizado", Empty: "Todavía no hay atenciones finalizadas.", Items: Model.Day.Finished)
+    };
+}
+
+<div class="page-header">
+    <div>
+        <h1>Jornada</h1>
+        <p>@Formatting.LongDate(Model.Day.SelectedDate)</p>
+    </div>
+</div>
+
+@if (Model.AllowsWalkIns && walkIn is not null)
+{
+    <details class="owner-walk-in"@(walkInOpen ? " open" : "")>
+        <summary>Registrar atención sin turno</summary>
+        <p class="owner-walk-in-note">Se registra con la fecha y hora actuales del negocio, sin importar la fecha que estés mirando. Si se superpone con otra atención, se guarda igual y te avisamos.</p>
+        <partial name="_WalkInForm" model="walkIn" />
+    </details>
+}
+
+<form method="get" class="owner-day-date-picker" aria-label="Elegir fecha de la jornada">
+    <div class="field">
+        <label for="date">Fecha</label>
+        <input id="date" name="date" type="date"
+               value="@Model.Day.SelectedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)" />
+    </div>
+    <button class="btn" type="submit">Ver jornada</button>
+</form>
+
+<div class="summary-band" aria-label="Totales de la jornada">
+    <div>
+        <span class="label">Cobrado en la fecha</span>
+        <strong class="figure">@Formatting.Money(Model.Day.TotalPaid)</strong>
+    </div>
+    <div>
+        <span class="label">Pendientes de cobro</span>
+        <strong class="figure-sm">@Model.Day.PendingPaymentCount</strong>
+    </div>
+</div>
+
+<div class="owner-day-sections">
+    @foreach (var daySection in sections)
+    {
+        <section class="section owner-day-section" aria-labelledby="owner-day-@daySection.Id">
+            <div class="section-header">
+                <h2 id="owner-day-@daySection.Id">@daySection.Title</h2>
+                <span class="count">@daySection.Items.Count</span>
+            </div>
+            @if (daySection.Items.Count == 0)
+            {
+                <div class="empty-state"><p>@daySection.Empty</p></div>
+            }
+            else
+            {
+                <ul class="rows owner-day-rows">
+                    @foreach (var item in daySection.Items)
+                    {
+                        var kindLabel = item.Kind == AppointmentKind.Individual ? "Turno individual" : "Clase";
+                        var originLabel = item.Origin switch
+                        {
+                            AppointmentOrigin.Reserved => "Reservado",
+                            AppointmentOrigin.WalkIn => "Sin reserva",
+                            _ => null
+                        };
+                        <li class="row owner-day-item">
+                            <div class="row-time">
+                                <time datetime="@item.StartsAt.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture)">@Formatting.Time(item.StartsAt)</time>
+                                <span class="end">Hasta @Formatting.Time(item.EndsAt)</span>
+                            </div>
+                            <div class="row-main">
+                                <div class="row-title"><strong>@item.ServiceName</strong></div>
+                                <div class="row-sub">@item.WorkerName · @kindLabel@if (originLabel is not null) { <text> · @originLabel</text> }</div>
+                                <div class="row-tags">
+                                    <partial name="_StatusTag" model="StatusTag.For(item.AppointmentStatus)" />
+                                </div>
+                                @* RF-10/RF-11: the class roster and the post-start walk-in are only reachable from here.
+                                   The Day view renders started classes too, so the link hangs off the class kind and never
+                                   off the section or the clock; an individual turn keeps its own navigation. *@
+                                @if (item.Kind == AppointmentKind.ClassSession)
+                                {
+                                    <p class="row-sub">
+                                        <a class="btn" asp-area="Owner" asp-controller="Classes" asp-action="Detail" asp-route-id="@item.AppointmentId">
+                                            @Icons.Svg("calendar") Abrir clase
+                                        </a>
+                                    </p>
+                                }
+                                @if (item.Attendees.Count == 0)
+                                {
+                                    <p class="owner-day-empty-attendees">Sin anotaciones.</p>
+                                }
+                                else
+                                {
+                                    <ul class="owner-day-attendees" aria-label="Personas anotadas">
+                                        @foreach (var attendee in item.Attendees)
+                                        {
+                                            <li>
+                                                <span class="owner-day-attendee-name">@attendee.ClientName</span>
+                                                <span class="row-tags">
+                                                    <partial name="_StatusTag" model="StatusTag.For(attendee.Status)" />
+                                                    @if (attendee.PaymentState == OwnerDayPaymentState.Paid)
+                                                    {
+                                                        <partial name="_StatusTag" model="StatusTag.Paid" />
+                                                    }
+                                                    else if (attendee.PaymentState == OwnerDayPaymentState.Pending)
+                                                    {
+                                                        <partial name="_StatusTag" model="StatusTag.PendingPayment" />
+                                                    }
+                                                </span>
+                                                @if (item.Kind == AppointmentKind.Individual && item.AppointmentStatus == AppointmentStatus.Scheduled &&
+                                                    item.Origin is (AppointmentOrigin.Reserved or AppointmentOrigin.WalkIn))
+                                                {
+                                                    var canAttend = item.StartsAt <= now && attendee.Status is (BookingStatus.Pending or BookingStatus.Confirmed);
+                                                    var canCharge = attendee.PaymentState == OwnerDayPaymentState.Pending && attendee.Status is not (BookingStatus.Cancelled or BookingStatus.Absent);
+                                                    if (canAttend)
+                                                    {
+                                                        <form asp-area="Owner" asp-controller="Day" asp-action="Finish" asp-route-id="@attendee.BookingId" method="post" class="owner-day-action">
+                                                            <input type="hidden" name="date" value="@selectedDate" />
+                                                            <div class="field"><label for="finish-amount-@attendee.BookingId">Cobro opcional @if (attendee.AgreedPrice is { } agreed) { <text>(acordado: @Formatting.Money(agreed))</text> }</label>
+                                                                <input id="finish-amount-@attendee.BookingId" name="amount" type="number" min="0.01" max="9999999999.99" step="0.01" placeholder="Sin cobro" /></div>
+                                                            <div class="field"><label for="note-@attendee.BookingId">Observación para la próxima atención (opcional, solo dueña)</label>
+                                                                <textarea id="note-@attendee.BookingId" name="nextVisitNote" maxlength="1000"></textarea></div>
+                                                            <button class="btn" type="submit">Finalizar atención</button>
+                                                        </form>
+                                                        <form asp-area="Owner" asp-controller="Day" asp-action="MarkAbsent" asp-route-id="@attendee.BookingId" method="post" class="owner-day-action">
+                                                            <input type="hidden" name="date" value="@selectedDate" />
+                                                            <button class="btn" type="submit">Marcar ausente</button>
+                                                        </form>
+                                                    }
+                                                    if (canCharge)
+                                                    {
+                                                        <form asp-area="Owner" asp-controller="Day" asp-action="Charge" asp-route-id="@attendee.BookingId" method="post" class="owner-day-action">
+                                                            <input type="hidden" name="date" value="@selectedDate" />
+                                                            <div class="field"><label for="charge-amount-@attendee.BookingId">Importe a cobrar @if (attendee.AgreedPrice is { } agreedCharge) { <text>(acordado: @Formatting.Money(agreedCharge))</text> }</label>
+                                                                <input id="charge-amount-@attendee.BookingId" name="amount" type="number" min="0.01" max="9999999999.99" step="0.01" required value="@attendee.AgreedPrice?.ToString(CultureInfo.InvariantCulture)" /></div>
+                                                            <button class="btn" type="submit">Registrar cobro</button>
+                                                        </form>
+                                                    }
+                                                }
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                        </li>
+                    }
+                </ul>
+            }
+        </section>
+    }
+</div>

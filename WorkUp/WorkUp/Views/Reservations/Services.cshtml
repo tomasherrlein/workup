@@ -1,0 +1,33 @@
+@model PublicBookingServicesViewModel
+@{
+    ViewData["Title"] = "Elegí un servicio";
+}
+<partial name="_BookingSteps" model="1" />
+<section class="public-booking" aria-labelledby="booking-title">
+    <h1 id="booking-title">Elegí un servicio</h1>
+    <p>Después vas a elegir con quién y cuándo atenderte.</p>
+
+    @if (Model.Services.Count == 0)
+    {
+        <div class="empty-state">
+            <p>Por ahora no hay servicios disponibles para reservar.</p>
+        </div>
+    }
+    else
+    {
+        <ul class="choice-list" aria-label="Servicios disponibles">
+            @foreach (var service in Model.Services)
+            {
+                <li>
+                    <a class="choice" asp-action="Workers" asp-route-slug="@Model.Business.Slug" asp-route-serviceId="@service.Id">
+                        <span>
+                            <strong>@service.Name</strong><br />
+                            <span class="muted">@Formatting.Money(service.Price) · @service.DurationMinutes minutos</span>
+                        </span>
+                        @Icons.Svg("arrow-right")
+                    </a>
+                </li>
+            }
+        </ul>
+    }
+</section>

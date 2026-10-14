@@ -1,0 +1,34 @@
+@model PublicBookingWorkersViewModel
+@{
+    ViewData["Title"] = "Elegí una trabajadora";
+}
+<partial name="_BookingSteps" model="2" />
+<section class="public-booking" aria-labelledby="booking-title">
+    <h1 id="booking-title">¿Con quién querés atenderte?</h1>
+    <p>@Model.Service.Name · @Formatting.Money(Model.Service.Price) · @Model.Service.DurationMinutes minutos</p>
+
+    @if (Model.Workers.Count == 0)
+    {
+        <div class="empty-state">
+            <p>No encontramos trabajadoras disponibles para este servicio.</p>
+        </div>
+    }
+    else
+    {
+        <ul class="choice-list" aria-label="Trabajadoras disponibles">
+            @foreach (var worker in Model.Workers)
+            {
+                <li>
+                    <a class="choice" asp-action="Availability"
+                       asp-route-slug="@Model.Business.Slug"
+                       asp-route-serviceId="@Model.Service.Id"
+                       asp-route-workerId="@worker.Id">
+                        <span><strong>@worker.FullName</strong></span>
+                        @Icons.Svg("arrow-right")
+                    </a>
+                </li>
+            }
+        </ul>
+    }
+    <p class="actions"><a class="btn btn-secondary" asp-action="Index" asp-route-slug="@Model.Business.Slug">Volver a servicios</a></p>
+</section>

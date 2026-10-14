@@ -1,0 +1,10 @@
+<ul class="nav-list">
+    <li>
+        <a href="/r/@User.GetBusinessSlug()" target="_blank" rel="noopener">@Icons.Svg("external") Ver reserva pública</a>
+    </li>
+    <li>
+        <form method="post" asp-area="Owner" asp-controller="Account" asp-action="Logout">
+            <button type="submit">@Icons.Svg("logout") Cerrar sesión</button>
+        </form>
+    </li>
+</ul>

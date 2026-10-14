@@ -1,0 +1,176 @@
+@using WorkUp.Areas.Owner.Controllers
+@using WorkUp.BusinessLogic.Notifications
+@using WorkUp.Infrastructure.Jobs
+@model IReadOnlyList<NotificationViewerListItem>
+@{
+    ViewData["Title"] = "Avisos generados";
+    // Stable keys of every registered job, straight from the runner: the manual form can never offer a key that does
+    // not exist, and the list is not a hardcoded copy that could drift from the registry.
+    var jobKeys = ViewData[DevToolsController.JobKeysViewDataKey] as IReadOnlyList<string> ?? Array.Empty<string>();
+    // The repository is asked for one bounded page; a full page may have more rows behind it, so the next cursor is the
+    // identity of the last row of this page and the keyset moves strictly backwards.
+    var nextBeforeId = Model.Count == NotificationViewerBounds.MaxPageSize ? Model[^1].Id : (int?)null;
+    // Shared clock state (installation-wide), set by the controller after the gate accepted the request.
+    var clockState = ViewData[DevToolsController.ClockStateViewDataKey] as DevToolsClockState;
+}
+@*
+    Visor de emails generados (T26, supuestos 10 y 11). La lista es solo lectura sobre los avisos del negocio con el que
+    se ingresó. Nunca trae el cuerpo del aviso, porque un cuerpo encolado puede incluir el enlace privado de un turno o
+    un token de recuperación de un solo uso; el cuerpo se ve de a un aviso, en el detalle. Tampoco se expone el error
+    guardado ni la reclamación del despachador. Lo único que escribe esta página son la ejecución manual de una tarea
+    registrada, con clave estable y bajo el lease singleton, y el avance o la vuelta del reloj simulado compartido, que
+    mueve a los dos negocios de la demo: nunca un reintento libre ni una intervención sobre el error de un aviso. La
+    paginación es un keyset acotado por la misma cota que aplica el repositorio.
+*@
+<div class="page-header">
+    <div>
+        <h1>Avisos generados</h1>
+        <p>
+            Emails que el sistema generó para este negocio y que quedaron en la bandeja de salida. Abrí un aviso para
+            ver su contenido completo.
+        </p>
+    </div>
+</div>
+
+@*
+    Reloj simulado (T26). El reloj es único para toda la instalación de prueba: avanzarlo mueve a los dos negocios de la
+    demo al mismo tiempo y el adelanto vive solo en memoria. Por eso la advertencia es prominente y accesible, y cada
+    avance exige una confirmación explícita. Los formularios son POST con token antiforgery y llevan solo la cantidad y
+    la confirmación: el negocio y la sesión siguen viniendo de la cookie de la dueña y nunca de un campo del formulario.
+*@
+<section aria-labelledby="simulated-clock-heading">
+    <h2 id="simulated-clock-heading">Reloj simulado</h2>
+    <div class="notice notice-warning" role="note">
+        <p><strong>Atención: este reloj es único para toda la instalación de prueba.</strong></p>
+        <ul>
+            <li>Avanzarlo afecta a <strong>ambos negocios</strong> de la demo al mismo tiempo.</li>
+            <li>En modo Outbox los avisos <strong>no se envían nunca</strong>: quedan retenidos y visibles en esta página.</li>
+            <li>El adelanto vive solo en memoria: si reiniciás el proceso, el reloj vuelve al tiempo real.</li>
+            <li>Mientras el reloj está adelantado, las tareas programadas pueden generar avisos <strong>Pendientes</strong>.</li>
+        </ul>
+    </div>
+    @if (clockState is not null)
+    {
+        <p>
+            Estado actual:
+            <strong>@(clockState.IsSimulated ? "simulado" : "tiempo real")</strong>
+            · @Formatting.ShortDate(clockState.LocalNow) @Formatting.Time(clockState.LocalNow)
+        </p>
+    }
+    <div class="actions">
+        <form asp-area="Owner" asp-controller="DevTools" asp-action="AdvanceHours" method="post">
+            <div>
+                <label for="advance-hours">Horas a avanzar (1 a @SimulatedBusinessClock.MaxAdvanceHours)</label>
+                <input id="advance-hours" name="hours" type="number"
+                       min="@SimulatedBusinessClock.MinAdvanceHours" max="@SimulatedBusinessClock.MaxAdvanceHours"
+                       value="@SimulatedBusinessClock.MinAdvanceHours" required />
+            </div>
+            <div>
+                <input id="confirm-hours" name="confirmAllBusinesses" type="checkbox" value="true" required />
+                <label for="confirm-hours">Confirmo que el avance afecta a los dos negocios</label>
+            </div>
+            <button type="submit" class="btn">Avanzar horas</button>
+        </form>
+        <form asp-area="Owner" asp-controller="DevTools" asp-action="AdvanceDays" method="post">
+            <div>
+                <label for="advance-days">Días a avanzar (1 a @SimulatedBusinessClock.MaxAdvanceDays)</label>
+                <input id="advance-days" name="days" type="number"
+                       min="@SimulatedBusinessClock.MinAdvanceDays" max="@SimulatedBusinessClock.MaxAdvanceDays"
+                       value="@SimulatedBusinessClock.MinAdvanceDays" required />
+            </div>
+            <div>
+                <input id="confirm-days" name="confirmAllBusinesses" type="checkbox" value="true" required />
+                <label for="confirm-days">Confirmo que el avance afecta a los dos negocios</label>
+            </div>
+            <button type="submit" class="btn">Avanzar días</button>
+        </form>
+        <form asp-area="Owner" asp-controller="DevTools" asp-action="RestoreClock" method="post">
+            <button type="submit" class="btn">Volver al tiempo real</button>
+        </form>
+    </div>
+</section>
+
+@*
+    Ejecución manual de tareas (T26): cada clave registrada tiene su propio formulario POST. El FormTagHelper agrega el
+    token antiforgery por ser un POST con asp-action, y el filtro global AutoValidate lo exige, así que un GET o un POST
+    sin token no llegan nunca a ejecutar un trabajo. El formulario lleva solo la clave estable: el negocio y la sesión
+    siguen viniendo de la cookie de la dueña. El resultado se muestra como aviso fijo después de un redirect (PRG),
+    nunca como excepción ni con el texto del error del proveedor. La única tarea que no envía nada en modo Outbox es
+    la clave `outbox`: los avisos quedan retenidos sin enviarse y visibles abajo.
+*@
+<section aria-labelledby="run-jobs-heading">
+    <h2 id="run-jobs-heading">Ejecutar tareas programadas</h2>
+    <p>
+        Ejecutá una tarea ahora, sin esperar el próximo minuto. Mientras una tarea corre, cualquier otro intento
+        manual o automático queda esperando.
+    </p>
+    <ul class="rows" aria-label="Tareas programadas registradas">
+        @foreach (var key in jobKeys)
+        {
+            <li class="row">
+                <div class="row-main">
+                    <div class="row-title"><strong>@key</strong></div>
+                    <div class="row-sub">
+                        @if (key == OutboxScheduledJob.JobKey)
+                        {
+                            <text>En modo Outbox esta tarea no envía nada: los avisos quedan retenidos sin enviarse.</text>
+                        }
+                        else
+                        {
+                            <text>Corre esta tarea una sola vez, ahora mismo.</text>
+                        }
+                    </div>
+                </div>
+                <div class="actions">
+                    <form asp-area="Owner" asp-controller="DevTools" asp-action="RunJob" method="post">
+                        <input type="hidden" name="key" value="@key" />
+                        <button type="submit" class="btn" aria-label="Ejecutar ahora la tarea @key">Ejecutar ahora</button>
+                    </form>
+                </div>
+            </li>
+        }
+    </ul>
+</section>
+
+@if (Model.Count == 0)
+{
+    <div class="empty-state">
+        <p>Todavía no hay avisos generados en esta versión de prueba.</p>
+    </div>
+}
+else
+{
+    <ul class="rows" aria-label="Avisos generados">
+        @foreach (var item in Model)
+        {
+            <li class="row">
+                <div class="row-main">
+                    <div class="row-title">
+                        <strong>@item.Subject</strong>
+                        <span class="badge">@DevToolsController.StatusLabel(item.Status)</span>
+                    </div>
+                    <div class="row-sub">
+                        @DevToolsController.TypeLabel(item.Type) · @Formatting.ShortDate(item.CreatedAt) @Formatting.Time(item.CreatedAt)
+                    </div>
+                    <div class="row-sub">
+                        Destinatario: @item.Recipient · Intentos: @item.Attempts
+                    </div>
+                    @if (item.SentAt is not null)
+                    {
+                        <div class="row-sub">Enviado: @Formatting.ShortDate(item.SentAt.Value) @Formatting.Time(item.SentAt.Value)</div>
+                    }
+                </div>
+                <div class="actions">
+                    <a class="btn" asp-area="Owner" asp-controller="DevTools" asp-action="Detail" asp-route-id="@item.Id">Ver aviso</a>
+                </div>
+            </li>
+        }
+    </ul>
+
+    @if (nextBeforeId is not null)
+    {
+        <div class="actions">
+            <a class="btn" asp-area="Owner" asp-controller="DevTools" asp-action="Index" asp-route-beforeId="@nextBeforeId">Ver avisos más antiguos</a>
+        </div>
+    }
+}

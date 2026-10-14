@@ -1,0 +1,11 @@
+@model int
+@{
+    ViewData["Title"] = Model == 404 ? "No encontramos esta página" : "Algo salió mal";
+}
+<h1>@ViewData["Title"]</h1>
+<p class="muted">
+    @(Model == 404
+        ? "Revisá la dirección o volvé al inicio."
+        : "Probá de nuevo en unos minutos.")
+</p>
+<a class="btn btn-secondary" href="/">Volver al inicio</a>

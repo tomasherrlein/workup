@@ -1,0 +1,80 @@
+@model PublicBookingAvailabilityViewModel
+@{
+    ViewData["Title"] = "Elegí día y horario";
+    var dateValue = Model.Date.ToString("yyyy-MM-dd");
+}
+<partial name="_BookingSteps" model="3" />
+<section class="public-booking" aria-labelledby="booking-title">
+    <h1 id="booking-title">Elegí día y horario</h1>
+    <p>@Model.Service.Name con @Model.Worker.FullName · @Formatting.Money(Model.Service.Price)</p>
+
+    <div class="notice notice-info" role="status">
+        @Icons.Svg("info")
+        <p>Los horarios son una vista previa. Se confirman cuando envíes la reserva.</p>
+    </div>
+    @if (Model.Notice is not null)
+    {
+        <div class="notice notice-warning" role="status">
+            @Icons.Svg("info")
+            <p>@Model.Notice</p>
+        </div>
+    }
+
+    <form asp-action="Availability" asp-route-slug="@Model.Business.Slug"
+          asp-route-serviceId="@Model.Service.Id" asp-route-workerId="@Model.Worker.Id"
+          method="get" class="form public-date-form">
+        <div class="field">
+            <label for="date">Día que preferís</label>
+            <input id="date" name="date" type="date" value="@dateValue"
+                   min="@Model.Today.ToString("yyyy-MM-dd")" required />
+        </div>
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Ver horarios</button>
+            <a class="btn btn-secondary" asp-action="Workers" asp-route-slug="@Model.Business.Slug" asp-route-serviceId="@Model.Service.Id">Volver</a>
+        </div>
+    </form>
+
+    @if (Model.AvailableStartTimes.Count > 0)
+    {
+        <section class="section" aria-labelledby="available-times-title">
+            <div class="section-header"><h2 id="available-times-title">Horarios para el @Formatting.LongDate(Model.Date)</h2></div>
+            <ul class="choice-list public-slots" aria-label="Horarios disponibles">
+                @foreach (var startTime in Model.AvailableStartTimes)
+                {
+                    <li>
+                        <a class="choice" asp-action="Contact"
+                           asp-route-slug="@Model.Business.Slug"
+                           asp-route-serviceId="@Model.Service.Id"
+                           asp-route-workerId="@Model.Worker.Id"
+                           asp-route-date="@dateValue"
+                           asp-route-startTime="@startTime.ToString("HH:mm")">
+                            <span><strong>@Formatting.Time(startTime)</strong></span>
+                            @Icons.Svg("arrow-right")
+                        </a>
+                    </li>
+                }
+            </ul>
+        </section>
+    }
+    else if (Model.NearestFutureAlternative is DateTime alternative)
+    {
+        <div class="empty-state public-empty-state">
+            <p>No quedan horarios libres ese día. Este es el horario libre más cercano de @Model.Worker.FullName:</p>
+            <a class="choice" asp-action="Contact"
+               asp-route-slug="@Model.Business.Slug"
+               asp-route-serviceId="@Model.Service.Id"
+               asp-route-workerId="@Model.Worker.Id"
+               asp-route-date="@alternative.ToString("yyyy-MM-dd")"
+               asp-route-startTime="@alternative.ToString("HH:mm")">
+                <span><strong>@Formatting.LongDate(alternative) · @Formatting.Time(alternative)</strong></span>
+                @Icons.Svg("arrow-right")
+            </a>
+        </div>
+    }
+    else
+    {
+        <div class="empty-state public-empty-state">
+            <p>No encontramos horarios libres para esa trabajadora en los próximos 30 días.</p>
+        </div>
+    }
+</section>

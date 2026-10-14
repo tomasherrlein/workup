@@ -1,0 +1,19 @@
+@model WorkUp.ViewModels.ClientAccounts.ClientAccountStatusViewModel
+@{
+    ViewData["Title"] = Model.Title;
+}
+<section class="public-booking" aria-labelledby="account-status-title">
+    <h1 id="account-status-title">@Model.Title</h1>
+
+    <div class="notice notice-@Model.Tone" role="@(Model.Tone == "error" ? "alert" : "status")">
+        @Icons.Svg(Model.Icon)
+        <p>@Model.Message</p>
+    </div>
+
+    @if (Model.ActionUrl is not null && Model.ActionLabel is not null)
+    {
+        <div class="actions">
+            <a class="btn btn-primary" href="@Model.ActionUrl">@Model.ActionLabel</a>
+        </div>
+    }
+</section>

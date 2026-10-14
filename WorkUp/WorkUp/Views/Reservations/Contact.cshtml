@@ -1,0 +1,77 @@
+@model PublicBookingContactViewModel
+@{
+    ViewData["Title"] = "Tus datos";
+    var dateValue = Model.Date.ToString("yyyy-MM-dd");
+    var timeValue = Model.StartTime.ToString("HH:mm");
+
+    // A field only claims aria-invalid="true" when the server marked that exact field in ModelState. On a valid
+    // rerender the expression is null, so the attribute is not rendered at all and nothing announces a false error.
+    bool ServerMarkedInvalid(string field) =>
+        ViewData.ModelState.TryGetValue(field, out var entry) && entry.Errors.Count > 0;
+}
+<partial name="_BookingSteps" model="4" />
+<section class="public-booking" aria-labelledby="booking-title">
+    <h1 id="booking-title">¿A nombre de quién reservamos?</h1>
+    <p>Completá tus datos de contacto para dejar la reserva pendiente.</p>
+
+    <dl class="details public-booking-summary">
+        <dt>Servicio</dt><dd>@Model.Service.Name</dd>
+        <dt>Trabajadora</dt><dd>@Model.Worker.FullName</dd>
+        <dt>Día</dt><dd>@Formatting.LongDate(Model.Date)</dd>
+        <dt>Horario</dt><dd>@Formatting.Time(Model.StartTime)</dd>
+        <dt>Precio</dt><dd>@Formatting.Money(Model.Service.Price)</dd>
+    </dl>
+
+    <form asp-action="Book" asp-route-slug="@Model.Business.Slug" method="post" class="form">
+        <div asp-validation-summary="All" class="notice notice-error" role="alert"></div>
+        <input asp-for="ServiceId" type="hidden" />
+        <input asp-for="WorkerId" type="hidden" />
+        <input asp-for="Date" type="hidden" value="@dateValue" />
+        <input asp-for="StartTime" type="hidden" value="@timeValue" />
+
+        <div class="field">
+            <label asp-for="Email">Email</label>
+            <input asp-for="Email" type="email" autocomplete="email" maxlength="254" required
+                   aria-describedby="contact-email-error"
+                   aria-invalid="@(ServerMarkedInvalid("Email") ? "true" : null)" />
+            <span asp-validation-for="Email" id="contact-email-error"></span>
+        </div>
+        <div class="field">
+            <label asp-for="FirstName">Nombre</label>
+            <input asp-for="FirstName" autocomplete="given-name" maxlength="60" required
+                   aria-describedby="contact-first-name-error"
+                   aria-invalid="@(ServerMarkedInvalid("FirstName") ? "true" : null)" />
+            <span asp-validation-for="FirstName" id="contact-first-name-error"></span>
+        </div>
+        <div class="field">
+            <label asp-for="LastName">Apellido</label>
+            <input asp-for="LastName" autocomplete="family-name" maxlength="60" required
+                   aria-describedby="contact-last-name-error"
+                   aria-invalid="@(ServerMarkedInvalid("LastName") ? "true" : null)" />
+            <span asp-validation-for="LastName" id="contact-last-name-error"></span>
+        </div>
+
+        <p class="muted">No necesitás crear una cuenta. Usamos estos datos para identificar tu reserva.</p>
+        @if (Model.AlternativeStart is DateTime alternative)
+        {
+            <p class="notice notice-warning" role="status">
+                Ese horario se ocupó recién. Podés probar el horario libre más cercano:
+                <a asp-action="Contact" asp-route-slug="@Model.Business.Slug"
+                   asp-route-serviceId="@Model.Service.Id" asp-route-workerId="@Model.Worker.Id"
+                   asp-route-date="@alternative.ToString("yyyy-MM-dd")"
+                   asp-route-startTime="@alternative.ToString("HH:mm")">
+                    @Formatting.LongDate(alternative) a las @Formatting.Time(alternative)
+                </a>.
+            </p>
+        }
+        <div class="actions">
+            <button class="btn btn-primary" type="submit">Reservar turno</button>
+            <a class="btn btn-secondary" asp-action="Availability" asp-route-slug="@Model.Business.Slug"
+               asp-route-serviceId="@Model.Service.Id" asp-route-workerId="@Model.Worker.Id"
+               asp-route-date="@dateValue">Volver a horarios</a>
+        </div>
+    </form>
+</section>
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

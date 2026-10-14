@@ -1,0 +1,82 @@
+@model ClassesIndexViewModel
+@{
+    ViewData["Title"] = "Grilla semanal";
+    string? CurrentFor(DayOfWeek day) => day == Model.SelectedDay ? "page" : null;
+}
+<div class="page-header">
+    <div>
+        <h1>Grilla semanal</h1>
+        <p>Los cambios acá afectan solo las semanas que generes de ahora en más: las clases ya generadas conservan su fecha.</p>
+    </div>
+    <div class="nav-inline">
+        @if (Model.HasAnyActive)
+        {
+            <a class="btn" asp-action="Week">@Icons.Svg("repeat") Generar semana</a>
+            @* Same gate as "Generar semana": without an active grid class there is no generated class to book a suelta into. *@
+            <a class="btn" asp-action="DropIns">@Icons.Svg("user") Clases sueltas</a>
+        }
+        <a class="btn btn-primary" asp-action="Create">@Icons.Svg("plus") Nueva clase</a>
+    </div>
+</div>
+
+<nav class="day-picker" aria-label="Día de la grilla">
+    <ul>
+        @foreach (var day in ClassesIndexViewModel.MondayFirst)
+        {
+            <li>
+                <a asp-action="Index" asp-route-day="@day" aria-current="@CurrentFor(day)">@Formatting.ShortDayName(day)</a>
+            </li>
+        }
+    </ul>
+</nav>
+
+@if (!Model.HasAnyActive)
+{
+    <div class="empty-state">
+        <p>Todavía no hay clases en la grilla. Agregá la primera para poder generar una semana.</p>
+    </div>
+}
+else
+{
+    <div class="day-grid">
+        @foreach (var day in ClassesIndexViewModel.MondayFirst)
+        {
+            var dayClasses = Model.ActiveByDay[day];
+            <section class="day-section@(day == Model.SelectedDay ? "" : " day-section-inactive")">
+                <div class="section-header">
+                    <h2>@Formatting.DayName(day)</h2>
+                    <span class="count">@dayClasses.Count</span>
+                </div>
+                @if (dayClasses.Count == 0)
+                {
+                    <p class="hint">No hay clases este día.</p>
+                }
+                else
+                {
+                    <ul class="rows">
+                        @foreach (var gridClass in dayClasses)
+                        {
+                            <partial name="_GridClassRow" model="gridClass" />
+                        }
+                    </ul>
+                }
+            </section>
+        }
+    </div>
+}
+
+@if (Model.Archived.Count > 0)
+{
+    <div class="section">
+        <div class="section-header">
+            <h2>Clases archivadas</h2>
+            <span class="count">@Model.Archived.Count</span>
+        </div>
+        <ul class="rows">
+            @foreach (var gridClass in Model.Archived)
+            {
+                <partial name="_GridClassRow" model="gridClass" />
+            }
+        </ul>
+    </div>
+}

@@ -1,0 +1,46 @@
+@model WorkUp.ViewModels.ClientAccounts.ClientLoginViewModel
+@{
+    ViewData["Title"] = "Ingresar";
+    var slug = ViewContext.RouteData.Values["slug"] as string ?? "";
+
+    // A field only claims aria-invalid="true" when the server marked that exact field in ModelState. On a valid
+    // rerender the expression is null, so the attribute is not rendered at all and nothing announces a false error.
+    // The generic sign-in failure stays model-level (empty key), so scoping the lookup to the named field keeps it out.
+    bool ServerMarkedInvalid(string field) =>
+        ViewData.ModelState.TryGetValue(field, out var entry) && entry.Errors.Count > 0;
+}
+<section class="public-booking" aria-labelledby="account-login-title">
+    <h1 id="account-login-title">Ingresar</h1>
+    <p>Entrá con el email y la contraseña de tu cuenta de @ViewData["BusinessName"].</p>
+
+    <form method="post" action="/r/@slug/cuenta/ingresar" class="form">
+        @Html.AntiForgeryToken()
+        <div asp-validation-summary="All" class="notice notice-error" role="alert"></div>
+        <input asp-for="ReturnUrl" type="hidden" />
+        <div class="field">
+            <label asp-for="Email"></label>
+            <input asp-for="Email" type="email" autocomplete="email" maxlength="254" required autofocus
+                   aria-describedby="account-login-email-error"
+                   aria-invalid="@(ServerMarkedInvalid("Email") ? "true" : null)" />
+            <span asp-validation-for="Email" id="account-login-email-error" class="field-error"></span>
+        </div>
+        <div class="field">
+            <label asp-for="Password"></label>
+            <input asp-for="Password" type="password" autocomplete="current-password" maxlength="100" required
+                   aria-describedby="account-login-password-error"
+                   aria-invalid="@(ServerMarkedInvalid("Password") ? "true" : null)" />
+            <span asp-validation-for="Password" id="account-login-password-error" class="field-error"></span>
+        </div>
+        <div class="actions">
+            <button class="btn btn-primary btn-block" type="submit">Ingresar</button>
+        </div>
+    </form>
+
+    <p class="muted">
+        <a href="/r/@slug/cuenta/recuperar">Olvidé mi contraseña</a> ·
+        <a href="/r/@slug/cuenta/registrarse">Crear mi cuenta</a>
+    </p>
+</section>
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

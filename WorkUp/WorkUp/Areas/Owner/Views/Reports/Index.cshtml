@@ -1,0 +1,279 @@
+@using System.Globalization
+@using WorkUp.ViewModels.Reports
+@model ReportsIndexViewModel
+@{
+    ViewData["Title"] = "Reportes";
+    var todayValue = Model.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+}
+@*
+    Reportes (RF-16, D-20, supuesto 7). Read-only: the report is computed by ReportsService from one tenant-scoped
+    snapshot per period and nothing here writes. The form takes an inclusive From/To range and an optional comparison
+    pair; without inputs the default is the current month through today. Every amount and every date carries its label,
+    the membership money is shown as the unallocated «Abonos» bucket instead of being spread across classes or workers,
+    and the indicator definitions say they are provisional with the 90-day lookback explained. A period that ran past
+    today is shown with its explicit cutoff, because a partial number is not a closed one. Exactly one primary button:
+    the submit of the filter form.
+*@
+<div class="page-header">
+    <div>
+        <h1>Reportes</h1>
+        <p>
+            Resultado del período e indicadores del negocio. Solo se calcula lo que ya ocurrió: un período que todavía
+            no empezó no se calcula y uno que termina en el futuro se computa hasta hoy.
+        </p>
+    </div>
+</div>
+
+<form method="get" class="agenda-filters" aria-label="Período del reporte">
+    <div class="field">
+        <label for="from">Desde</label>
+        <input id="from" name="from" type="date" value="@(Model.From?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))" max="@todayValue" />
+    </div>
+    <div class="field">
+        <label for="to">Hasta</label>
+        <input id="to" name="to" type="date" value="@(Model.To?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))" max="@todayValue" />
+    </div>
+    <div class="field">
+        <label for="comparisonFrom">Comparar desde (opcional)</label>
+        <input id="comparisonFrom" name="comparisonFrom" type="date" value="@(Model.ComparisonFrom?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))" max="@todayValue" />
+    </div>
+    <div class="field">
+        <label for="comparisonTo">Comparar hasta (opcional)</label>
+        <input id="comparisonTo" name="comparisonTo" type="date" value="@(Model.ComparisonTo?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))" max="@todayValue" />
+    </div>
+    <button type="submit" class="btn btn-primary">Ver reporte</button>
+</form>
+
+@if (!Model.HasReport)
+{
+    <div class="empty-state">
+        <p>Corregí el período y volvé a pedir el reporte. La comparación es opcional, pero se cargan las dos fechas.</p>
+    </div>
+}
+else
+{
+    var period = Model.Period!;
+
+    <div class="summary-band" aria-label="Resultado del período">
+        <div>
+            <span class="label">Resultado del período</span>
+            <strong class="figure">@Formatting.Money(period.NetResult)</strong>
+            <span class="hint">Cobros no anulados menos devoluciones y gastos</span>
+        </div>
+        <div>
+            <span class="label">Período</span>
+            <strong class="figure-sm">@period.PeriodLabel</strong>
+            <span class="hint">@period.CutoffLabel</span>
+        </div>
+        @if (Model.HasComparison)
+        {
+            <div>
+                <span class="label">Comparación</span>
+                <strong class="figure-sm">@Model.Comparison!.PeriodLabel</strong>
+                <span class="hint">@Formatting.Money(Model.Comparison!.NetResult)</span>
+            </div>
+        }
+    </div>
+
+    @if (!period.HasMovements)
+    {
+        <div class="empty-state">
+            <p>@Model.EmptyMessage</p>
+        </div>
+    }
+    else
+    {
+        <div class="section">
+            <div class="section-header">
+                <h2>Cómo se calcula el resultado</h2>
+            </div>
+            <ul class="rows" aria-label="Resultado del período">
+                @foreach (var line in period.ResultLines)
+                {
+                    <li class="row row-flat">
+                        <div class="row-main">
+                            <div class="row-title">
+                                <strong>@line.Label</strong>
+                                <span class="num">@Formatting.Money(line.Amount)</span>
+                            </div>
+                        </div>
+                    </li>
+                }
+                <li class="row row-flat">
+                    <div class="row-main">
+                        <div class="row-title">
+                            <strong>Resultado del período</strong>
+                            <span class="num">@Formatting.Money(period.NetResult)</span>
+                        </div>
+                        <div class="row-sub">Cobros no anulados menos las devoluciones del período menos los gastos.</div>
+                    </div>
+                </li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>Ingresos por servicio</h2>
+            </div>
+            @if (period.HasServiceRevenue)
+            {
+                <ul class="rows" aria-label="Ingresos por servicio">
+                    @foreach (var line in period.RevenueLines)
+                    {
+                        <li class="row row-flat">
+                            <div class="row-main">
+                                <div class="row-title">
+                                    <strong>@line.Label</strong>
+                                    <span class="num">@Formatting.Money(line.Amount)</span>
+                                </div>
+                            </div>
+                        </li>
+                    }
+                </ul>
+            }
+            else
+            {
+                <p class="hint">No hubo cobros asignados a un servicio concreto en el período.</p>
+            }
+            <ul class="rows" aria-label="Ingresos sin asignar">
+                <li class="row row-flat">
+                    <div class="row-main">
+                        <div class="row-title">
+                            <strong>@period.MembershipLabel</strong>
+                            <span class="num">@Formatting.Money(period.MembershipRevenue)</span>
+                        </div>
+                        <div class="row-sub">Los abonos no se reparten entre clases ni trabajadoras: pagan una inscripción, no una sesión.</div>
+                    </div>
+                </li>
+                @if (period.HasUnallocatedRevenue)
+                {
+                    <li class="row row-flat">
+                        <div class="row-main">
+                            <div class="row-title">
+                                <strong>Sin sesión concreta</strong>
+                                <span class="num">@Formatting.Money(period.UnallocatedRevenue)</span>
+                            </div>
+                            <div class="row-sub">Cobros de un servicio que no queda asociado a una sesión puntual.</div>
+                        </div>
+                    </li>
+                }
+            </ul>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>Gastos por tipo</h2>
+            </div>
+            @if (period.HasExpensesByType)
+            {
+                <ul class="rows" aria-label="Gastos por tipo">
+                    @foreach (var line in period.ExpenseTypeLines)
+                    {
+                        <li class="row row-flat">
+                            <div class="row-main">
+                                <div class="row-title">
+                                    <strong>@line.Label</strong>
+                                    <span class="num">@Formatting.Money(line.Amount)</span>
+                                </div>
+                            </div>
+                        </li>
+                    }
+                </ul>
+            }
+            else
+            {
+                <p class="hint">No hay gastos registrados en el período.</p>
+            }
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>Producción por trabajadora</h2>
+            </div>
+            @if (period.HasWorkerProduction)
+            {
+                <ul class="rows" aria-label="Producción por trabajadora">
+                    @foreach (var line in period.WorkerLines)
+                    {
+                        <li class="row row-flat">
+                            <div class="row-main">
+                                <div class="row-title">
+                                    <strong>@line.WorkerName</strong>
+                                    <span class="num">@Formatting.Money(line.CollectedAmount)</span>
+                                </div>
+                                <div class="row-sub">Atenciones: @line.AttendedCount · Cobrado en esas sesiones: @Formatting.Money(line.CollectedAmount)</div>
+                            </div>
+                        </li>
+                    }
+                </ul>
+            }
+            else
+            {
+                <p class="hint">No hubo atenciones registradas en el período.</p>
+            }
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>Indicadores</h2>
+            </div>
+            <ul class="rows" aria-label="Indicadores del período">
+                <li class="row row-flat">
+                    <div class="row-main">
+                        <div class="row-title">
+                            <strong>Clientas recurrentes</strong>
+                            <span class="num">@period.RecurringClientCount</span>
+                        </div>
+                    </div>
+                </li>
+                <li class="row row-flat">
+                    <div class="row-main">
+                        <div class="row-title">
+                            <strong>Clientas que dejaron de venir</strong>
+                            <span class="num">@period.LapsedClientCount</span>
+                        </div>
+                    </div>
+                </li>
+                <li class="row row-flat">
+                    <div class="row-main">
+                        <div class="row-title">
+                            <strong>Ausencias</strong>
+                            <span class="num">@period.AbsenceCount</span>
+                        </div>
+                    </div>
+                </li>
+            </ul>
+            <p class="hint">@ReportLabels.RecurringDefinition</p>
+            <p class="hint">@ReportLabels.LapsedDefinition</p>
+        </div>
+
+        @if (Model.HasComparison)
+        {
+            <div class="section">
+                <div class="section-header">
+                    <h2>Comparación entre períodos</h2>
+                </div>
+                <p class="hint">
+                    El período @Model.Comparison!.PeriodLabel contra el período @period.PeriodLabel. Los dos se calculan
+                    con las mismas reglas y el mismo corte, así que son comparables.
+                </p>
+                <ul class="rows" aria-label="Comparación entre períodos">
+                    @foreach (var line in Model.ComparisonLines)
+                    {
+                        <li class="row row-flat">
+                            <div class="row-main">
+                                <div class="row-title">
+                                    <strong>@line.Label</strong>
+                                    <span class="num">@Formatting.Money(line.PeriodAmount)</span>
+                                </div>
+                                <div class="row-sub">
+                                    Comparación: @Formatting.Money(line.ComparisonAmount) · Diferencia: @Formatting.Money(line.Difference)
+                                </div>
+                            </div>
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
+    }
+}

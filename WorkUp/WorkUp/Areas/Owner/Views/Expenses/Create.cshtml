@@ -1,0 +1,47 @@
+@model WorkUp.Areas.Owner.Controllers.ExpenseFormViewModel
+<div class="page-header"><div><h1>@ViewData["Title"]</h1></div></div>
+
+@if (Model.ExpenseTypes.Count == 0)
+{
+    <div class="notice notice-warning" role="status">
+        @Icons.Svg("info")
+        <p>Primero agregá un tipo de gasto en Configuración.</p>
+    </div>
+}
+else
+{
+    <form asp-action="Create" method="post" class="form" novalidate>
+        <div asp-validation-summary="ModelOnly" class="notice notice-error" role="alert"></div>
+        <div class="field">
+            <label asp-for="ExpenseTypeId"></label>
+            <select asp-for="ExpenseTypeId">
+                <option value="">Elegí un tipo</option>
+                @foreach (var type in Model.ExpenseTypes)
+                {
+                    <option value="@type.Id">@type.Name</option>
+                }
+            </select>
+            <span asp-validation-for="ExpenseTypeId" class="field-error"></span>
+        </div>
+        <div class="field">
+            <label asp-for="SpentOn"></label>
+            <input asp-for="SpentOn" type="date" />
+            <span asp-validation-for="SpentOn" class="field-error"></span>
+        </div>
+        <div class="field">
+            <label asp-for="Amount"></label>
+            <input asp-for="Amount" type="number" min="0.01" step="0.01" />
+            <span asp-validation-for="Amount" class="field-error"></span>
+        </div>
+        <div class="field">
+            <label asp-for="Description"></label>
+            <input asp-for="Description" maxlength="300" />
+            <span asp-validation-for="Description" class="field-error"></span>
+        </div>
+        <div class="actions"><button type="submit" class="btn btn-primary">Registrar gasto</button></div>
+    </form>
+}
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}
