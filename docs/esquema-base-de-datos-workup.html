@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>WorkUp — Esquema de base de datos</title>
+<style>
+  :root {
+    --mat-night:#002F28; --pine-deep:#00493D; --pine:#006251; --mat-mid:#1B9579;
+    --mat-light:#B4DFD0; --pine-wash:#E1F4ED; --pine-mist:#F0F9F6;
+    --ink:#151C1B; --ink-muted:#4D5855; --paper:#F4F8F6; --sheet:#FCFEFD;
+    --rule:#D2D9D7; --edge:#798380;
+  }
+  * { box-sizing: border-box; }
+  html { font-size: 10.5pt; }
+  body {
+    margin: 0; padding: 0;
+    font-family: "Segoe UI", "Atkinson Hyperlegible Next", Arial, sans-serif;
+    color: var(--ink); line-height: 1.5; background: var(--sheet);
+  }
+  @page { size: A4; margin: 16mm 14mm 16mm 14mm; }
+
+  h1, h2, h3, h4 { font-family: inherit; color: var(--pine-deep); margin: 0; }
+  h1 { font-size: 2.1rem; line-height: 1.15; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 1.35rem; margin: 26px 0 6px; padding-bottom: 5px;
+    border-bottom: 2px solid var(--pine); break-after: avoid;
+  }
+  h3 { font-size: 1.1rem; margin: 20px 0 4px; color: var(--mat-night); break-after: avoid; }
+  h4 { font-size: 0.92rem; margin: 12px 0 4px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  p { margin: 6px 0; }
+  code, .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.92em; }
+
+  /* Portada */
+  .cover { padding: 40mm 0 0 0; }
+  .cover .eyebrow {
+    display: inline-block; background: var(--pine-wash); color: var(--pine-deep);
+    font-weight: 700; font-size: 0.78rem; letter-spacing: 0.14em; text-transform: uppercase;
+    padding: 5px 12px; border-radius: 2px;
+  }
+  .cover h1 { margin: 16px 0 8px; }
+  .cover .sub { font-size: 1.05rem; color: var(--ink-muted); max-width: 62ch; }
+  .cover .meta { margin-top: 26px; border-top: 1px solid var(--rule); padding-top: 12px; font-size: 0.85rem; color: var(--ink-muted); }
+  .cover .meta b { color: var(--ink); }
+
+  .lede { background: var(--pine-mist); border-left: 4px solid var(--pine); padding: 10px 14px; margin: 14px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 14px; font-size: 0.86rem; }
+  th, td { text-align: left; vertical-align: top; padding: 5px 8px; border-bottom: 1px solid var(--rule); }
+  thead th { background: var(--pine); color: #fff; font-weight: 700; border-bottom: none; }
+  tbody tr:nth-child(even) { background: var(--pine-mist); }
+  td.prop { font-family: Consolas, "Cascadia Mono", monospace; font-weight: 600; white-space: nowrap; color: var(--pine-deep); }
+  td.type { font-family: Consolas, "Cascadia Mono", monospace; font-size: 0.8rem; color: var(--ink-muted); white-space: nowrap; }
+  table.no-even tbody tr:nth-child(even) { background: transparent; }
+
+  .why { margin: 4px 0 0; }
+  .why b { color: var(--pine-deep); }
+  .ref { display: inline-block; background: var(--pine-wash); color: var(--pine-deep); border-radius: 2px;
+         padding: 0 5px; font-size: 0.78rem; font-weight: 700; font-family: Consolas, monospace; }
+  .tag { display: inline-block; border: 1px solid var(--edge); border-radius: 2px; padding: 0 5px;
+         font-size: 0.76rem; font-weight: 700; color: var(--ink-muted); }
+  .card { border: 1px solid var(--rule); border-radius: 4px; padding: 10px 14px; margin: 10px 0; break-inside: avoid; }
+  .card > h3 { margin-top: 0; }
+  .two { display: block; }
+  .note { font-size: 0.85rem; color: var(--ink-muted); }
+  ul { margin: 6px 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+  .pagebreak { break-before: page; }
+  .avoid { break-inside: avoid; }
+  .toc { font-size: 0.92rem; }
+  .toc td { border-bottom: 1px dotted var(--rule); padding: 3px 6px; }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <span class="eyebrow">Documento técnico · v1.0</span>
+  <h1>WorkUp<br>Esquema de base de datos explicado</h1>
+  <p class="sub">Qué es cada tabla, por qué existe y para qué se usa cada propiedad. Derivado de
+  <code>001_schema.sql</code>, <code>002_client_account_pending_names.sql</code> y <code>003_outbox_dispatch.sql</code>,
+  con el vocabulario de negocio del SRS v3.0.</p>
+  <div class="meta">
+    <b>Proyecto:</b> WorkUp — sistema de gestión para emprendimientos que prestan servicios por turno<br>
+    <b>Fuente de verdad del modelo:</b> <code>WorkUp/WorkUp.Data/Sql/001_schema.sql</code><br>
+    <b>Complementos:</b> <code>002_…</code> (cuentas de cliente) y <code>003_…</code> (despacho de avisos)<br>
+    <b>Motor:</b> SQL Server · Claves <code>INT IDENTITY</code> · Enumeraciones <code>TINYINT</code> ·
+    Fechas <code>DATETIME2(0)</code> · Dinero <code>DECIMAL(12,2)</code>
+  </div>
+</section>
+
+<h2>1. Cómo leer este documento</h2>
+
+<p>El esquema no es una traducción literal del relevamiento: es la traducción del <b>ciclo de negocio</b> de un
+salón de turnos. Cada tabla responde a una pregunta concreta que la dueña se hace todos los días:</p>
+
+<table class="no-even">
+  <thead><tr><th style="width:26%">Pregunta del negocio</th><th>Dónde se responde</th></tr></thead>
+  <tbody>
+    <tr><td>¿Quién es mi negocio y cómo se opera?</td><td>Businesses, OwnerAccounts, SystemSettings</td></tr>
+    <tr><td>¿Qué vendo, a qué precio, con qué duración y cupo?</td><td>Services, MembershipPrices</td></tr>
+    <tr><td>¿Quién atiende y cuándo está disponible?</td><td>Workers, WorkerSchedules, WorkerBreaks</td></tr>
+    <tr><td>¿Qué se repite todas las semanas?</td><td>GridClasses</td></tr>
+    <tr><td>¿Qué pasa en un día concreto?</td><td>Appointments, Bookings</td></tr>
+    <tr><td>¿Quiénes son mis clientes y cómo entran solos?</td><td>Clients, ClientAccounts, AccountTokens, AccountInvitations, AppointmentLinks</td></tr>
+    <tr><td>¿Quiénes abonan y cuánto cubren?</td><td>Enrollments, EnrollmentFixedClasses, MembershipPeriods</td></tr>
+    <tr><td>¿Cuánta plata entró, se anuló o se devolvió?</td><td>Payments, PaymentAnnulments, Refunds, Expenses</td></tr>
+    <tr><td>¿Qué tengo en el depósito?</td><td>Supplies</td></tr>
+    <tr><td>¿Qué avisos salieron y cuáles quedaron pendientes?</td><td>Notifications</td></tr>
+  </tbody>
+</table>
+
+<h4>Convenciones del esquema</h4>
+<ul>
+  <li><b>Nombres en inglés, PascalCase.</b> El dominio se modela en inglés; la interfaz habla en español rioplatense.</li>
+  <li><b>Claves <code>INT IDENTITY</code>.</b> Enteros autoincrementales: baratos de indexar y suficientes para el volumen de un local.</li>
+  <li><b>Enumeraciones como <code>TINYINT</code>.</b> Los estados se guardan como número, con el significado fijado en
+  <code>WorkUp.Domain.Enums</code>. <b>Nunca se renumera</b> un miembro existente: renumerar reescribiría la historia.</li>
+  <li><b><code>BusinessId</code> en toda tabla de inquilino.</b> Un negocio = un inquilino. Es la columna que hace que
+  todas las consultas puedan filtrarse por negocio, y la base de la separación de datos entre emprendimientos.</li>
+  <li><b>Fechas de negocio en <code>DATETIME2(0)</code>.</b> Se guarda la hora local del local (Argentina), con
+  precisión de segundos, sin zona horaria: el horario de atención es una propiedad del negocio, no del servidor.</li>
+  <li><b>El dinero es <code>DECIMAL(12,2)</code>.</b> Nunca <code>float</code>: los importes se suman en caja y un
+  redondeo binario produce diferencias de centavos que rompen el arqueo.</li>
+  <li><b>Los estados se derivan de los hechos.</b> Los códigos usan la columna y —en un cuadro chico— la nota
+  <code>D-xx</code>/<code>RF-xx</code>/<code>Regla n</code> que la justifica en el SRS v3.0.</li>
+</ul>
+
+<h2>2. Núcleo del negocio</h2>
+
+<div class="card">
+<h3>Businesses — el negocio como inquilino</h3>
+<p class="why"><b>Por qué existe:</b> WorkUp es multi-rubro y multi-cliente (D-04). El alcance se acota a servicios
+prestados por turno con trabajador asignado; lo que cambia entre una peluquería y un estudio de yoga son los
+<b>valores</b>, no las <b>reglas</b>. Por eso existe una sola tabla de negocio que guarda tanto la identidad como los
+parámetros de operación que consume el resto de los requerimientos <span class="ref">RF-01</span>.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del inquilino. Es el valor que viaja en <code>BusinessId</code> por todo el esquema.</td></tr>
+<tr><td class="prop">Name</td><td class="type">NVARCHAR(120)</td><td>Nombre comercial del local, tal como lo lee la dueña y lo ve el cliente en la superficie pública de reserva.</td></tr>
+<tr><td class="prop">Slug</td><td class="type">VARCHAR(60) UNIQUE</td><td>Identificador legible para la URL pública <code>/r/{slug}</code>. Es único globalmente porque las rutas públicas no llevan sesión: el slug es lo que permite resolver el negocio antes de autenticar.</td></tr>
+<tr><td class="prop">ContactPhone</td><td class="type">VARCHAR(30)</td><td>Teléfono de contacto del negocio. Se muestra al cliente y da contexto cuando algo falla; no es el teléfono con el que se identifica a un cliente (ese vive en Clients).</td></tr>
+<tr><td class="prop">NotificationEmail</td><td class="type">NVARCHAR(254) NULL</td><td>Casilla a la que se dirigen el resumen diario de agenda y el aviso de revisión de existencias <span class="ref">RF-17</span>. Es nulable porque un negocio puede operar sin correo configurado y seguir usando el panel.</td></tr>
+<tr><td class="prop">AllowsWalkIns</td><td class="type">BIT NOT NULL, 1</td><td>Habilita la atención sin turno <span class="ref">Regla 15</span>. Por defecto <code>1</code> porque el caso relevado (peluquería) la usa; un negocio de grilla puede apagarla.</td></tr>
+<tr><td class="prop">ReminderLeadHours</td><td class="type">INT NOT NULL, 24</td><td>Anticipación con la que se emite el recordatorio de turno <span class="ref">RF-17</span>. Vive en el negocio, no en cada turno: es una política de aviso, y el <code>CHECK (1..168)</code> impide valores absurdos (0 o más de una semana).</td></tr>
+<tr><td class="prop">DailySummaryTime</td><td class="type">TIME(0) NOT NULL, 21:00</td><td>Hora de emisión del resumen de agenda del día. 21:00 es el cierre razonable de una jornada de local: la dueña ya terminó y todavía está despierta.</td></tr>
+<tr><td class="prop">StockReviewEveryDays</td><td class="type">INT NOT NULL, 7</td><td>Periodicidad del aviso de revisión de existencias <span class="ref">RF-18</span>. El sistema <b>avisa</b> que hay que mirar el depósito, no calcula consumo (D-03, Regla 8): el número declara cada cuánto insistir.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Fecha de alta del negocio. Trazabilidad y corte natural para reportes históricos.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>OwnerAccounts — la cuenta única de acceso al panel</h3>
+<p class="why"><b>Por qué existe:</b> hay <b>una sola cuenta por negocio</b> (D-06, Restricción 5). Trabajadoras y
+profesoras son <b>datos</b>, no usuarios: cobran y entregan lista, pero registra la dueña. Sin esta restricción, el
+esquema tendría roles y permisos que el relevamiento no pide.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador de la cuenta. Se guarda en la sesión del panel.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Vínculo con el negocio. Junto con <code>UQ_OwnerAccounts_Business</code> garantiza en la base lo que la aplicación ya impone: una cuenta y solo una por negocio.</td></tr>
+<tr><td class="prop">Username</td><td class="type">NVARCHAR(60) UNIQUE</td><td>Nombre de usuario de login. Único global porque el panel se autentica sin elegir negocio primero: el usuario resuelve la cuenta y de ahí el negocio.</td></tr>
+<tr><td class="prop">PasswordHash</td><td class="type">NVARCHAR(400)</td><td>Hash de la contraseña (nunca la contraseña). 400 caracteres cubren con holgura los formatos modernos con salt y parámetros de costo.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Alta de la cuenta. Trazabilidad mínima de acceso.</td></tr>
+</tbody>
+</table>
+<p class="note">Restricción deliberada: <b>no hay tabla de roles</b>. La ausencia es la decisión.</p>
+</div>
+
+<div class="card">
+<h3>SystemSettings — pares clave/valor de la instalación</h3>
+<p class="why"><b>Por qué existe:</b> reserva un lugar para ajustes que son de <b>toda la instalación</b> y no de un
+negocio, sin obligar a un <code>ALTER TABLE</code> por cada uno. El caso previsto fue el desfasaje del reloj simulado
+(hipótesis 11 del plan de demo).</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Key</td><td class="type">VARCHAR(60) PK</td><td>Nombre del ajuste. Es la clave primaria: no hay dos valores para el mismo nombre.</td></tr>
+<tr><td class="prop">Value</td><td class="type">NVARCHAR(400)</td><td>Valor como texto. Guardar todo como texto mantiene la tabla genérica; la conversión al tipo real la hace el código que lo lee.</td></tr>
+</tbody>
+</table>
+<p class="note"><b>Estado real:</b> hoy el reloj simulado mantiene su desfasaje en memoria y no escribe aquí (así lo
+documenta <code>SimulatedBusinessClock</code>). La tabla existe como punto de extensión y queda vacía. Un reinicio del
+proceso es el reset seguro. Conviene leerla como <span class="tag">RESERVADA</span> antes que como funcionalidad en uso.</p>
+</div>
+
+<h2 class="pagebreak">3. Catálogo y personal</h2>
+
+<div class="card">
+<h3>Services — el tarifario</h3>
+<p class="why"><b>Por qué existe:</b> el precio, la duración y el cupo máximo se definen <b>a nivel del negocio</b>
+<span class="ref">Regla 6</span>. De este registro salen las dos formas de atención: un turno individual es el caso
+particular de un servicio con <i>cupo máximo 1</i>, y una clase grupal es el mismo servicio con cupo mayor.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del servicio. Lo referencian Appointments y GridClasses.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Aísla el tarifario por negocio: dos locales pueden tener un "Corte" con precios distintos.</td></tr>
+<tr><td class="prop">Name</td><td class="type">NVARCHAR(100)</td><td>Nombre visible del servicio (por ejemplo, "Corte y peinado", "Yoga integral"). No se fuerza único: dos servicios distintos pueden llamarse igual y distinguirse por duración o precio.</td></tr>
+<tr><td class="prop">Price</td><td class="type">DECIMAL(12,2)</td><td>Precio de lista vigente. Es el <b>valor por defecto</b>: cuando una anotación o un pago se crean, este precio se copia a <code>AgreedPrice</code>. Cambiar el tarifario después nunca reescribe lo ya cobrado. <code>CHECK (Price &gt; 0)</code> impide servicios gratuitos, que además no existen en el relevamiento.</td></tr>
+<tr><td class="prop">DurationMinutes</td><td class="type">INT</td><td>Duración del servicio. Es lo que usa el cálculo de disponibilidad para saber cuánto ocupa el turno <span class="ref">Regla 1</span>. <code>CHECK (&gt; 0)</code> porque una duración nula haría infinitos los huecos libres.</td></tr>
+<tr><td class="prop">MaxCapacity</td><td class="type">INT</td><td>Cupo máximo simultáneo del servicio <span class="ref">Regla 2</span>. Con 1 el sistema crea un turno por reserva; con más de 1, los turnos se generan desde la grilla y los clientes se anotan encima. <code>CHECK (&gt;= 1)</code>: el cupo 0 no tiene sentido operativo.</td></tr>
+<tr><td class="prop">IsActive</td><td class="type">BIT NOT NULL, 1</td><td>Baja lógica del tarifario. Un servicio con historia (turnos y cobros) <b>no se borra nunca</b>: se desactiva para que deje de ofrecerse sin romper los turnos que ya lo referencian.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>MembershipPrices — el precio del abono por frecuencia</h3>
+<p class="why"><b>Por qué existe:</b> el abono es mensual y reserva un lugar en las clases fijas
+<span class="ref">D-13, Regla 16</span>. Su precio depende de <b>cuántas veces por semana</b> asiste el alumno, no del
+servicio. Por eso es una tabla aparte y no una columna de Services.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador de la fila de tarifa.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Tarifario de abono propio de cada negocio.</td></tr>
+<tr><td class="prop">WeeklyFrequency</td><td class="type">INT</td><td>Clases fijas por semana a las que da derecho (1 a 7). Junto con <code>BusinessId</code> es único: no puede haber dos precios para la misma frecuencia. El rango 1..7 se corresponde con los siete días de la semana.</td></tr>
+<tr><td class="prop">Price</td><td class="type">DECIMAL(12,2)</td><td>Precio mensual del abono de esa frecuencia. Es el valor que se copia a <code>Enrollments.AgreedPrice</code> al inscribir.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>Workers — quién atiende</h3>
+<p class="why"><b>Por qué existe:</b> la disponibilidad se calcula <b>por trabajador</b> <span class="ref">Regla 1</span>
+y el cliente elige con quién atenderse antes de ver horarios <span class="ref">D-01</span>. Los trabajadores son datos
+operativos, no usuarios (D-06).</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del trabajador. Lo referencian horarios, pausas, grilla y turnos.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Aísla la plantilla por negocio.</td></tr>
+<tr><td class="prop">FirstName / LastName</td><td class="type">NVARCHAR(60) c/u</td><td>Nombre y apellido separados: la agenda y las listas de clase necesitan el nombre corto, y el orden alfabético y los reportes el apellido.</td></tr>
+<tr><td class="prop">Phone</td><td class="type">VARCHAR(30)</td><td>Contacto del trabajador. Es dato administrativo del local; no participa del cálculo de disponibilidad.</td></tr>
+<tr><td class="prop">Cuil</td><td class="type">VARCHAR(13)</td><td>Identificación laboral. Es único por negocio: es el dato que distingue a dos personas con el mismo nombre y apellido, típico en planteles chicos.</td></tr>
+<tr><td class="prop">IsActive</td><td class="type">BIT NOT NULL, 1</td><td>Baja lógica. Igual que en Services: un trabajador con turnos y cobros históricos se desactiva, no se borra. Al desactivarlo deja de ofrecerse para reservar sin destruir el historial de la agenda.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>WorkerSchedules — el horario de atención por día de la semana</h3>
+<p class="why"><b>Por qué existe:</b> es la base del cálculo de disponibilidad. El horario de atención de cada
+trabajador se repite semanalmente, por eso el modelo guarda una fila por día en lugar de un calendario de fechas.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del tramo de horario.</td></tr>
+<tr><td class="prop">WorkerId</td><td class="type">INT FK → Workers ON DELETE CASCADE</td><td>Dueño del horario. El <code>CASCADE</code> es seguro porque un horario no tiene historia propia: si se borra el trabajador (situación de corrección, no de baja), los tramos de disponibilidad no tienen sentido sueltos.</td></tr>
+<tr><td class="prop">DayOfWeek</td><td class="type">TINYINT 0..6</td><td>Día de la semana, siguiendo <code>System.DayOfWeek</code>: 0 = domingo … 6 = sábado. Se alinea con la enumeración de .NET para no traducir en cada consulta.</td></tr>
+<tr><td class="prop">StartTime / EndTime</td><td class="type">TIME(0) c/u</td><td>Extremos del tramo de atención. <code>CHECK (EndTime &gt; StartTime)</code> rechaza tramos vacíos o invertidos, que producirían huecos negativos en el cálculo de disponibilidad.</td></tr>
+</tbody>
+</table>
+<p class="note">Varias filas por día son válidas: permiten representar turnos partidos (mañana y tarde) sin ningún modelo adicional.</p>
+</div>
+
+<div class="card">
+<h3>WorkerBreaks — las pausas no laborables</h3>
+<p class="why"><b>Por qué existe:</b> el horario libre se calcula descontando <b>pausas no laborables</b>
+<span class="ref">Regla 1</span>. Sin esta tabla, el almuerzo de una trabajadora aparecería como tiempo reservable y el
+cliente podría sacar un turno en ese hueco.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador de la pausa.</td></tr>
+<tr><td class="prop">WorkerId</td><td class="type">INT FK → Workers ON DELETE CASCADE</td><td>Trabajador al que pertenece la pausa. Mismo criterio de borrado que los horarios: es dato de configuración, no historial.</td></tr>
+<tr><td class="prop">DayOfWeek</td><td class="type">TINYINT 0..6</td><td>Día de la semana de la pausa. Recurrente, igual que el horario: "los martes de 13 a 14" se declara una vez.</td></tr>
+<tr><td class="prop">StartTime / EndTime</td><td class="type">TIME(0) c/u</td><td>Ventana de la pausa. El <code>CHECK (EndTime &gt; StartTime)</code> impide una pausa de duración nula o negativa.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>ExpenseTypes — el catálogo de tipos de gasto</h3>
+<p class="why"><b>Por qué existe:</b> <span class="ref">RF-01</span> pide registrar "los tipos de gasto que usa el
+negocio" al dar de alta el negocio, y <span class="ref">RF-09</span> clasifica cada gasto con uno. Es un catálogo
+chico y propio de cada negocio, no una enumeración fija del sistema: la clasificación de gastos es del rubro.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del tipo de gasto. Lo usa Expenses.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Catálogo propio de cada negocio.</td></tr>
+<tr><td class="prop">Name</td><td class="type">NVARCHAR(80)</td><td>Nombre del tipo ("Productos", "Alquiler", "Servicios"). Único por negocio: dos tipos con el mismo nombre harían ambiguo el reporte de resultados.</td></tr>
+<tr><td class="prop">IsActive</td><td class="type">BIT NOT NULL, 1</td><td>Baja lógica. Un tipo con gastos históricos se desactiva para que no se siga eligiendo, pero se conserva para que los gastos viejos sigan clasificados.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 class="pagebreak">4. Grilla semanal y agenda</h2>
+
+<div class="card">
+<h3>GridClasses — la grilla recurrente</h3>
+<p class="why"><b>Por qué existe:</b> la grilla <b>se repite todas las semanas</b> <span class="ref">D-05</span>.
+Esta tabla guarda la regla ("los martes a las 19 hay yoga con Lucía"), no las clases concretas. De aquí el sistema
+<b>genera</b> las sesiones de cada semana: guardar la recurrencia una sola vez es lo que permite que suspender una clase
+no altere la grilla <span class="ref">Regla 9</span>.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador de la clase de grilla. Lo referencian Appointments (sesión generada) y EnrollmentFixedClasses (lugar fijo del alumno).</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Aísla la grilla por negocio.</td></tr>
+<tr><td class="prop">ServiceId</td><td class="type">INT FK → Services</td><td>Qué se dicta. De aquí salen la duración y el cupo máximo de cada sesión generada.</td></tr>
+<tr><td class="prop">WorkerId</td><td class="type">INT FK → Workers</td><td>Quién dicta la clase. La profesora queda determinada por la clase elegida <span class="ref">D-01, R12</span>.</td></tr>
+<tr><td class="prop">DayOfWeek</td><td class="type">TINYINT 0..6</td><td>Día de la semana de la clase recurrente. Misma convención que los horarios (0 = domingo).</td></tr>
+<tr><td class="prop">StartTime</td><td class="type">TIME(0)</td><td>Hora de inicio semanal. El fin de la sesión no se guarda aquí: se deriva de la duración del servicio, así un cambio de duración no obliga a reescribir la grilla.</td></tr>
+<tr><td class="prop">IsActive</td><td class="type">BIT NOT NULL, 1</td><td>Si la regla sigue vigente. Desactivarla deja de generar sesiones nuevas sin borrar las semanas ya generadas.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>Appointments — el turno</h3>
+<p class="why"><b>Por qué existe:</b> es la pieza central del modelo y la fuente de la conclusión del relevamiento:
+<b>un turno individual es un servicio con cupo 1</b>, y una clase de la semana es el mismo turno con cupo mayor. La
+tabla guarda <b>el hecho concreto</b> ("el martes 12 a las 19 hay una clase de yoga") y su estado global; el estado de
+cada cliente vive aparte, en Bookings <span class="ref">Regla 3</span>. También sostiene la decisión <b>D-09</b>: la
+atención sin turno <i>es</i> un turno, creado al atender con origen <code>Sin reserva</code>, porque todo lo posterior
+es idéntico y hoy quedan cobros sin turno que explicar <span class="ref">Regla 12</span>.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del turno. Lo referencian Bookings, ClientNotes y Payments.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Aísla la agenda por negocio; es la columna del índice de día.</td></tr>
+<tr><td class="prop">Kind</td><td class="type">TINYINT — AppointmentKind</td><td>1 = <i>Individual</i> (turno o atención sin turno), 2 = <i>ClassSession</i> (clase de la semana generada desde la grilla). Es la columna que decide qué forma tiene el registro y qué <code>CHECK</code> aplica.</td></tr>
+<tr><td class="prop">ServiceId</td><td class="type">INT FK → Services</td><td>Qué se presta. Determina duración, cupo de origen y precio de lista.</td></tr>
+<tr><td class="prop">WorkerId</td><td class="type">INT FK → Workers</td><td>Quién atiende. Es la dimensión del índice <code>IX_Appointments_WorkerDay</code>: la validación de superposición y el cálculo de disponibilidad se hacen siempre por trabajador <span class="ref">Regla 1</span>.</td></tr>
+<tr><td class="prop">GridClassId</td><td class="type">INT NULL FK → GridClasses</td><td>Regla de la que nació la sesión. Nulo en turnos individuales. Es la clave de la <b>generación idempotente</b> de la semana: <code>UX_Appointments_GridSession</code> impide crear dos veces la misma sesión <span class="ref">RF-06</span>.</td></tr>
+<tr><td class="prop">StartsAt / EndsAt</td><td class="type">DATETIME2(0) c/u</td><td>Inicio y fin concretos del turno, en hora local del local. Se desnormaliza el fin (en lugar de derivarlo) porque la duración realmente prestada puede diferir del tarifario, y porque el cálculo de superposición debe ser una comparación de columnas indexadas, no un cálculo de expresiones. <code>CHECK (EndsAt &gt; StartsAt)</code>.</td></tr>
+<tr><td class="prop">MaxCapacity</td><td class="type">INT</td><td><b>Copia</b> del cupo del servicio al momento de crear el turno. Es una copia deliberada: cambiar el tarifario mañana no debe alterar cuántos lugares tenía esta clase. <code>CHECK (&gt;= 1)</code>.</td></tr>
+<tr><td class="prop">Origin</td><td class="type">TINYINT NULL — AppointmentOrigin</td><td>1 = <i>Reservado</i>, 2 = <i>Sin reserva</i>. Nulo en clases. Es el campo que registra el walk-in como turno de primera clase <span class="ref">D-09, Regla 12</span>: el cobro de atención siempre tiene un turno que lo explica.</td></tr>
+<tr><td class="prop">Status</td><td class="type">TINYINT, 1 — AppointmentStatus</td><td>1 = <i>Programado</i>, 2 = <i>Suspendido</i>. Es el estado <b>del turno</b> (la clase entera), no del cliente: cada alumno conserva su propia asistencia en Bookings.</td></tr>
+<tr><td class="prop">SuspensionReason</td><td class="type">NVARCHAR(300) NULL</td><td>Motivo de la suspensión de una clase (feriado, sala ocupada). Explica ante el alumno por qué la clase no se dictó, sin cambiar la grilla <span class="ref">Regla 9</span>.</td></tr>
+<tr><td class="prop">SuspendedAt</td><td class="type">DATETIME2(0) NULL</td><td>Cuándo se suspendió. Distingue la suspensión decidida antes de la clase de la registrada después, y da trazabilidad a quién avisar.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Cuándo se creó el turno. Es la referencia para ordenar altas del día y para auditar la generación semanal.</td></tr>
+</tbody>
+</table>
+<h4>Tres restricciones que expresan reglas de negocio</h4>
+<ul>
+  <li><code>CK_Appointments_KindShape</code>: un turno individual tiene origen y cupo exactamente 1, y no viene de
+  grilla; una clase no tiene origen. <b>Por qué:</b> hace imposible en la base un registro con forma contradictoria
+  ("un turno individual derivado de la grilla", "una clase reservada"), que la aplicación tendría que rechazar una y otra vez.</li>
+  <li><code>CK_Appointments_Suspension</code>: solo una clase puede suspenderse <span class="ref">RF-10</span>.
+  <b>Por qué:</b> un turno individual no se "suspende": se cancela la anotación, que es un hecho distinto y vive en Bookings.</li>
+  <li><code>UX_Appointments_GridSession</code> (único filtrado sobre <code>GridClassId, StartsAt</code>): una sesión
+  por clase de grilla y hora. <b>Por qué:</b> es lo que permite regenerar una semana sin duplicar clases
+  <span class="ref">RF-06</span>. El filtro parcial deja libres los turnos individuales, que sí pueden repetir hora.</li>
+</ul>
+<p class="note"><b>Índices:</b> <code>IX_Appointments_WorkerDay</code> cubre el caso de uso más caliente —"la agenda de
+una trabajadora en un día"— incluyendo <code>EndsAt</code> y <code>Status</code> para resolver superposiciones sin ir
+a la tabla. <code>IX_Appointments_BusinessDay</code> cubre el resumen diario y los reportes por negocio.</p>
+</div>
+
+<h2 class="pagebreak">5. Clientes y acceso del cliente</h2>
+
+<div class="card">
+<h3>Clients — la ficha del cliente</h3>
+<p class="why"><b>Por qué existe:</b> es la ficha que reemplaza la hoja suelta de la libreta. El cliente se identifica
+por su <b>email</b> dentro de un negocio <span class="ref">Regla 7</span> y <span class="ref">D-02</span>: reservar no
+requiere cuenta, y el teléfono es la vía de contacto rápida.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del cliente. Lo referencian anotaciones, notas, inscripciones y pagos.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>La ficha pertenece a un negocio. La misma persona que va a dos locales distintos son dos fichas distintas: cada local es su propia libreta.</td></tr>
+<tr><td class="prop">FirstName / LastName</td><td class="type">NVARCHAR(60) c/u</td><td>Nombre y apellido separados, por la misma razón que en Workers: listas cortas y orden alfabético.</td></tr>
+<tr><td class="prop">Email</td><td class="type">NVARCHAR(254)</td><td>Identidad del cliente dentro del negocio <span class="ref">Regla 7</span>. Se guarda en minúsculas y <code>UQ_Clients_Email</code> lo hace único por negocio: es lo que permite reconocer al cliente que vuelve sin crear duplicados. 254 es el máximo de una dirección de correo válida.</td></tr>
+<tr><td class="prop">Phone</td><td class="type">VARCHAR(30) NULL</td><td>Vía de contacto del día a día ("te aviso cuando se desocupa"). Nulable porque el cliente puede reservar solo con email <span class="ref">D-02</span>.</td></tr>
+<tr><td class="prop">HealthNotes</td><td class="type">NVARCHAR(1000) NULL</td><td>Observaciones permanentes de salud o cuidado (alergias, lesiones). Es un campo de la ficha, no de la anotación, porque el dato trasciende al turno puntual.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Alta de la ficha. Sirve para distinguir clientes nuevos de recurrentes en los reportes y para ordenar el alta.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>ClientAccounts — la cuenta opcional de autoservicio</h3>
+<p class="why"><b>Por qué existe:</b> la reserva no requiere cuenta (D-02), pero una cuenta opcional habilita el
+autoservicio <span class="ref">RF-25</span>: ver turnos, reprogramar y cancelar. Por eso el cliente se modela en
+<b>dos tablas</b>: la ficha (Clients) existe siempre; la cuenta existe solo si la persona la crea.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador de la cuenta. Lo referencian AccountTokens.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>La cuenta es por negocio: el acceso al panel del cliente se resuelve contra el slug del local.</td></tr>
+<tr><td class="prop">ClientId</td><td class="type">INT NULL FK → Clients</td><td>Vínculo con la ficha. <b>Nulo hasta verificar el correo</b>: una cuenta recién registrada no tiene ficha visible todavía. Es el único punto nulo intencional del modelo de acceso.</td></tr>
+<tr><td class="prop">Email</td><td class="type">NVARCHAR(254)</td><td>Correo de login. Único por negocio: es la credencial y el destino de verificación y reseteo.</td></tr>
+<tr><td class="prop">PasswordHash</td><td class="type">NVARCHAR(400)</td><td>Hash de la contraseña del cliente. Mismo criterio que OwnerAccounts: nunca el texto plano.</td></tr>
+<tr><td class="prop">EmailVerifiedAt</td><td class="type">DATETIME2(0) NULL</td><td>Cuándo se confirmó el correo. Nulo = cuenta pendiente. Es el dato que decide si el cliente puede operar: mientras sea nulo la cuenta existe pero no tiene ficha. <span class="ref">RF-25, D-18</span></td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Alta de la cuenta. Permite depurar registros nunca verificados.</td></tr>
+</tbody>
+</table>
+<h4>Columnas agregadas por la migración 002</h4>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">PendingFirstName</td><td class="type">NVARCHAR(60) NULL</td><td>Nombre declarado por el cliente al autorregistrarse, guardado mientras la cuenta está pendiente. <b>Por qué:</b> sin <code>ClientId</code> no hay ficha donde guardarlo, y perderlo obligaría a pedirlo de nuevo al verificar. Se limpia cuando la verificación consume el enlace y crea la ficha.</td></tr>
+<tr><td class="prop">PendingLastName</td><td class="type">NVARCHAR(60) NULL</td><td>Apellido, con el mismo ciclo de vida. Ambas quedan nulas en toda cuenta que no provenga de autorregistro.</td></tr>
+</tbody>
+</table>
+<p class="note"><b>Índice único filtrado</b> <code>UX_ClientAccounts_Client</code>: una ficha se vincula a lo sumo a una
+cuenta. Expresa <span class="ref">RF-26</span>: <b>no hay fusiones automáticas</b>. Si dos cuentas resultan ser la misma
+persona, la unificación es una decisión humana, no un efecto colateral del alta.</p>
+</div>
+
+<div class="card">
+<h3>AccountTokens — tokens de un solo uso de la cuenta</h3>
+<p class="why"><b>Por qué existe:</b> verificar un correo y restablecer una contraseña son operaciones <b>sin sesión
+previa</b>: necesitan un secreto temporal que viaje por correo. Esta tabla lo guarda, y su diseño garantiza dos cosas:
+el token es de un solo uso y en la base <b>nunca hay un valor que sirva para entrar</b>.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del token.</td></tr>
+<tr><td class="prop">ClientAccountId</td><td class="type">INT FK → ClientAccounts</td><td>Cuenta destinataria. El token solo sirve para esa cuenta.</td></tr>
+<tr><td class="prop">Purpose</td><td class="type">TINYINT — AccountTokenPurpose</td><td>1 = verificación de correo, 2 = reseteo de contraseña. <b>Por qué:</b> separa propósitos para que un enlace de verificación no pueda usarse como reseteo. Un token es válido solo para lo que se emitió.</td></tr>
+<tr><td class="prop">TokenHash</td><td class="type">BINARY(32) UNIQUE</td><td>SHA-256 del token, nunca el token. <b>Por qué 32 bytes fijos:</b> es exactamente el tamaño del digest, así que la columna no admite otro formato y la comparación es directa. Único, para que un hash no pueda validar dos registros. Si alguien lee la base, no obtiene enlaces utilizables.</td></tr>
+<tr><td class="prop">ExpiresAt</td><td class="type">DATETIME2(0)</td><td>Vencimiento del enlace. Acota la ventana de un token filtrado por correo. Obligatorio: un token sin vencimiento es un acceso permanente.</td></tr>
+<tr><td class="prop">UsedAt</td><td class="type">DATETIME2(0) NULL</td><td>Cuándo se consumió. Nulo = sin usar. Es el campo que hace el token <b>de un solo uso</b>: consumido, no vuelve a aceptarse aunque alguien conserve el enlace.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Emisión. Permite ordenar tokens y auditar reemisiones.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>AccountInvitations — la invitación a crear cuenta</h3>
+<p class="why"><b>Por qué existe:</b> es el camino inverso al autorregistro: la dueña invita a un cliente que
+<b>ya tiene ficha</b> a crear su cuenta. Se separa de AccountTokens porque el sujeto es distinto —la invitación nace
+de un <code>ClientId</code> existente, no de una cuenta— y porque tiene un estado que los tokens no necesitan:
+<b>revocar</b>.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador de la invitación.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Negocio que invita. Da contexto al enlace y delimita el alcance.</td></tr>
+<tr><td class="prop">ClientId</td><td class="type">INT FK → Clients</td><td>Ficha invitada. Debe existir: no se invita a quien no está en la libreta.</td></tr>
+<tr><td class="prop">Email</td><td class="type">NVARCHAR(254)</td><td>Correo al que se envió la invitación, copiado de la ficha al emitir. Se conserva aparte para poder auditar a dónde fue, aunque la ficha cambie de correo después.</td></tr>
+<tr><td class="prop">TokenHash</td><td class="type">BINARY(32) UNIQUE</td><td>Mismo criterio que AccountTokens: hash de 32 bytes, único, nunca el valor utilizable.</td></tr>
+<tr><td class="prop">ExpiresAt</td><td class="type">DATETIME2(0)</td><td>Vencimiento de la invitación.</td></tr>
+<tr><td class="prop">UsedAt</td><td class="type">DATETIME2(0) NULL</td><td>Consumo. Junto con <code>RevokedAt</code> define los tres estados posibles: vigente, usada, revocada.</td></tr>
+<tr><td class="prop">RevokedAt</td><td class="type">DATETIME2(0) NULL</td><td>Anulación por la dueña (se equivocó de cliente, el cliente pidió no recibirla). <b>Por qué hace falta además de <code>UsedAt</code>:</b> una invitación revocada y una usada son hechos distintos y deben poder distinguirse en la auditoría.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Emisión de la invitación.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>AppointmentLinks — el enlace privado del turno</h3>
+<p class="why"><b>Por qué existe:</b> el cliente que reservó sin cuenta recibe un enlace privado para confirmar o
+cancelar su turno, y para avisar una falta <span class="ref">RF-12, RF-24</span>. Ese enlace es su credencial: no hay
+usuario ni contraseña, hay un token largo y difícil de adivinar. Es la pieza que hace viable "reservar sin cuenta" sin
+dejar los turnos a la vista de cualquiera.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del enlace.</td></tr>
+<tr><td class="prop">BookingId</td><td class="type">INT FK → Bookings</td><td>Anotación que el enlace gobierna. Apunta a la anotación y no al turno porque la acción del cliente (confirmar, cancelar, avisar falta) es siempre <b>sobre su lugar</b>, no sobre la clase entera <span class="ref">Regla 3</span>.</td></tr>
+<tr><td class="prop">TokenHash</td><td class="type">BINARY(32) UNIQUE</td><td>Hash del token que viaja en la URL. Mismo criterio de seguridad que los otros tokens.</td></tr>
+<tr><td class="prop">ProtectedToken</td><td class="type">NVARCHAR(600)</td><td>Token <b>protegido pero recuperable</b> con la clave del servidor. <b>Por qué existe habiendo hash:</b> la dueña tiene que poder reenviar el enlace de un cliente que lo perdió, y un hash no permite reconstruir la URL. Es el único token del esquema que se guarda de forma reversible, y por eso se protege en lugar de hashearse.</td></tr>
+<tr><td class="prop">ExpiresAt</td><td class="type">DATETIME2(0)</td><td>Vencimiento del enlace. Acota la vigencia: un enlace de un turno viejo no debe seguir operando.</td></tr>
+<tr><td class="prop">RevokedAt</td><td class="type">DATETIME2(0) NULL</td><td>Anulación explícita (por ejemplo, tras un reenvío o una cancelación). Corta el acceso sin borrar el registro.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Emisión. Permite saber cuándo se generó el enlace vigente.</td></tr>
+</tbody>
+</table>
+<p class="note"><code>IX_AppointmentLinks_Booking</code> resuelve la consulta inversa —"los enlaces de esta anotación"—
+necesaria para reenviar o revocar.</p>
+</div>
+
+<h2 class="pagebreak">6. Anotaciones y notas</h2>
+
+<div class="card">
+<h3>Bookings — la anotación de un cliente en un turno</h3>
+<p class="why"><b>Por qué existe:</b> expresa la <span class="ref">Regla 3</span>, la más importante del modelo:
+<b>el estado corresponde al cliente, no al turno</b>. En un turno con cupo mayor a 1, cada alumno tiene su propia
+confirmación, asistencia o ausencia. Aquí también vive el <b>precio acordado</b> <span class="ref">D-20</span>, y la
+distinción entre <i>fija</i> y <i>suelta</i>: una anotación fija nace de una inscripción; una suelta entra a una clase
+puntual. Esta tabla es, literalmente, la línea de la libreta.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador de la anotación. Lo referencian AppointmentLinks y Payments.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Aísla las anotaciones por negocio.</td></tr>
+<tr><td class="prop">AppointmentId</td><td class="type">INT FK → Appointments</td><td>Turno en el que se anota la persona <span class="ref">Regla 4</span>.</td></tr>
+<tr><td class="prop">ClientId</td><td class="type">INT FK → Clients</td><td>Quién. Junto con el turno define la línea de agenda.</td></tr>
+<tr><td class="prop">EnrollmentId</td><td class="type">INT NULL FK → Enrollments</td><td>Inscripción que ampara la anotación, cuando es fija. Nulo en las sueltas y en los turnos individuales. Es lo que permite saber si el alumno tenía lugar reservado esa semana <span class="ref">D-16</span>.</td></tr>
+<tr><td class="prop">Modality</td><td class="type">TINYINT NULL — BookingModality</td><td>1 = <i>Fija</i>, 2 = <i>Suelta</i>. Nulo en turnos individuales, donde la distinción no existe. Es una columna aparte y no algo derivado de <code>EnrollmentId</code> porque una suelta podría a futuro tener origen distinto; hoy <code>CK_Bookings_FixedHasEnrollment</code> exige que una fija tenga inscripción, impidiendo una "fija sin abono" imposible.</td></tr>
+<tr><td class="prop">Status</td><td class="type">TINYINT, 1 — BookingStatus</td><td>1 = <i>Pendiente</i>, 2 = <i>Confirmado</i>, 3 = <i>Atendido</i>, 4 = <i>Ausente</i>, 5 = <i>Cancelado</i>. Es el estado del cliente en ese turno. Nótese que <b><i>Cobrado</i> no es un estado</b>: se deriva de un pago no anulado, porque asistencia y cobro son independientes <span class="ref">D-20</span>.</td></tr>
+<tr><td class="prop">AbsenceSource</td><td class="type">TINYINT NULL — AbsenceSource</td><td>1 = la dueña, 2 = el cliente por el enlace privado <span class="ref">RF-12, RF-24</span>. Nulo si no hubo ausencia. <b>Por qué:</b> la <span class="ref">Regla 18</span> hace que avisar libere el lugar esa semana; registrar la fuente permite distinguir el aviso del cliente de la falta que registra el local.</td></tr>
+<tr><td class="prop">CancelledBy</td><td class="type">TINYINT NULL — CancelledBy</td><td>1 = el cliente, 2 = la dueña <span class="ref">RF-22</span>. Nulo si no hubo cancelación. Permite reportes de cancelación por origen y protege de discusiones sobre quién canceló.</td></tr>
+<tr><td class="prop">AgreedPrice</td><td class="type">DECIMAL(12,2) NULL</td><td><b>Precio acordado</b>: se copia del tarifario al anotar y los cambios posteriores del tarifario <b>nunca</b> lo alteran. Es la razón por la que el precio vive en la anotación y no se lee del servicio al cobrar. Nulable porque la anotación puede existir antes de acordar el importe (una clase suelta sin cobrar todavía).</td></tr>
+<tr><td class="prop">PriceReason</td><td class="type">NVARCHAR(200) NULL</td><td>Motivo cuando el precio acordado difiere del tarifario (descuento, arreglo especial). Es el campo que hace auditable el desvío sin prohibirlo: el sistema valida reservas pero no impide registros <span class="ref">D-10</span>.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Cuándo se anotó.</td></tr>
+<tr><td class="prop">ConfirmedAt</td><td class="type">DATETIME2(0) NULL</td><td>Cuándo el cliente confirmó.</td></tr>
+<tr><td class="prop">CancelledAt</td><td class="type">DATETIME2(0) NULL</td><td>Cuándo se canceló. <code>CK_Bookings_Cancelled</code> lo obliga a estar presente <b>si y solo si</b> el estado es Cancelado: evita la contradicción de una anotación cancelada sin fecha o una activa con fecha de cancelación.</td></tr>
+<tr><td class="prop">AttendanceRecordedAt</td><td class="type">DATETIME2(0) NULL</td><td>Cuándo se marcó la asistencia o la ausencia. Separa el momento del hecho del momento de carga, que es justamente lo que la libreta no permite.</td></tr>
+</tbody>
+</table>
+<h4>Índices que codifican reglas</h4>
+<ul>
+  <li><code>IX_Bookings_Appointment</code> y <code>IX_Bookings_Client</code>: los dos recorridos habituales —la lista de
+  un turno y la historia de un cliente—.</li>
+  <li><code>UX_Bookings_FixedPerSession</code> (único filtrado sobre <code>AppointmentId, EnrollmentId</code> donde hay
+  inscripción): regenerar la semana <b>no duplica</b> una reserva fija <span class="ref">RF-06</span>. Sin esta
+  restricción, cada regeneración sumaría un lugar fantasma al alumno.</li>
+  <li><code>UX_Bookings_ActiveClient</code> (único filtrado donde <code>Status &lt;&gt; 5</code>): un cliente tiene a lo
+  sumo <b>una anotación activa</b> por turno. Cancelar libera el lugar <span class="ref">Regla 5</span>, y por eso el
+  filtro excluye las canceladas: se puede volver a anotar al mismo cliente después de cancelar, pero no dos veces a la vez.</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>ClientNotes — la observación para la próxima atención</h3>
+<p class="why"><b>Por qué existe:</b> <span class="ref">RF-11</span> pide registrar una observación para la próxima
+atención, visible solo para la dueña. Es el reemplazo del papelito pegado en la hoja: "la próxima traer el secador",
+"avisar del cambio de precio".</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador de la nota.</td></tr>
+<tr><td class="prop">ClientId</td><td class="type">INT FK → Clients</td><td>Cliente al que refiere la observación. Es la dimensión de <code>IX_ClientNotes_Client</code>: las notas se consultan al abrir la ficha o al atender.</td></tr>
+<tr><td class="prop">AppointmentId</td><td class="type">INT NULL FK → Appointments</td><td>Turno durante el cual se tomó la nota. <b>Nulable a propósito:</b> hay observaciones que surgen fuera de un turno (una llamada, un mensaje), y obligarlas a un turno inventaría un hecho que no ocurrió.</td></tr>
+<tr><td class="prop">Text</td><td class="type">NVARCHAR(1000)</td><td>Contenido de la observación. 1000 caracteres es una nota de trabajo extensa, no un campo de texto libre ilimitado.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Cuándo se escribió. Ordena las notas y permite mostrarlas de la más reciente hacia atrás.</td></tr>
+</tbody>
+</table>
+<p class="note"><b>Nota sobre el modelo:</b> esta tabla <b>no lleva <code>BusinessId</code></b>, a diferencia del resto de
+las tablas de inquilino. No es un olvido: el negocio ya queda determinado por <code>ClientId</code>, y una nota no se
+consulta suelta sino siempre a través de su cliente o su turno. Se documenta para que nadie lo "corrija" agregando una
+columna redundante.</p>
+</div>
+
+<h2 class="pagebreak">7. Inscripciones y abono</h2>
+
+<div class="card">
+<h3>Enrollments — la inscripción a clases fijas</h3>
+<p class="why"><b>Por qué existe:</b> el abono mensual reserva un lugar en las clases fijas <span class="ref">D-13,
+Regla 16</span>. La inscripción es la <b>relación</b> que lo representa, y su ciclo de vida es explícito porque pasa por
+estados que el relevamiento distingue con cuidado: nace <i>pendiente de pago</i> reteniendo sus lugares (D-21), se
+<i>activa</i> con el primer pago, y termina por <i>anulación</i> de la dueña o por <i>baja</i> del alumno
+<span class="ref">RF-05, RF-20, RF-29</span>. La cobertura mensual concreta no vive aquí, sino en MembershipPeriods.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador de la inscripción. Lo referencian EnrollmentFixedClasses, Bookings, Payments y MembershipPeriods.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Aísla las inscripciones por negocio.</td></tr>
+<tr><td class="prop">ClientId</td><td class="type">INT FK → Clients</td><td>Alumno inscripto. Debe existir ficha: la inscripción no crea clientes.</td></tr>
+<tr><td class="prop">WeeklyFrequency</td><td class="type">INT 1..7</td><td>Cuántas clases fijas por semana tiene derecho. Es la dimensión con la que se buscó el precio en MembershipPrices y, en la práctica, cuántos lugares retiene la inscripción.</td></tr>
+<tr><td class="prop">Status</td><td class="type">TINYINT, 1 — EnrollmentStatus</td><td>1 = <i>Pendiente de pago</i> (retiene lugares, D-21), 2 = <i>Activa</i> (al menos un período pagado), 3 = <i>Anulada</i> (la dueña la anula, libera lugares), 4 = <i>Baja</i> (la dueña termina la membresía, libera lugares, conserva historia). <b>Por qué cuatro y no un bit activo/inactivo:</b> "anulada" y "de baja" tienen efectos iguales pero significados distintos, y el reporte de resultados y la auditoría necesitan distinguirlos.</td></tr>
+<tr><td class="prop">AgreedPrice</td><td class="type">DECIMAL(12,2)</td><td>Precio mensual acordado, copiado del tarifario al inscribir. Igual que en Bookings, los cambios de tarifa posteriores no lo alteran. <code>CHECK (&gt; 0)</code>.</td></tr>
+<tr><td class="prop">PriceReason</td><td class="type">NVARCHAR(200) NULL</td><td>Motivo del precio diferencial (promoción, arreglo). Hace auditable el desvío.</td></tr>
+<tr><td class="prop">ReferenceDay</td><td class="type">TINYINT NULL 1..31</td><td>Día de referencia para calcular vencimientos <span class="ref">D-23</span>. Se fija al activar la membresía. <b>Por qué un día y no una fecha:</b> el abono es mensual y se renueva en el mismo número de día; guardar el día permite derivar cada período y evita recalcularlo de los pagos. Es 1..31 y no 1..28 porque el modelo acepta el día declarado y la lógica de calendario resuelve los meses cortos.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Alta de la inscripción. Con estado Pendiente es el punto de partida de la retención de lugares.</td></tr>
+<tr><td class="prop">ActivatedAt</td><td class="type">DATETIME2(0) NULL</td><td>Cuándo se activó (primer pago). Nulo mientras esté pendiente.</td></tr>
+<tr><td class="prop">AnnulledAt</td><td class="type">DATETIME2(0) NULL</td><td>Cuándo la dueña anuló. Nulo salvo estado 3.</td></tr>
+<tr><td class="prop">TerminatedAt</td><td class="type">DATETIME2(0) NULL</td><td>Cuándo se dio de baja. Nulo salvo estado 4. Las tres fechas existen para que cada transición quede fechada y el reporte histórico no dependa del estado actual.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>EnrollmentFixedClasses — los lugares fijos de la inscripción</h3>
+<p class="why"><b>Por qué existe:</b> "el abono reserva el lugar del alumno en sus clases fijas todas las semanas"
+<span class="ref">Regla 16</span>. Esta tabla dice <b>en qué clases</b>, y lo hace <b>con vigencia</b> en lugar de
+sobrescribir: el alumno cambió de clase en marzo, y la historia de las semanas anteriores tiene que seguir explicando
+por qué estaba anotado donde estaba.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del lugar fijo.</td></tr>
+<tr><td class="prop">EnrollmentId</td><td class="type">INT FK → Enrollments</td><td>Inscripción que retiene el lugar.</td></tr>
+<tr><td class="prop">GridClassId</td><td class="type">INT FK → GridClasses</td><td>Clase de la grilla asignada. Es la dimensión de <code>IX_EnrollmentFixedClasses_Grid</code>, porque la consulta caliente es la inversa: "qué alumnos tienen lugar fijo en esta clase de esta semana" — el cálculo de cupo de una sesión <span class="ref">Regla 2</span>.</td></tr>
+<tr><td class="prop">ValidFrom / ValidTo</td><td class="type">DATE / DATE NULL</td><td>Vigencia del lugar. <code>ValidTo</code> nulo significa vigente. <code>CHECK (ValidTo IS NULL OR ValidTo &gt;= ValidFrom)</code> impide vigencias invertidas. Es el mecanismo que permite cambiar de clase sin reescribir el pasado y que el índice incluya <code>ValidFrom</code>/<code>ValidTo</code> para resolver "quién tiene lugar esa semana" sin tocar la tabla.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>MembershipPeriods — cada mes cubierto por un pago</h3>
+<p class="why"><b>Por qué existe:</b> el estado del abono en una fecha (<i>Vigente</i> / <i>Vencido</i>) es una
+<b>derivación</b>, no un dato mutable. Guardar la cobertura como períodos fechados evita el problema clásico del campo
+"vencimiento" que hay que actualizar a mano y que queda desactualizado. Cada fila es un mes de abono, y nace de un pago
+concreto <span class="ref">Regla 16, D-13</span>.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del período.</td></tr>
+<tr><td class="prop">EnrollmentId</td><td class="type">INT FK → Enrollments</td><td>Inscripción cubierta. <code>IX_MembershipPeriods_Enrollment</code> ordena por <code>ExpiresOn</code>, que es exactamente la consulta "¿está vigente hoy?" y "¿cuándo vence?".</td></tr>
+<tr><td class="prop">CoverageStart</td><td class="type">DATE</td><td>Primer día cubierto. Es <code>DATE</code> y no <code>DATETIME2</code> porque la vigencia de un abono es una cuestión de días, no de horas.</td></tr>
+<tr><td class="prop">ExpiresOn</td><td class="type">DATE</td><td>Último día cubierto. <code>CHECK (ExpiresOn &gt; CoverageStart)</code>: un período de duración nula o negativa no cubre nada y sería un error de datos, no un caso válido. Si un período se anula (por ejemplo, por un reembolso), se elimina o rehace el período: la vigencia es un hecho y no lleva marca de baja.</td></tr>
+<tr><td class="prop">PaymentId</td><td class="type">INT FK → Payments, UNIQUE</td><td>Pago que originó la cobertura. <b>Único:</b> un pago no puede cubrir dos veces el mismo mes. Es el vínculo que hace reconstruible el abono desde la caja.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Cuándo se registró la cobertura.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 class="pagebreak">8. Caja: cobros, anulaciones, devoluciones y gastos</h2>
+
+<div class="card">
+<h3>Payments — todo lo que entra</h3>
+<p class="why"><b>Por qué existe:</b> es la caja. Un solo lugar para todos los conceptos (turno individual, atención sin
+turno, clase suelta, abono) porque el reporte de resultados necesita ver todo el dinero junto <span class="ref">RF-13</span>.
+La decisión <b>D-20</b> se materializa en <code>CK_Payments_Reference</code>: <b>cada pago identifica su origen
+concreto</b> —un abono apunta a la inscripción, todo lo demás a una anotación—. Sin eso, el importe no sería explicable
+y el reporte no podría cruzar cobros contra atenciones.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del pago. Lo referencian PaymentAnnulments, Refunds y MembershipPeriods.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Aísla la caja por negocio; es la columna de <code>IX_Payments_BusinessPaidAt</code> para los reportes por período.</td></tr>
+<tr><td class="prop">ClientId</td><td class="type">INT NULL FK → Clients</td><td>Quién pagó. <b>Nulable</b> porque hay ingresos sin cliente identificado (una venta de mostrador, un ajuste de caja). La columna permite atribuir el cobro cuando se conoce.</td></tr>
+<tr><td class="prop">Concept</td><td class="type">TINYINT — PaymentConcept</td><td>1 = turno individual, 2 = atención sin turno, 3 = clase suelta, 4 = abono. Es el campo que decide qué referencia aplica y cómo se clasifica el ingreso en los reportes.</td></tr>
+<tr><td class="prop">BookingId</td><td class="type">INT NULL FK → Bookings</td><td>Anotación cobrada. Presente en conceptos 1, 2 y 3. <code>IX_Payments_Booking</code> es <b>filtrado</b> (<code>WHERE BookingId IS NOT NULL</code>) porque solo esos conceptos tienen anotación, y el índice es más chico y preciso.</td></tr>
+<tr><td class="prop">EnrollmentId</td><td class="type">INT NULL FK → Enrollments</td><td>Inscripción cobrada. Presente solo en concepto 4. La restricción <code>CK_Payments_Reference</code> garantiza que <b>nunca</b> estén las dos referencias a la vez ni ninguna: un cobro de abono sin inscripción no tiene a quién cubrir, y un cobro de turno sin anotación no tiene qué explicar <span class="ref">Regla 12</span>.</td></tr>
+<tr><td class="prop">Amount</td><td class="type">DECIMAL(12,2)</td><td>Importe efectivamente cobrado. <code>CHECK (&gt; 0)</code>: el esquema no acepta importes negativos ni cero. Un error de carga se corrige con una <b>anulación</b> o una <b>devolución</b>, no con un pago en negativo, y por eso existen las dos tablas siguientes.</td></tr>
+<tr><td class="prop">ListPrice</td><td class="type">DECIMAL(12,2) NULL</td><td>Precio de lista vigente al momento del cobro. Guardarlo junto al importe permite reportar descuentos sin recalcular tarifas históricas ni asumir que el precio de hoy es el de ayer.</td></tr>
+<tr><td class="prop">PriceReason</td><td class="type">NVARCHAR(200) NULL</td><td>Motivo del desvío respecto de la lista. Misma idea que en Bookings y Enrollments: se registra el desvío, no se bloquea.</td></tr>
+<tr><td class="prop">PaidAt</td><td class="type">DATETIME2(0)</td><td><b>Cuándo se pagó</b> (fecha del hecho). Es la fecha con la que se imputa el ingreso al período del reporte.</td></tr>
+<tr><td class="prop">RecordedAt</td><td class="type">DATETIME2(0)</td><td><b>Cuándo se cargó</b> en el sistema. Separar ambas es lo que permite detectar cargas tardías y reconstruir el orden real de los hechos, algo imposible en la libreta.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>PaymentAnnulments — la anulación de un cobro mal registrado</h3>
+<p class="why"><b>Por qué existe:</b> <code>Payments.Amount &gt; 0</code> prohíbe el pago negativo, así que corregir un
+importe mal cargado exige <b>anular</b> y volver a registrar. La anulación conserva el pago original: la caja no borra
+historia, la explica.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador de la anulación.</td></tr>
+<tr><td class="prop">PaymentId</td><td class="type">INT FK → Payments, UNIQUE</td><td>Pago anulado. <b>Único:</b> un pago se anula una sola vez. La anulación es un hecho definitivo, no un estado que se alterna; si es necesario revertirla, corresponde un pago nuevo.</td></tr>
+<tr><td class="prop">Reason</td><td class="type">NVARCHAR(300)</td><td>Motivo. Obligatorio: una anulación sin motivo deja un hueco inexplicable en la caja.</td></tr>
+<tr><td class="prop">AnnulledAt</td><td class="type">DATETIME2(0)</td><td>Cuándo se anuló. Fecha el hecho para la auditoría del período.</td></tr>
+<tr><td class="prop">AnnulledBy</td><td class="type">NVARCHAR(60)</td><td>Quién anuló, por nombre de usuario. Hoy hay una sola cuenta por negocio, pero el dato se guarda igual: la restricción puede cambiar y la trazabilidad no debe depender de ella.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>Refunds — la devolución de dinero</h3>
+<p class="why"><b>Por qué existe:</b> es un hecho <b>distinto</b> de la anulación. Anular es decir "ese cobro no debió
+registrarse"; devolver es decir "ese cobro fue real y ahora salió plata". Confundirlos falsearía el reporte: la
+anulación saca el ingreso del período, la devolución lo deja y agrega un egreso de dinero real.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador de la devolución.</td></tr>
+<tr><td class="prop">PaymentId</td><td class="type">INT FK → Payments</td><td>Pago devuelto. <b>Sin restricción de unicidad</b>, a diferencia de la anulación: una devolución puede ser parcial y puede haber más de una sobre el mismo pago hasta cubrir el importe.</td></tr>
+<tr><td class="prop">Amount</td><td class="type">DECIMAL(12,2)</td><td>Importe devuelto. Separado del importe del pago precisamente para permitir devoluciones parciales. <code>CHECK (&gt; 0)</code>.</td></tr>
+<tr><td class="prop">RefundedOn</td><td class="type">DATE</td><td>Fecha efectiva de la devolución. Es <code>DATE</code> porque se imputa por día de caja.</td></tr>
+<tr><td class="prop">Reason</td><td class="type">NVARCHAR(300)</td><td>Motivo. Obligatorio, igual que en la anulación: un egreso sin explicación no es auditable.</td></tr>
+<tr><td class="prop">RecordedAt</td><td class="type">DATETIME2(0)</td><td>Cuándo se cargó la devolución, separado de cuándo ocurrió.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>Expenses — lo que sale</h3>
+<p class="why"><b>Por qué existe:</b> el resultado del período es ingresos menos gastos <span class="ref">RF-16</span>.
+Esta tabla es la mitad del cálculo, junto con Payments.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del gasto.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Aísla los gastos por negocio; con <code>SpentOn</code> forma <code>IX_Expenses_BusinessDay</code> para los reportes por período.</td></tr>
+<tr><td class="prop">ExpenseTypeId</td><td class="type">INT FK → ExpenseTypes</td><td>Clasificación del gasto. Obligatorio: un gasto sin tipo no se puede agrupar en el reporte.</td></tr>
+<tr><td class="prop">SpentOn</td><td class="type">DATE</td><td>Fecha del gasto. Se imputa por día, consistente con el resto de las imputaciones de caja.</td></tr>
+<tr><td class="prop">Amount</td><td class="type">DECIMAL(12,2)</td><td>Importe. <code>CHECK (&gt; 0)</code> por el mismo criterio que en Payments: el signo lo da la tabla, no el número.</td></tr>
+<tr><td class="prop">Description</td><td class="type">NVARCHAR(300)</td><td>Detalle del gasto. Obligatorio: es lo único que distingue dos gastos del mismo tipo y fecha.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Cuándo se cargó, separado de cuándo ocurrió.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>9. Insumos y avisos</h2>
+
+<div class="card">
+<h3>Supplies — el depósito declarado</h3>
+<p class="why"><b>Por qué existe:</b> la <span class="ref">Regla 8</span> y <span class="ref">D-03</span> son tajantes:
+el sistema registra <b>existencias declaradas, no calcula consumo</b>. El consumo real no se registra y varía, y las
+cosas se reponen al verlas gastadas. Por eso esta tabla guarda un número declarado y una fecha de declaración, y el
+sistema se limita a <b>avisar</b> cuándo hay que volver a mirar <span class="ref">RF-18</span>.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador del insumo.</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT FK → Businesses</td><td>Aísla el depósito por negocio.</td></tr>
+<tr><td class="prop">Name</td><td class="type">NVARCHAR(100)</td><td>Nombre del insumo ("coloración 7.3", "mat de yoga"). Único por negocio: dos insumos con el mismo nombre impedirían saber cuál se está declarando.</td></tr>
+<tr><td class="prop">CurrentStock</td><td class="type">DECIMAL(10,2)</td><td>Existencia declarada actual. Es <code>DECIMAL</code> y no entero porque hay insumos que se cuentan por fracción (litros, gramos). El sistema <b>nunca</b> lo modifica por su cuenta: cambia solo cuando una persona declara un conteo. <code>CHECK (&gt;= 0)</code>: una existencia negativa es imposible.</td></tr>
+<tr><td class="prop">MinimumStock</td><td class="type">DECIMAL(10,2)</td><td>Umbral a partir del cual el insumo está bajo. Es lo que permite que el aviso diga <b>qué</b> revisar y no solo "revisá el depósito". <code>CHECK (&gt;= 0)</code>.</td></tr>
+<tr><td class="prop">LastDeclaredAt</td><td class="type">DATETIME2(0)</td><td>Cuándo se declaró el conteo. Es el dato con el que el aviso periódico (<code>StockReviewEveryDays</code>) decide si ya toca insistir; sin esta fecha, el aviso no tendría desde cuándo contar.</td></tr>
+<tr><td class="prop">IsActive</td><td class="type">BIT NOT NULL, 1</td><td>Baja lógica. Un insumo que ya no se usa deja de aparecer y de generar avisos, sin perder su historia.</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>Notifications — la bandeja de salida de correo (outbox)</h3>
+<p class="why"><b>Por qué existe:</b> el sistema genera trece clases de aviso —recordatorios, confirmaciones,
+suspensión de clase, vencimiento de abono, resumen diario, revisión de existencias, verificación, reseteo e
+invitación— <span class="ref">RF-17, RF-18, RF-19</span>. Enviar correo dentro de la transacción de negocio es
+frágil: si el proveedor falla, la operación de la dueña se cae con él. Por eso el envío se modela como
+<b>outbox</b>: la notificación se escribe como dato y un despachador la envía después. La columna
+<code>DedupKey</code> es lo que hace que reintentar sea seguro.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">Id</td><td class="type">INT IDENTITY PK</td><td>Identificador de la notificación. Es también el desempate final del orden de despacho (<code>IX_Notifications_Due</code>).</td></tr>
+<tr><td class="prop">BusinessId</td><td class="type">INT NULL FK → Businesses</td><td>Negocio al que pertenece el aviso. <b>Nulable</b> porque la verificación de correo y el reseteo de contraseña ocurren antes de resolver por completo el contexto del negocio, y esos avisos no deben quedar huérfanos por eso.</td></tr>
+<tr><td class="prop">Type</td><td class="type">TINYINT — NotificationType</td><td>Qué aviso es (1..13). Determina la plantilla y participa de la clave de deduplicación: dos avisos distintos sobre el mismo hecho <b>no</b> son duplicados.</td></tr>
+<tr><td class="prop">Recipient</td><td class="type">NVARCHAR(254)</td><td>Destinatario del correo. Se copia al emitir, no se resuelve al enviar: el aviso debe salir a donde se decidió que saliera, aunque la ficha cambie después.</td></tr>
+<tr><td class="prop">Subject</td><td class="type">NVARCHAR(200)</td><td>Asunto del correo, guardado con el aviso. <b>Por qué se persiste y no se regenera:</b> el aviso es un hecho fechado; si la plantilla cambia, un pendiente viejo debe enviarse tal como se emitió.</td></tr>
+<tr><td class="prop">BodyHtml</td><td class="type">NVARCHAR(MAX)</td><td>Cuerpo del correo ya renderizado, por la misma razón que el asunto. <code>MAX</code> porque el resumen diario y los avisos con detalle son documentos largos.</td></tr>
+<tr><td class="prop">DedupKey</td><td class="type">NVARCHAR(150) UNIQUE</td><td>Clave de deduplicación: <b>hace idempotente cada aviso a través de reintentos</b>. Combina tipo y hecho (por ejemplo, recordatorio del turno 42). Es único, así que reintentar el despacho no puede producir un segundo correo al cliente. Es la razón por la que el dispatcher puede ser agresivo sin molestar.</td></tr>
+<tr><td class="prop">Status</td><td class="type">TINYINT, 1 — NotificationStatus</td><td>1 = <i>Pending</i>, 2 = <i>Sent</i>, 3 = <i>Failed</i> (falla definitiva o presupuesto de reintentos agotado; terminal, nunca se reclama), 4 = <i>Dispatching</i> (reclamado y enviándose ahora; nunca se recupera solo, lo resuelve una persona), 5 = <i>ReviewRequired</i> (resultado del envío desconocido; decisión manual). Los dos últimos estados existen porque <b>no se puede reintentar a ciegas</b> un correo que quizá salió: en el peor caso el cliente recibe dos recordatorios, y por eso la incertidumbre se escala a una persona.</td></tr>
+<tr><td class="prop">Attempts</td><td class="type">INT NOT NULL, 0</td><td>Cantidad de intentos. Es el contador que agota el presupuesto de reintentos y mueve el aviso a <i>Failed</i>.</td></tr>
+<tr><td class="prop">LastError</td><td class="type">NVARCHAR(500) NULL</td><td>Último error del proveedor. Es lo que hace diagnosticable una fila en <i>Failed</i> sin buscar en logs.</td></tr>
+<tr><td class="prop">CreatedAt</td><td class="type">DATETIME2(0)</td><td>Emisión. Con <code>NextAttemptAt</code> nulo, es el instante efectivo de vencimiento de la fila.</td></tr>
+<tr><td class="prop">SentAt</td><td class="type">DATETIME2(0) NULL</td><td>Cuándo se envió. Nulo mientras no esté <i>Sent</i>.</td></tr>
+</tbody>
+</table>
+<h4>Columnas agregadas por la migración 003</h4>
+<p class="note"><b>Por qué son tres columnas nulables y no un rediseño:</b> los siete productores de avisos previos a
+T23 no conocen estas columnas. Siendo nulables, siguen insertando sin tocarlas, <code>SQL</code> las deja nulas, y el
+instante efectivo de esa fila es simplemente <code>CreatedAt</code>. La migración es aditiva y no rompe a nadie.</p>
+<table>
+<thead><tr><th style="width:20%">Propiedad</th><th style="width:17%">Tipo</th><th>Uso</th></tr></thead>
+<tbody>
+<tr><td class="prop">NextAttemptAt</td><td class="type">DATETIME2(0) NULL</td><td>Instante más temprano en que puede intentarse un reintento. Nulo = el vencimiento efectivo es <code>CreatedAt</code>. Es lo que implementa la <b>espera entre reintentos</b> sin un proceso aparte.</td></tr>
+<tr><td class="prop">ClaimedAt</td><td class="type">DATETIME2(0) NULL</td><td>Cuándo se tomó el reclamo actual. No nulo solo en los estados <i>Dispatching</i> y <i>ReviewRequired</i>. Junto con la clave de despacho, es la trazabilidad que una persona necesita para resolver a mano un aviso en estado incierto.</td></tr>
+<tr><td class="prop">DispatchKey</td><td class="type">UNIQUEIDENTIFIER NULL</td><td>Token de reclamo del despacho en curso. <b>Toda finalización debe coincidir con él</b>: si un envío lento termina después de que su reclamo fue tomado por otro, la finalización obsoleta no escribe nada en lugar de pisar al dueño actual. Es el mecanismo que evita la doble escritura sin bloqueos largos.</td></tr>
+</tbody>
+</table>
+<p class="note"><b><code>IX_Notifications_Due</code></b> sobre <code>(Status, NextAttemptAt, CreatedAt, Id)</code>: el
+barrido de vencimientos filtra por estado y ordena por <code>COALESCE(NextAttemptAt, CreatedAt), Id</code>; el índice
+mantiene contiguas las filas de un estado y lleva las dos claves de orden más el desempate. Es <b>deliberadamente no
+filtrado</b>: un filtro sobre <code>Status = 1</code> se mantendría en cada cambio de estado, y el índice sin filtro
+también sirve las consultas por estado del visor de outbox, sin costo extra de escritura.</p>
+</div>
+
+<h2 class="pagebreak">10. Síntesis</h2>
+
+<p>Leído en conjunto, el esquema sostiene seis decisiones que explican casi todas sus propiedades:</p>
+
+<table class="no-even">
+<thead><tr><th style="width:34%">Decisión</th><th>Dónde vive en el esquema</th></tr></thead>
+<tbody>
+<tr><td><b>El cliente es un caso particular del servicio con cupo 1</b></td><td>Un solo modelo de turno (<code>Appointments.Kind</code> + <code>MaxCapacity</code>) cubre turno individual, atención sin turno y clase grupal. No hay tablas paralelas.</td></tr>
+<tr><td><b>El estado es del cliente, no del turno</b></td><td><code>Appointments.Status</code> es global; <code>Bookings.Status</code> es individual. Cada alumno tiene su confirmación, asistencia o ausencia.</td></tr>
+<tr><td><b>Los precios se copian, no se referencian</b></td><td><code>Bookings.AgreedPrice</code>, <code>Enrollments.AgreedPrice</code>, <code>Payments.ListPrice</code>. Cambiar el tarifario no reescribe el pasado.</td></tr>
+<tr><td><b>La incertidumbre se escala a una persona</b></td><td><code>NotificationStatus.Dispatching</code> y <code>.ReviewRequired</code>: nada se reintenta a ciegas.</td></tr>
+<tr><td><b>Las reglas se imponen en la base, no solo en la aplicación</b></td><td><code>CHECK</code>s de forma y referencia, índices únicos filtrados para idempotencia y unicidad de anotación activa.</td></tr>
+<tr><td><b>Nada se borra: se desactiva o se anula</b></td><td><code>IsActive</code> en catálogos, <code>PaymentAnnulments</code>, <code>AnnulledAt</code>/<code>TerminatedAt</code>, vigencias con <code>ValidFrom</code>/<code>ValidTo</code>.</td></tr>
+</tbody>
+</table>
+
+<h4>Inventario de tablas</h4>
+<table class="no-even">
+  <thead><tr><th style="width:8%">#</th><th style="width:30%">Tabla</th><th>Una frase</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td class="prop">Businesses</td><td>El negocio y sus parámetros de operación.</td></tr>
+    <tr><td>2</td><td class="prop">OwnerAccounts</td><td>La cuenta única de acceso al panel.</td></tr>
+    <tr><td>3</td><td class="prop">SystemSettings</td><td>Clave/valor de la instalación (reservada).</td></tr>
+    <tr><td>4</td><td class="prop">ExpenseTypes</td><td>Catálogo de tipos de gasto del negocio.</td></tr>
+    <tr><td>5</td><td class="prop">Services</td><td>Tarifario: precio, duración y cupo.</td></tr>
+    <tr><td>6</td><td class="prop">MembershipPrices</td><td>Precio del abono según frecuencia semanal.</td></tr>
+    <tr><td>7</td><td class="prop">Workers</td><td>Quién atiende.</td></tr>
+    <tr><td>8</td><td class="prop">WorkerSchedules</td><td>Horario de atención semanal por trabajador.</td></tr>
+    <tr><td>9</td><td class="prop">WorkerBreaks</td><td>Pausas no laborables semanales.</td></tr>
+    <tr><td>10</td><td class="prop">GridClasses</td><td>La grilla recurrente de clases.</td></tr>
+    <tr><td>11</td><td class="prop">Appointments</td><td>El turno concreto y su estado global.</td></tr>
+    <tr><td>12</td><td class="prop">Clients</td><td>La ficha del cliente.</td></tr>
+    <tr><td>13</td><td class="prop">ClientAccounts</td><td>La cuenta opcional de autoservicio.</td></tr>
+    <tr><td>14</td><td class="prop">AccountTokens</td><td>Tokens de un solo uso de la cuenta.</td></tr>
+    <tr><td>15</td><td class="prop">AccountInvitations</td><td>Invitación de la dueña a crear cuenta.</td></tr>
+    <tr><td>16</td><td class="prop">Bookings</td><td>La anotación del cliente en el turno.</td></tr>
+    <tr><td>17</td><td class="prop">ClientNotes</td><td>Observación para la próxima atención.</td></tr>
+    <tr><td>18</td><td class="prop">AppointmentLinks</td><td>Enlace privado del turno.</td></tr>
+    <tr><td>19</td><td class="prop">Enrollments</td><td>Inscripción a clases fijas.</td></tr>
+    <tr><td>20</td><td class="prop">EnrollmentFixedClasses</td><td>Los lugares fijos, con vigencia.</td></tr>
+    <tr><td>21</td><td class="prop">Payments</td><td>Todo lo que entra.</td></tr>
+    <tr><td>22</td><td class="prop">PaymentAnnulments</td><td>Anulación de un cobro mal registrado.</td></tr>
+    <tr><td>23</td><td class="prop">Refunds</td><td>Devolución de dinero.</td></tr>
+    <tr><td>24</td><td class="prop">MembershipPeriods</td><td>Cada mes de abono cubierto por un pago.</td></tr>
+    <tr><td>25</td><td class="prop">Expenses</td><td>Lo que sale.</td></tr>
+    <tr><td>26</td><td class="prop">Supplies</td><td>Depósito declarado.</td></tr>
+    <tr><td>27</td><td class="prop">Notifications</td><td>Bandeja de salida de correo.</td></tr>
+  </tbody>
+</table>
+
+</body>
+</html>
