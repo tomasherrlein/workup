@@ -61,6 +61,29 @@ Paths are relative to each version's code folder. They can drift; search by name
 
 **Checking a task.** The academic repo has no test project. Build to a separate folder so a running app does not lock the files (`dotnet build -o <temp folder>`), run it on a free port, and test with HTTP requests against two businesses: each rule the task names, plus another business's ids returning 404 or changing nothing. Check the stored data with `sqlcmd -S ".\SQLEXPRESS" -E -C -d DB_WorkUp`.
 
+## Working on Linux
+
+The commands above assume Windows. On Linux, .NET, Razor, git and gh work the same; SQL Server is the difference.
+
+- **SQL Server.** LocalDB and `.\SQLEXPRESS` exist only on Windows. Run SQL Server in Docker and use SQL authentication:
+
+  ```bash
+  docker run -d --name workup-sql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD='<password>' -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+  ```
+
+- **Connection strings.** Do not edit `appsettings.json`; override them with environment variables:
+  - Full version: `ConnectionStrings__WorkUp="Server=localhost,1433;Database=WorkUp;User Id=sa;Password=<password>;TrustServerCertificate=True"`. The migrator creates the database on first start.
+  - Academic version: `ConnectionStrings__CadenaConexion="Server=localhost,1433;Database=DB_WorkUp;User Id=sa;Password=<password>;TrustServerCertificate=True"`. Create the database once with `sqlcmd -S localhost -U sa -P '<password>' -C -i BaseDeDatos/WorkUp.sql`.
+- **sqlcmd.** `-E` (Windows authentication) does not work; use `-S localhost -U sa -P '<password>' -C`.
+- **What does not run on Linux in the full version, by design:**
+  - The demo seed (`--seed-demo-data`) only accepts LocalDB (`WorkUp.Data/DemoData/DemoDataSeeder.cs`).
+  - The isolated DataProtection keyring of T12 requires Windows DPAPI (`WorkUp/Infrastructure/ServiceRegistration.cs`). It only fails when that option is configured.
+  - Several opt-in SQL and HTTP integration tests assume LocalDB or Windows. The default `dotnet test` run does not need them.
+
+  Do not weaken these guards to make them run on Linux.
+- **Case-sensitive paths.** A view name, folder or file reference with the wrong case works on Windows and fails on Linux. Match the exact case of the file on disk.
+- **Line endings.** Use `git config core.autocrlf input`.
+
 ## Study notes
 
 The user studies MVC with an Obsidian vault in the private repo `tomasherrlein/workup-notas` (branch `main`). After a task that introduces a new concept, add a note there:
