@@ -32,7 +32,7 @@ Paths are relative to each version's code folder. They can drift; search by name
 
 ## Working on the academic version
 
-**Task plan.** The team follows `docs/Guia-de-tareas-WorkUp-academico.pdf` (tasks T01 to T33). That file is not committed in the academic repo; copy it into `workup-academico/docs/` by hand. Part 2 of the guide is the full recipe, using T09 as the example.
+**Task plan.** The team follows the guide `Guia-de-tareas-WorkUp-academico.pdf` (tasks T01 to T33). It is not committed in the academic repo; a copy lives in this repo at `docs/academico/Guia-de-tareas-WorkUp-academico.pdf`. Part 2 of the guide is the full recipe, using T09 as the example. To read it without Python, use `pdftotext`.
 
 **Before starting.** `git fetch` and `git pull` on `master`, then check open PRs and branches (`gh pr list -R ErikaRomeo/WorkUp`) to see who is doing what. Never touch another person's branch.
 
